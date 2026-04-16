@@ -81,25 +81,19 @@ namespace Blockchain.Node.Services
 
                 if (taskEvent != null && !string.IsNullOrEmpty(taskEvent.ProjectId))
                 {
-                    string sender = taskEvent.User ?? "Anon";
-
                     if (taskEvent.Type != "CreateProject" && taskEvent.Type != "AssignRole")
                     {
                         targetChannel = taskEvent.ProjectId;
-                        if (!db.IsProjectExists(taskEvent.ProjectId)) return Task.FromResult(new StatusReply { Success = false, Message = "Project does not exist." });
-                        if (db.GetUserRole(taskEvent.ProjectId, sender) == "None") return Task.FromResult(new StatusReply { Success = false, Message = "Access Denied." });
-                    }
-                    else if (taskEvent.Type == "AssignRole")
-                    {
-                        if (db.GetUserRole(taskEvent.ProjectId, sender) != "Owner") return Task.FromResult(new StatusReply { Success = false, Message = "Access Denied: Only Owner." });
+                        if (!db.IsProjectExists(taskEvent.ProjectId))
+                            return Task.FromResult(new StatusReply { Success = false, Message = "Project does not exist." });
                     }
                 }
             }
-            catch { }
+            catch { } 
 
             var channelBlocks = db.LoadChain(targetChannel);
             string expectedPrevHash = channelBlocks.Count > 0 ? channelBlocks.Last().Hash : "0";
-            int expectedIndex = channelBlocks.Count; 
+            int expectedIndex = channelBlocks.Count;
 
             if (request.PreviousHash != expectedPrevHash)
             {
@@ -122,7 +116,7 @@ namespace Blockchain.Node.Services
 
             var newBlock = new Blockchain.Core.Block
             {
-                Index = expectedIndex, 
+                Index = expectedIndex,
                 Data = request.Data,
                 PreviousHash = request.PreviousHash,
                 Hash = request.Hash,
@@ -133,13 +127,18 @@ namespace Blockchain.Node.Services
                 ChannelId = targetChannel
             };
 
-            db.SaveBlock(newBlock, targetChannel);
+            bool isAccepted = _blockchainManager.AddBlock(newBlock);
 
-            _logger.LogInformation($"[Node Router] Block {newBlock.Hash.Substring(0, 8)}... routed to channel: {targetChannel}");
-
-            try { _p2pService.BroadcastBlockAsync(newBlock); } catch { }
-
-            return Task.FromResult(new StatusReply { Success = true, Message = $"Block accepted in channel: {targetChannel}" });
+            if (isAccepted)
+            {
+                _logger.LogInformation($"[Node Router] Block {newBlock.Hash.Substring(0, 8)}... accepted in channel: {targetChannel}");
+                try { _p2pService.BroadcastBlockAsync(newBlock); } catch { }
+                return Task.FromResult(new StatusReply { Success = true, Message = $"Block accepted in channel: {targetChannel}" });
+            }
+            else
+            {
+                return Task.FromResult(new StatusReply { Success = false, Message = "Access Denied by Smart Contract." });
+            }
         }
 
         public override Task<BlockModel> GetLastBlock(EmptyRequest request, ServerCallContext context)
@@ -157,10 +156,10 @@ namespace Blockchain.Node.Services
             string userName = string.IsNullOrEmpty(request.UserName) ? "Guest" : request.UserName;
 
             string role = db.GetUserRole(channelToRead, userName);
-            if (role == "None" && channelToRead != "System")
-            {
-                return Task.FromResult(response); 
-            }
+            //if (role == "None" && channelToRead != "System")
+            //{
+            //    return Task.FromResult(response); 
+            //}
 
             var blocks = db.LoadChain(channelToRead);
 
@@ -191,11 +190,11 @@ namespace Blockchain.Node.Services
             string role = db.GetUserRole(request.ProjectId, request.UserName);
             response.UserRole = role;
 
-            if (role == "None" && request.ProjectId != "System")
-            {
-                _logger.LogWarning($"[Security] Read-Access Denied for {request.UserName} to {request.ProjectId}");
-                return Task.FromResult(response);
-            }
+            //if (role == "None" && request.ProjectId != "System")
+            //{
+            //    _logger.LogWarning($"[Security] Read-Access Denied for {request.UserName} to {request.ProjectId}");
+            //    return Task.FromResult(response);
+            //}
 
             try
             {
