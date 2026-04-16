@@ -1,0 +1,822 @@
+﻿@page "/"
+@using Blockchain.Node
+@using Blockchain.UI.Services
+@using Blockchain.UI.Components
+@using System.Text.Json
+@using System.Threading
+@using System.Security.Cryptography
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Text
+@using System.IO
+@using Google.Protobuf
+@using Microsoft.JSInterop
+@using System.Linq
+@using System.Collections.Generic
+@inject IJSRuntime JS
+@implements IDisposable
+@inject BlockchainService.BlockchainServiceClient BlockchainClient
+@inject KeyService MyKeyService
+@using Blockchain.UI.Models
+
+<PageTitle>Nexus Collaboration Platform</PageTitle>
+
+<div class="dashboard-container">
+    <div class="d-flex justify-content-between align-items-center mb-4 p-3 glass-panel">
+        <div class="d-flex align-items-center gap-3">
+            <div class="fs-2 animate-pulse">🚀</div>
+            <div>
+                <h2 class="m-0 fw-bold text-white">Nexus <span class="text-warning">Workplace</span></h2>
+                <small class="text-muted">Multi-Project Decentralized Management</small>
+            </div>
+        </div>
+        @if (MyKeyService.IsLoggedIn)
+        {
+            <div class="d-flex align-items-center gap-3">
+                @if (myProjects.Count > 0)
+                {
+                    <select class="form-select form-select-sm bg-dark text-white border-warning shadow-sm" style="width: 150px;" @onchange="OnProjectChanged" value="@CurrentProjectId">
+                        @foreach (var p in myProjects)
+                        {
+                            <option value="@p">@p</option>
+                        }
+                    </select>
+                }
+                else
+                {
+                    <span class="badge bg-danger">No Projects</span>
+                }
+
+                <div class="input-group input-group-sm shadow-sm" style="width: 250px;">
+                    <input @bind="newProjectName" class="form-control bg-dark text-white border-secondary" placeholder="New DAO Name..." />
+                    <button class="btn btn-outline-warning fw-bold" @onclick="CreateNewProject" disabled="@isMining">Create</button>
+                </div>
+            </div>
+        }
+        <div>
+            @if (!MyKeyService.IsLoggedIn)
+            {
+                <div class="input-group input-group-sm">
+                    <input @bind="userNameInput" class="form-control bg-dark text-white border-secondary" placeholder="Your Name" />
+                    <button @onclick="CreateWallet" class="btn btn-warning fw-bold">Login</button>
+                    <button @onclick="RestoreMode" class="btn btn-outline-light">Restore</button>
+                </div>
+                @if (isRestoreMode)
+                {
+                    <div class="mt-2 position-absolute bg-dark p-3 rounded border border-secondary shadow-lg" style="right: 20px; z-index: 1000; width: 300px;">
+                        <textarea @bind="restoreMnemonic" class="form-control mb-2 text-white bg-black border-secondary" placeholder="Private Key or Mnemonic..."></textarea>
+                        <button @onclick="RestoreWallet" class="btn btn-info w-100 mb-2">Recover</button>
+                        <button @onclick="()=>isRestoreMode=false" class="btn btn-sm btn-outline-secondary w-100">Cancel</button>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="d-flex align-items-center gap-3">
+                    <div class="text-end">
+                        <div class="fw-bold text-warning">@MyKeyService.UserName</div>
+                        <div class="small text-white-50 font-monospace" style="font-size: 0.7rem;">@MyKeyService.PublicKey?.Substring(0, 12)...</div>
+                    </div>
+                    <button @onclick="Logout" class="btn btn-outline-danger btn-sm">Exit</button>
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (MyKeyService.IsLoggedIn && !string.IsNullOrEmpty(MyKeyService.CurrentMnemonic))
+    {
+        <div class="alert alert-danger mb-4 d-flex justify-content-between align-items-center shadow-sm" style="border-left: 5px solid #dc3545;">
+            <div><strong>⚠️ SECRET PHRASE:</strong> <span class="font-monospace ms-2 text-white bg-danger bg-opacity-25 px-2 rounded">@MyKeyService.CurrentMnemonic</span></div>
+            <button class="btn btn-sm btn-outline-light" @onclick="DismissMnemonic">I Saved It</button>
+        </div>
+    }
+
+    @if (MyKeyService.IsLoggedIn)
+    {
+        <ul class="nav nav-pills mb-4 gap-2">
+            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Board?"active bg-warning text-dark fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Board">📌 Task Board</button></li>
+            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Team?"active bg-success text-white fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Team">👥 Team & RBAC</button></li>
+            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.GitHub?"active bg-primary fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.GitHub">🐙 Code Audit</button></li>
+            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Artifacts?"active bg-info text-dark fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Artifacts">🗂️ Artifacts</button></li>
+            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Analytics?"active bg-danger text-white fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="LoadAnalytics">📊 Analytics</button></li>
+        </ul>
+
+        <div class="tab-content mb-5">
+            @if (activeTab == ActiveTab.Board)
+            {
+                <div class="mb-4">
+                    <button class="btn btn-primary fw-bold px-4 shadow-lg" @onclick="()=>OpenTaskModal(null)">+ Create Issue</button>
+                </div>
+                <TaskBoard Tasks="Tasks" OnTaskClick="OpenTaskModal" OnShowHistory="ShowHistory" />
+            }
+
+            @if (activeTab == ActiveTab.Team)
+            {
+                <div class="row g-4">
+                    <div class="col-md-7">
+                        <div class="glass-card p-4 h-100" style="border: 1px solid rgba(255,193,7,0.3); background: rgba(20, 20, 25, 0.8);">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h4 class="text-warning mb-0">🛡️ DAO Team Management</h4>
+                                <span class="badge bg-secondary">Project: @CurrentProjectId</span>
+                            </div>
+                            <p class="text-muted" style="font-size: 0.9rem;">Blockchain Access Control. Only the <strong>Owner</strong> can grant access to this project workspace.</p>
+                            <div class="input-group mt-3 shadow-sm">
+                                <span class="input-group-text border-0" style="background: #2b2b36; color: #adb5bd;">@("@")</span>
+                                <input @bind="newMemberName" class="form-control text-white shadow-none border-0" placeholder="Developer Nickname..." style="background: #2b2b36;" />
+                                <select @bind="newMemberRole" class="form-select text-white shadow-none border-0" style="background: #3f3f4e; max-width: 130px;">
+                                    <option value="Developer">Developer</option>
+                                    <option value="QA">QA</option>
+                                    <option value="Observer">Observer</option>
+                                </select>
+                                <button class="btn btn-primary fw-bold" @onclick="InviteMember" disabled="@isMining">2. Grant Access & Mine</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-5">
+                        <div class="glass-card p-4 h-100" style="border-left: 3px solid var(--neon-accent);">
+                            <h4 class="text-warning mb-3">💸 P2P Token Transfer</h4>
+                            <p class="text-muted small mb-4">Send NXP tokens to team members. Checked by <span class="text-warning font-monospace">ReputationContract</span>.</p>
+                            <div class="mb-3">
+                                <label class="form-label text-white-50">Recipient Name</label>
+                                <input @bind="targetTransferUser" class="form-control bg-dark text-white border-secondary" placeholder="e.g. Bob" />
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label text-white-50">Amount (NXP)</label>
+                                <input type="number" @bind="transferAmount" class="form-control bg-dark text-white border-secondary" min="1" />
+                            </div>
+                            <button class="btn btn-warning w-100 fw-bold text-dark" @onclick="TransferTokens" disabled="@(!MyKeyService.IsLoggedIn)">Send Funds</button>
+                        </div>
+                    </div>
+                </div>
+            }
+            @if (activeTab == ActiveTab.GitHub)
+            {
+                <div class="glass-card p-4">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <div>
+                            <h4 class="text-white mb-1">🔗 Decentralized Git Anchoring</h4>
+                            <p class="text-muted small m-0">Bind local Git commits to the <strong>@CurrentProjectId</strong> blockchain channel.</p>
+                        </div>
+                        <div class="badge bg-primary fs-6 border border-primary text-white shadow">P2P Code Audit</div>
+                    </div>
+
+                    @if (MyKeyService.IsLoggedIn)
+                    {
+                        <div class="row align-items-end mb-4 bg-dark bg-opacity-50 p-3 rounded border border-secondary shadow-sm">
+                            <div class="col-md-3">
+                                <label class="text-muted small fw-bold">Repository Name</label>
+                                <input @bind="localRepoName" class="form-control bg-black text-white border-secondary" placeholder="e.g. nexus-core" />
+                            </div>
+                            <div class="col-md-3">
+                                <label class="text-muted small fw-bold">Commit SHA-1 Hash</label>
+                                <input @bind="localCommitHash" class="form-control bg-black text-warning font-monospace border-secondary" placeholder="a1b2c3d4..." maxlength="40" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="text-muted small fw-bold">Commit Message</label>
+                                <input @bind="localCommitMessage" class="form-control bg-black text-white border-secondary" placeholder="Fix consensus bug..." />
+                            </div>
+                            <div class="col-md-2">
+                                <button @onclick="RegisterLocalCommit" class="btn btn-warning w-100 fw-bold shadow text-dark" disabled="@(isMining || string.IsNullOrWhiteSpace(localCommitHash))">
+                                    ⚓ Anchor
+                                </button>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="chain-scroll-view">
+                        @if (Commits.Count == 0)
+                        {
+                            <div class="text-center text-muted py-5">No commits anchored in this channel yet.</div>
+                        }
+                        @foreach (var c in Commits)
+                        {
+                            <div class="d-flex align-items-center gap-3 border-bottom border-secondary py-3 px-2 hover-bg">
+                                <div class="fs-4">🛡️</div>
+                                <div class="flex-grow-1">
+                                    <div class="fw-bold text-warning">@c.Repository <span class="badge bg-dark text-muted ms-2 font-monospace">@c.CommitHash</span></div>
+                                    <div class="text-white mt-1">"@c.Message"</div>
+                                    <div class="small text-muted mt-1">👤 @c.Author • 🕒 Anchored via Blockchain</div>
+                                </div>
+                                <div class="text-end text-center">
+                                    <div class="badge bg-success bg-opacity-75 border border-success mb-1">✅ Verified</div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (activeTab == ActiveTab.Artifacts)
+            {
+                <div class="glass-card p-4">
+                    <div class="mb-4 p-4 border border-secondary rounded bg-dark bg-opacity-50 text-center">
+                        <div class="fs-1 mb-2">📁</div>
+                        <h5 class="text-white mb-3">Secure Artifact Registration</h5>
+                        <p class="text-muted small mb-3">Files are hashed client-side and verified by the Oracle Node. The actual file is not stored on-chain.</p>
+                        <div class="d-inline-block position-relative">
+                            <InputFile OnChange="HandleFileStreaming" class="form-control bg-black text-white border-secondary" disabled="@(isUploading||!MyKeyService.IsLoggedIn)" />
+                            @if (isUploading)
+                            {
+                                <div class="mt-2 text-info animate-pulse fw-bold">⏳ Streaming & Hashing...</div>
+                            }
+                        </div>
+                    </div>
+                    <div class="chain-scroll-view">
+                        @foreach (var a in Artifacts)
+                        {
+                            <div class="d-flex align-items-center gap-3 border-bottom border-secondary py-3 px-2 hover-bg">
+                                <div class="fs-4">📄</div>
+                                <div class="flex-grow-1">
+                                    <div class="fw-bold text-white">@a.FileName</div>
+                                    <div class="small text-info font-monospace">@a.FileHash</div>
+                                    <div class="small text-muted">@a.RegisteredBy • @a.VerificationMethod</div>
+                                </div>
+                                <div class="text-center"><span class="badge bg-success bg-opacity-75 border border-success">✅ Verified Oracle</span></div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (activeTab == ActiveTab.Analytics)
+            {
+                <div class="row g-4">
+                    <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-light"><h3 class="fw-bold text-white m-0">@analyticsData.TotalBlocks</h3><div class="text-white-50 small text-uppercase">Blocks Mined</div></div></div>
+                    <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-info"><h3 class="fw-bold text-info m-0">@analyticsData.TotalTasks</h3><div class="text-white-50 small text-uppercase">Tasks Managed</div></div></div>
+                    <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-success"><h3 class="fw-bold text-success m-0">@analyticsData.TasksDone</h3><div class="text-white-50 small text-uppercase">Completed</div></div></div>
+                    <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-warning"><h3 class="fw-bold text-warning m-0">@analyticsData.TotalArtifacts</h3><div class="text-white-50 small text-uppercase">Files Secured</div></div></div>
+
+                    <div class="col-md-8">
+                        <div class="glass-card p-4 h-100">
+                            <div class="d-flex justify-content-between mb-4"><h5 class="text-white m-0">🏆 Real SQL Balances (NXP)</h5><span class="badge bg-warning text-dark">+5 Create | +20 Done</span></div>
+                            <table class="table table-dark table-hover mb-0" style="background:transparent;">
+                                <thead><tr><th class="text-muted">Rank</th><th class="text-muted">User</th><th class="text-end text-muted">Wallet Balance</th><th class="text-end text-muted">Share</th></tr></thead>
+                                <tbody>
+                                    @{
+                                        int r = 1; int tot = analyticsData.UserReputation.Values.Sum();
+                                    }
+                                    @foreach (var u in analyticsData.UserReputation.OrderByDescending(x => x.Value))
+                                    {
+                                        <tr>
+                                            <td>
+                                                @if (r == 1)
+                                                {
+                                                    <span>🥇</span>
+                                                }
+                                                else if (r == 2)
+                                                {
+                                                    <span>🥈</span>
+                                                }
+                                                else if (r == 3)
+                                                {
+                                                    <span>🥉</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted">#@r</span>
+                                                }
+                                            </td>
+                                            <td class="fw-bold @(u.Key==MyKeyService.UserName?"text-warning":"text-white")">@u.Key @(u.Key == MyKeyService.UserName ? "(You)" : "")</td>
+                                            <td class="text-end text-info font-monospace">@u.Value NXP</td>
+                                            <td class="text-end"><div class="progress bg-dark border border-secondary" style="height:6px;width:100px;display:inline-flex;"><div class="progress-bar bg-info" style="width:@(tot>0?(u.Value*100/tot):0)%"></div></div></td>
+                                        </tr>
+                                        r++;
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="glass-card p-4 h-100">
+                            <h5 class="text-white mb-4">Work Distribution</h5>
+                            <div class="d-flex flex-column gap-3 justify-content-center h-75">
+                                <div>
+                                    <div class="d-flex justify-content-between small text-muted mb-1"><span>To Do (@analyticsData.TasksTodo)</span><span class="text-white-50">@GetPercent(analyticsData.TasksTodo)%</span></div>
+                                    <div class="progress" style="height: 10px; background: rgba(255,255,255,0.1);"><div class="progress-bar bg-secondary" style="width: @(GetPercent(analyticsData.TasksTodo))%"></div></div>
+                                </div>
+                                <div>
+                                    <div class="d-flex justify-content-between small text-muted mb-1"><span>In Progress (@analyticsData.TasksInProgress)</span><span class="text-warning">@GetPercent(analyticsData.TasksInProgress)%</span></div>
+                                    <div class="progress" style="height: 10px; background: rgba(255,255,255,0.1);"><div class="progress-bar bg-warning" style="width: @(GetPercent(analyticsData.TasksInProgress))%"></div></div>
+                                </div>
+                                <div>
+                                    <div class="d-flex justify-content-between small text-muted mb-1"><span>Done (@analyticsData.TasksDone)</span><span class="text-success">@GetPercent(analyticsData.TasksDone)%</span></div>
+                                    <div class="progress" style="height: 10px; background: rgba(255,255,255,0.1);"><div class="progress-bar bg-success" style="width: @(GetPercent(analyticsData.TasksDone))%"></div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <AuditLog Chain="chain" OnBlockSelect="(b) => selectedBlock = b" />
+    }
+    else
+    {
+        <div class="d-flex flex-column justify-content-center align-items-center mt-5" style="min-height: 50vh;">
+            <div class="glass-card p-5 text-center shadow-lg" style="max-width: 600px; border-top: 4px solid #ffc107;">
+                <div class="fs-1 mb-4 animate-bounce">🔐</div>
+                <h3 class="text-white fw-bold mb-3">Zero-Trust Workspace</h3>
+                <p class="text-muted mb-4" style="font-size: 1.1rem;">You are currently disconnected from the blockchain network.</p>
+                <div class="p-3 rounded bg-dark border border-secondary mb-0">
+                    <p class="text-white-50 small mb-0">Use the controls in the top right corner to <strong class="text-white">Login</strong> and generate a new cryptographic identity, or <strong class="text-white">Restore</strong> an existing wallet to access the project data.</p>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (isMining)
+    {
+        <div class="modal-backdrop-custom" style="z-index: 9999;">
+            <div class="glass-card p-5 text-center shadow-lg" style="border: 2px solid #ffc107; background: rgba(20,20,25,0.95);">
+                <div class="spinner-border text-warning mb-4" style="width: 4rem; height: 4rem; border-width: 0.3em;" role="status"></div>
+                <h3 class="text-white fw-bold mb-2">⛏️ Mining Block...</h3>
+                <p class="text-muted font-monospace small mb-1">Calculating SHA-256 Proof of Work</p>
+                <p class="text-warning font-monospace small mb-0">Target difficulty: 000...</p>
+            </div>
+        </div>
+    }
+
+    <IssueModal @bind-IsOpen="isTaskModalOpen"
+                TaskModel="currentTaskModel"
+                IsNewTask="isNewTask"
+                IsLoggedIn="MyKeyService.IsLoggedIn"
+                OnSave="SaveTaskModal" />
+
+    @if (selectedBlock != null)
+    {
+        <div class="modal-backdrop-custom">
+            <div class="glass-card p-0 modal-content-custom animate-pop">
+                <div class="p-3 bg-dark border-bottom border-secondary d-flex justify-content-between align-items-center">
+                    <h5 class="m-0 text-white">📦 Block Inspector <span class="text-warning">#@selectedBlock.Index</span></h5>
+                    <button class="btn btn-sm btn-outline-light border-0" @onclick="()=>selectedBlock=null">✕</button>
+                </div>
+                <div class="modal-scroll p-4" style="overflow-y: auto;">
+                    <div class="mb-3">
+                        <label class="text-muted small fw-bold text-uppercase">Block Hash (Proof of Work)</label>
+                        <div class="p-2 bg-black rounded text-warning fw-bold font-monospace small border border-warning text-break">@selectedBlock.Hash</div>
+                        <small class="text-muted">Nonce used: @selectedBlock.Nonce</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="text-muted small fw-bold text-uppercase">Validator Identity</label>
+                        <div class="p-2 bg-black rounded text-info font-monospace small border border-info text-break" style="max-height:80px;overflow-y:auto;">@selectedBlock.ValidatorPublicKey</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="text-muted small fw-bold text-uppercase">Timestamp</label>
+                        <div class="text-white font-monospace">@selectedBlock.Timestamp</div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="text-muted small fw-bold text-uppercase">Payload Data</label>
+                        <pre class="p-3 bg-dark rounded text-success font-monospace small border border-success mb-0" style="white-space:pre-wrap;">@FormatJson(selectedBlock.Data)</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (viewingHistory != null)
+    {
+        <div class="modal-backdrop-custom">
+            <div class="glass-card p-0 modal-content-custom animate-pop" style="border: 1px solid #ffc107;">
+                <div class="p-3 bg-dark border-bottom border-secondary d-flex justify-content-between align-items-center">
+                    <h5 class="m-0 text-white">🕒 Task History & Versioning</h5>
+                    <button class="btn btn-sm btn-outline-light border-0" @onclick="()=>viewingHistory=null">✕</button>
+                </div>
+
+                <div class="modal-scroll p-4" style="max-height: 500px; overflow-y: auto; background: rgba(0,0,0,0.2);">
+                    @if (viewingHistory.Count == 0)
+                    {
+                        <div class="text-center py-5">
+                            <div class="spinner-border text-warning mb-3" role="status"></div>
+                            <div class="text-muted">Tracing blockchain history...</div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="timeline-container">
+                            @foreach (var item in viewingHistory)
+                            {
+                                <div class="timeline-item @(item.Action == "Create" ? "active" : "")">
+                                    <div class="timeline-dot"></div>
+                                    <div class="glass-card p-3 ms-2 position-relative mb-3" style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255,255,255,0.05);">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span class="badge @(item.Action == "Create" ? "bg-primary" : (item.Action == "Move" ? "bg-warning text-dark" : "bg-secondary")) text-uppercase" style="font-size: 0.7rem;">@item.Action</span>
+                                            <small class="text-white-50 font-monospace" style="font-size: 0.7rem;">@item.Timestamp</small>
+                                        </div>
+                                        <div class="mb-2">
+                                            <span class="text-white-50 small">Status changed to: </span>
+                                            <span class="fw-bold @(item.StatusLabel == "Done" ? "text-success" : (item.StatusLabel == "In Progress" ? "text-warning" : "text-white"))">@item.StatusLabel</span>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-end pt-2 border-top border-secondary mt-2">
+                                            <small class="text-info d-flex align-items-center gap-1">👤 @item.User</small>
+                                            <small class="text-muted font-monospace bg-dark px-2 rounded" style="font-size: 0.65rem;">Block #@item.BlockIndex</small>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(statusMessage))
+    {
+        <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 2500">
+            <div class="toast show bg-dark border-primary text-white shadow-lg">
+                <div class="toast-body d-flex justify-content-between align-items-center">
+                    <span>@statusMessage</span>
+                    <button class="btn-close btn-close-white ms-2" @onclick="()=>statusMessage=null"></button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private ActiveTab activeTab = ActiveTab.Board;
+    private List<ProjectTask> Tasks = new();
+    private List<CommitPayloadUI> Commits = new();
+    private List<ArtifactPayloadUI> Artifacts = new();
+    private List<BlockModel> chain = new();
+    private BlockModel? selectedBlock = null;
+    private AnalyticsResponse analyticsData = new();
+    private List<TaskHistoryItem>? viewingHistory = null;
+    private List<string> myProjects = new();
+
+    private string localRepoName = "nexus-core";
+    private string localCommitMessage = "";
+    private string localCommitHash = "";
+    private string newProjectName = "";
+    private string newMemberName = "";
+    private string newMemberRole = "Developer";
+    private string CurrentProjectId = "Alpha";
+    private string userNameInput = "";
+    private string restoreMnemonic = "";
+    private string statusMessage = "";
+    private bool isRestoreMode = false;
+    private bool isLoading = false;
+    private bool isUploading = false;
+    private bool isMining = false;
+
+    private string targetRoleUser = "";
+    private string targetRole = "Worker";
+    private string targetTransferUser = "";
+    private int transferAmount = 5;
+
+    private bool isTaskModalOpen = false;
+    private bool isNewTask = false;
+    private ProjectTask currentTaskModel = new();
+
+    private Timer? _timer;
+
+    protected override async Task OnInitializedAsync() { await SyncChain(); _timer = new Timer(async _ => await SyncChain(), null, 0, 2000); }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await MyKeyService.LoadFromStorage();
+            StateHasChanged();
+        }
+    }
+    public void Dispose() => _timer?.Dispose();
+
+    private async Task OnProjectChanged(ChangeEventArgs e)
+    {
+        CurrentProjectId = e.Value?.ToString() ?? "Alpha";
+
+        await SyncChain();
+    }
+
+    private async Task InviteMember()
+    {
+        if (string.IsNullOrWhiteSpace(newMemberName)) return;
+
+        var payload = new
+        {
+            Type = "AssignRole",
+            User = MyKeyService.UserName,
+            ProjectId = CurrentProjectId,
+            TargetUser = newMemberName,
+            Role = newMemberRole,
+            Timestamp = DateTime.UtcNow.ToString("O")
+        };
+
+        await SendJsonBlock(payload);
+        newMemberName = "";
+    }
+    private string FormatJson(string json) { try { using var doc = JsonDocument.Parse(json); return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true }); } catch { return json; } }
+
+    private async Task CreateWallet() { if (!string.IsNullOrWhiteSpace(userNameInput)) await MyKeyService.CreateNewWallet(userNameInput); }
+    private void RestoreMode() => isRestoreMode = !isRestoreMode;
+    private async Task RestoreWallet() { if (await MyKeyService.RestoreWallet(restoreMnemonic, userNameInput)) isRestoreMode = false; }
+    private void DismissMnemonic() { if (MyKeyService.CurrentMnemonic != null) MyKeyService.RestoreWallet(MyKeyService.CurrentMnemonic, MyKeyService.UserName); }
+    private async Task Logout() => await MyKeyService.Logout();
+
+    private void OpenTaskModal(ProjectTask? task = null)
+    {
+        if (task == null)
+        {
+            isNewTask = true;
+            currentTaskModel = new ProjectTask { Id = "TSK-" + Guid.NewGuid().ToString().Substring(0, 5).ToUpper(), Status = ProjectTaskStatus.Todo, ProjectId = CurrentProjectId, Assignee = MyKeyService.UserName };
+        }
+        else
+        {
+            isNewTask = false;
+            currentTaskModel = new ProjectTask { Id = task.Id, Title = task.Title, Description = task.Description, Assignee = task.Assignee, Status = task.Status, BranchInfo = task.BranchInfo, ParentTaskId = task.ParentTaskId, Creator = task.Creator, ProjectId = task.ProjectId };
+        }
+        isTaskModalOpen = true;
+    }
+
+    private async Task SaveTaskModal()
+    {
+        if (string.IsNullOrWhiteSpace(currentTaskModel.Title)) return;
+
+        var evt = new TaskEvent
+            {
+                Type = isNewTask ? "Create" : "Update",
+                TaskId = currentTaskModel.Id,
+                Title = currentTaskModel.Title,
+                Description = currentTaskModel.Description ?? "",
+                Status = (int)currentTaskModel.Status,
+                User = MyKeyService.UserName,
+                Assignee = currentTaskModel.Assignee ?? "",
+                ParentTaskId = currentTaskModel.ParentTaskId ?? "",
+                BranchInfo = currentTaskModel.BranchInfo ?? "",
+                ProjectId = CurrentProjectId
+            };
+
+        isTaskModalOpen = false;
+        await SendJsonBlock(evt);
+    }
+
+    private async Task AssignRole() { if (string.IsNullOrWhiteSpace(targetRoleUser)) return; await SendJsonBlock(new TaskEvent { Type = "AssignRole", TargetUser = targetRoleUser, Role = targetRole, User = MyKeyService.UserName, ProjectId = CurrentProjectId }); targetRoleUser = ""; }
+    private async Task TransferTokens() { if (string.IsNullOrWhiteSpace(targetTransferUser) || transferAmount <= 0) return; await SendJsonBlock(new TaskEvent { Type = "Transfer", TargetUser = targetTransferUser, Amount = transferAmount, User = MyKeyService.UserName }); targetTransferUser = ""; }
+
+    private async Task ShowHistory(string taskId)
+    {
+        viewingHistory = new List<TaskHistoryItem>();
+        try { var response = await BlockchainClient.GetTaskHistoryAsync(new TaskHistoryRequest { TaskId = taskId }); viewingHistory = response.Items.OrderByDescending(x => x.Timestamp).ToList(); }
+        catch (Exception ex) { statusMessage = "History Error: " + ex.Message; viewingHistory = null; }
+    }
+
+    private async Task RegisterLocalCommit()
+    {
+        var cleanHash = localCommitHash?.Trim().ToLowerInvariant();
+
+        bool isValidGitHash = !string.IsNullOrEmpty(cleanHash) &&
+                              cleanHash.Length >= 7 &&
+                              cleanHash.Length <= 40 &&
+                              System.Text.RegularExpressions.Regex.IsMatch(cleanHash, "^[a-f0-9]+$");
+
+        if (!isValidGitHash || string.IsNullOrWhiteSpace(localCommitMessage))
+        {
+            return;
+        }
+
+        var payload = new
+        {
+            Type = "CodeCommit",
+            User = MyKeyService.UserName,
+            ProjectId = CurrentProjectId,
+            Repository = localRepoName,
+            CommitHash = cleanHash, 
+            Message = localCommitMessage,
+            Timestamp = DateTime.UtcNow.ToString("O")
+        };
+
+        await SendJsonBlock(payload);
+
+        localCommitHash = "";
+        localCommitMessage = "";
+    }
+
+    private async Task HandleFileStreaming(InputFileChangeEventArgs e)
+    {
+        var file = e.File; if (file == null || !MyKeyService.IsLoggedIn) return;
+        if (file.Size > 50 * 1024 * 1024) { statusMessage = "Max 50MB"; return; }
+        isUploading = true; StateHasChanged();
+        try
+        {
+            using var call = BlockchainClient.RegisterArtifact();
+            var buf = new byte[64 * 1024]; using var s = file.OpenReadStream(50 * 1024 * 1024); int r;
+            while ((r = await s.ReadAsync(buf, 0, buf.Length)) > 0) await call.RequestStream.WriteAsync(new ArtifactChunk { FileName = file.Name, Owner = MyKeyService.UserName, Data = ByteString.CopyFrom(buf, 0, r) });
+            await call.RequestStream.CompleteAsync();
+            statusMessage = (await call.ResponseAsync).Message; await SyncChain();
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { isUploading = false; StateHasChanged(); }
+    }
+
+    private async Task LoadAnalytics() { activeTab = ActiveTab.Analytics; try { analyticsData = await BlockchainClient.GetAnalyticsAsync(new EmptyRequest()); } catch (Exception ex) { statusMessage = ex.Message; } }
+
+    private double GetPercent(int count) => analyticsData.TotalTasks > 0 ? Math.Round((double)count / analyticsData.TotalTasks * 100, 1) : 0;
+
+    private (string Hash, long Nonce) MineBlockData(string prevHash, string timestamp, string data, string pubKey, int difficulty)
+    {
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+        string target = new string('0', difficulty);
+        long nonce = 0;
+        string hash = "";
+
+        while (true)
+        {
+            string rawData = $"{prevHash}{timestamp}{data}{pubKey}{nonce}";
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(rawData);
+            hash = BitConverter.ToString(sha256.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+
+            if (hash.StartsWith(target))
+            {
+                return (hash, nonce);
+            }
+            nonce++;
+        }
+    }
+
+    private async Task SendJsonBlock<T>(T payload)
+    {
+        try
+        {
+            isMining = true;
+            StateHasChanged();
+
+            string json = JsonSerializer.Serialize(payload);
+
+            string targetChannel = (json.Contains("\"Type\":\"CreateProject\"") || json.Contains("\"Type\":\"AssignRole\""))
+                                    ? "System"
+                                    : CurrentProjectId;
+
+            var cR = await BlockchainClient.GetChainAsync(new ChainRequest
+                {
+                    Count = 1,
+                    ChannelId = targetChannel,
+                    UserName = MyKeyService.UserName ?? "Guest" 
+                });
+
+            string prevHash = cR.Blocks.Count > 0 ? cR.Blocks.Last().Hash : "0";
+
+            string sig = MyKeyService.SignData(json);
+            string timestamp = DateTime.UtcNow.ToString("O");
+            string pubKey = MyKeyService.PublicKey;
+
+            var mined = await Task.Run(() => MineBlockData(prevHash, timestamp, json, pubKey, 3));
+
+            var blk = new BlockModel
+                {
+                    Data = json,
+                    Timestamp = timestamp,
+                    PreviousHash = prevHash,
+                    Hash = mined.Hash,
+                    ValidatorPublicKey = pubKey,
+                    Signature = sig,
+                    Nonce = mined.Nonce,
+                    ChannelId = targetChannel 
+                };
+
+            var r = await BlockchainClient.ReceiveBlockAsync(blk);
+            statusMessage = r.Success ? $"✅ Mined! Nonce: {mined.Nonce}" : $"❌ Rejected: {r.Message}";
+
+            await SyncChain();
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { isMining = false; StateHasChanged(); }
+    }
+
+    private async Task SyncChain()
+    {
+        try
+        {
+            if (MyKeyService.IsLoggedIn)
+            {
+                var projRes = await BlockchainClient.GetMyProjectsAsync(new UserRequest { UserName = MyKeyService.UserName });
+                myProjects = projRes.ProjectIds.ToList();
+                
+                if ((!myProjects.Contains(CurrentProjectId) || CurrentProjectId == "Alpha") && myProjects.Count > 0)
+                {
+                    CurrentProjectId = myProjects.First();
+                }
+            }
+
+            var tR = await BlockchainClient.GetProjectTasksAsync(new ProjectRequest
+                {
+                    ProjectId = CurrentProjectId,
+                    UserName = MyKeyService.UserName ?? "Guest"
+                });
+
+            Tasks = tR.Tasks.Select(t => new ProjectTask { Id = t.Id, Title = t.Title, Creator = t.Creator, Assignee = t.Assignee, Status = (ProjectTaskStatus)t.Status, ProjectId = t.ProjectId, Description = t.Description, ParentTaskId = t.ParentTaskId, BranchInfo = t.BranchInfo }).ToList();
+
+            if (Tasks.Count > 0 || MyKeyService.IsLoggedIn) 
+            {
+                var cR = await BlockchainClient.GetChainAsync(new ChainRequest
+                    {
+                        Count = 50,
+                        ChannelId = CurrentProjectId
+                    });
+                chain = cR.Blocks.ToList();
+                RebuildLocalArtifactsAndCommits(chain);
+            }
+            else
+            {
+                chain = new List<BlockModel>();
+                Commits.Clear();
+                Artifacts.Clear();
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Sync Error: {ex.Message}");
+        }
+    }
+
+    private void RebuildLocalArtifactsAndCommits(List<BlockModel> blocks)
+    {
+        var cL = new List<CommitPayloadUI>();
+        var aL = new List<ArtifactPayloadUI>();
+
+        Console.WriteLine($"[DEBUG] Total blocks loaded: {blocks.Count}");
+
+        foreach (var b in blocks)
+        {
+            if (string.IsNullOrWhiteSpace(b.Data)) continue;
+
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(b.Data);
+                var root = doc.RootElement;
+
+                string eventType = "";
+                if (root.TryGetProperty("Type", out var t1)) eventType = t1.GetString() ?? "";
+                else if (root.TryGetProperty("type", out var t2)) eventType = t2.GetString() ?? "";
+
+                Console.WriteLine($"[DEBUG] Block {b.Index}: Type = '{eventType}'");
+
+                if (eventType == "CodeCommit")
+                {
+                    cL.Add(new CommitPayloadUI
+                        {
+                            Repository = root.TryGetProperty("Repository", out var r) || root.TryGetProperty("repository", out r) ? r.GetString() : "Unknown",
+                            CommitHash = root.TryGetProperty("CommitHash", out var h) || root.TryGetProperty("commitHash", out h) ? h.GetString() : "",
+                            Message = root.TryGetProperty("Message", out var m) || root.TryGetProperty("message", out m) ? m.GetString() : "",
+                            Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() : "Anon"
+                        });
+                    Console.WriteLine($"[DEBUG] 🟢 Successfully parsed CodeCommit! Hash: {cL.Last().CommitHash}");
+                }
+                else if (b.Data.Contains("ArtifactRegistry"))
+                {
+                    var a = System.Text.Json.JsonSerializer.Deserialize<ArtifactPayloadUI>(b.Data, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (a != null) aL.Add(a);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DEBUG] ❌ Failed to parse JSON in block {b.Hash}: {ex.Message}\nRaw Data: {b.Data}");
+            }
+        }
+
+        Commits = cL.AsEnumerable().Reverse().ToList();
+        Artifacts = aL;
+
+        Console.WriteLine($"[DEBUG] Rebuild finished. Commits to render: {Commits.Count}");
+    }
+
+    private async Task CreateNewProject()
+    {
+        if (string.IsNullOrWhiteSpace(newProjectName)) return;
+        string safeName = new string(newProjectName.Where(char.IsLetterOrDigit).ToArray());
+        if (string.IsNullOrEmpty(safeName)) return;
+
+        var payload = new
+        {
+            Type = "CreateProject",
+            User = MyKeyService.UserName,
+            ProjectId = safeName,
+            Timestamp = DateTime.UtcNow.ToString("O")
+        };
+
+        await SendJsonBlock(payload);
+
+        CurrentProjectId = safeName;
+        newProjectName = "";
+        await SyncChain(); 
+    }
+
+    public class CommitPayloadUI
+    {
+        public string Repository { get; set; } = "";
+        public string CommitHash { get; set; } = "";
+        public string Message { get; set; } = "";
+        public string Author { get; set; } = "";
+    }
+
+    public class BlockCommitEvent
+    {
+        public string Type { get; set; }
+        public string Repository { get; set; }
+        public string CommitHash { get; set; }
+        public string Message { get; set; }
+        public string User { get; set; }
+    }
+}

@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+option csharp_namespace = "Blockchain.Node";
+
+package blockchain;
+
+service BlockchainService {
+  rpc ReceiveBlock (BlockModel) returns (StatusReply);
+  rpc BroadcastBlock (BlockModel) returns (StatusReply);
+  rpc GetLastBlock (EmptyRequest) returns (BlockModel);
+  rpc GetChain (ChainRequest) returns (ChainResponse);
+
+  rpc AddPeer (PeerRequest) returns (StatusReply);
+  rpc GetPeers (EmptyRequest) returns (PeerListResponse);
+
+  rpc RegisterArtifact (stream ArtifactChunk) returns (StatusReply);
+
+  rpc GetProjectTasks (ProjectRequest) returns (TaskResponse);
+  rpc GetAnalytics (EmptyRequest) returns (AnalyticsResponse);
+  rpc GetTaskHistory (TaskHistoryRequest) returns (TaskHistoryResponse);
+  rpc GetMyProjects (UserRequest) returns (ProjectListResponse);
+}
+
+message BlockModel {
+  int32 index = 1;
+  string timestamp = 2;
+  string data = 3;
+  string previous_hash = 4;
+  string hash = 5;
+  string validator_public_key = 6;
+  string signature = 7;
+  int64 nonce = 8;
+  string channel_id = 9; 
+}
+
+message PeerRequest { string url = 1; }
+message PeerListResponse { repeated string urls = 1; }
+
+message TaskHistoryRequest { string taskId = 1; }
+message TaskHistoryResponse { repeated TaskHistoryItem items = 1; }
+message TaskHistoryItem { 
+  string timestamp = 1; 
+  string user = 2; 
+  string action = 3; 
+  string statusLabel = 4;
+  int32 blockIndex = 5; 
+}
+
+message ArtifactChunk { string fileName = 1; bytes data = 2; string owner = 3; }
+
+message ProjectRequest { string projectId = 1; string user_name = 2; }
+message EmptyRequest {}
+
+message ChainRequest {
+  int32 count = 1;
+  string channel_id = 2;
+  string user_name = 3; 
+}
+
+message StatusReply { bool success = 1; string message = 2; }
+message ChainResponse { repeated BlockModel blocks = 1; }
+
+message TaskResponse {
+  repeated TaskItem tasks = 1;
+  string user_role = 2;
+}
+
+message TaskItem { 
+    string id = 1; 
+    string title = 2;
+    string creator = 3; 
+    string assignee = 4; 
+    int32 status = 5; 
+    string projectId = 6; 
+    string description = 7;
+    string parentTaskId = 8; 
+    string branchInfo = 9; 
+}
+
+message AnalyticsResponse {
+  int32 totalBlocks = 1; 
+  int32 totalTasks = 2;
+  int32 totalCommits = 3; 
+  int32 totalArtifacts = 4;
+  int32 tasksTodo = 5; 
+  int32 tasksInProgress = 6; 
+  int32 tasksDone = 7;
+  map<string, int32> userReputation = 8; 
+}
+
+message UserRequest {
+  string user_name = 1;
+}
+
+message ProjectListResponse {
+  repeated string project_ids = 1;
+}
