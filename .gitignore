@@ -491,3 +491,4 @@ $RECYCLE.BIN/
 *.db-shm
 *.db-wal
 oracle_key.dat
+*.pem
