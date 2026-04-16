@@ -487,10 +487,7 @@ $RECYCLE.BIN/
 # NEXUS BLOCKCHAIN CUSTOM IGNORES
 # =========================
 
-# Базы данных ноды
 *.db
 *.db-shm
 *.db-wal
-
-# Приватные ключи (КРИТИЧНО)
 oracle_key.dat
