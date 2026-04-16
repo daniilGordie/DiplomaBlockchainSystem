@@ -13,10 +13,18 @@ namespace Blockchain.Core.Contracts
             {
                 if (!data.Contains("\"Type\":")) return true;
 
-                var evt = JsonSerializer.Deserialize<ContractTaskEvent>(data);
-                if (evt == null || string.IsNullOrEmpty(evt.ProjectId)) return false;
+                Console.WriteLine($"\n[SmartContract Debug] Пришли данные: {data}");
 
+                var evt = JsonSerializer.Deserialize<ContractTaskEvent>(data);
+                if (evt == null || string.IsNullOrEmpty(evt.ProjectId))
+                {
+                    Console.WriteLine("[SmartContract Debug] ❌ Отказ: Не удалось распарсить JSON или ProjectId пустой.");
+                    return false;
+                }
+
+                Console.WriteLine($"[SmartContract Debug] Запрашиваем роль для юзера '{evt.User}' в проекте '{evt.ProjectId}'...");
                 string senderRole = db.GetUserRole(evt.ProjectId, evt.User);
+                Console.WriteLine($"[SmartContract Debug] База данных вернула роль: '{senderRole}'");
 
                 if (evt.Type == "AssignRole")
                 {
@@ -47,9 +55,14 @@ namespace Blockchain.Core.Contracts
                     }
                 }
 
+                Console.WriteLine("[SmartContract Debug] ✅ Контракт успешно пройден!");
                 return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SmartContract FATAL ERROR] Произошла скрытая ошибка кода: {ex.Message}");
+                return false;
+            }
         }
     }
 }
