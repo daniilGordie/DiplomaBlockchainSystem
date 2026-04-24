@@ -13,9 +13,9 @@
 @using System.Linq
 @using System.Collections.Generic
 @inject IJSRuntime JS
-@implements IDisposable
 @inject BlockchainService.BlockchainServiceClient BlockchainClient
 @inject KeyService MyKeyService
+@inject Blockchain.UI.Services.IpfsService Ipfs
 @using Blockchain.UI.Models
 
 <PageTitle>Nexus Collaboration Platform</PageTitle>
@@ -93,11 +93,18 @@
     @if (MyKeyService.IsLoggedIn)
     {
         <ul class="nav nav-pills mb-4 gap-2">
-            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Board?"active bg-warning text-dark fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Board">📌 Task Board</button></li>
-            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Team?"active bg-success text-white fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Team">👥 Team & RBAC</button></li>
-            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.GitHub?"active bg-primary fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.GitHub">🐙 Code Audit</button></li>
-            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Artifacts?"active bg-info text-dark fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Artifacts">🗂️ Artifacts</button></li>
-            <li class="nav-item"><button class="nav-link @(activeTab==ActiveTab.Analytics?"active bg-danger text-white fw-bold shadow":"text-white bg-dark bg-opacity-25")" @onclick="LoadAnalytics">📊 Analytics</button></li>
+            <li class="nav-item">
+                <button class="nav-link @(activeTab==ActiveTab.Board ? "active bg-warning text-dark fw-bold shadow" : "text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Board">📌 Task Board</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link @(activeTab==ActiveTab.Team ? "active bg-success text-white fw-bold shadow" : "text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Team">👥 Team & RBAC</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link @(activeTab==ActiveTab.Artifacts ? "active bg-info text-dark fw-bold shadow" : "text-white bg-dark bg-opacity-25")" @onclick="()=>activeTab=ActiveTab.Artifacts">📦 Releases & Assets</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link @(activeTab==ActiveTab.Analytics ? "active bg-danger text-white fw-bold shadow" : "text-white bg-dark bg-opacity-25")" @onclick="LoadAnalytics">📊 Analytics</button>
+            </li>
         </ul>
 
         <div class="tab-content mb-5">
@@ -149,95 +156,80 @@
                     </div>
                 </div>
             }
-            @if (activeTab == ActiveTab.GitHub)
-            {
-                <div class="glass-card p-4">
-                    <div class="d-flex justify-content-between align-items-center mb-4">
-                        <div>
-                            <h4 class="text-white mb-1">🔗 Decentralized Git Anchoring</h4>
-                            <p class="text-muted small m-0">Bind local Git commits to the <strong>@CurrentProjectId</strong> blockchain channel.</p>
-                        </div>
-                        <div class="badge bg-primary fs-6 border border-primary text-white shadow">P2P Code Audit</div>
-                    </div>
-
-                    @if (MyKeyService.IsLoggedIn)
-                    {
-                        <div class="row align-items-end mb-4 bg-dark bg-opacity-50 p-3 rounded border border-secondary shadow-sm">
-                            <div class="col-md-3">
-                                <label class="text-muted small fw-bold">Repository Name</label>
-                                <input @bind="localRepoName" class="form-control bg-black text-white border-secondary" placeholder="e.g. nexus-core" />
-                            </div>
-                            <div class="col-md-3">
-                                <label class="text-muted small fw-bold">Commit SHA-1 Hash</label>
-                                <input @bind="localCommitHash" class="form-control bg-black text-warning font-monospace border-secondary" placeholder="a1b2c3d4..." maxlength="40" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="text-muted small fw-bold">Commit Message</label>
-                                <input @bind="localCommitMessage" class="form-control bg-black text-white border-secondary" placeholder="Fix consensus bug..." />
-                            </div>
-                            <div class="col-md-2">
-                                <button @onclick="RegisterLocalCommit" class="btn btn-warning w-100 fw-bold shadow text-dark" disabled="@(isMining || string.IsNullOrWhiteSpace(localCommitHash))">
-                                    ⚓ Anchor
-                                </button>
-                            </div>
-                        </div>
-                    }
-
-                    <div class="chain-scroll-view">
-                        @if (Commits.Count == 0)
-                        {
-                            <div class="text-center text-muted py-5">No commits anchored in this channel yet.</div>
-                        }
-                        @foreach (var c in Commits)
-                        {
-                            <div class="d-flex align-items-center gap-3 border-bottom border-secondary py-3 px-2 hover-bg">
-                                <div class="fs-4">🛡️</div>
-                                <div class="flex-grow-1">
-                                    <div class="fw-bold text-warning">@c.Repository <span class="badge bg-dark text-muted ms-2 font-monospace">@c.CommitHash</span></div>
-                                    <div class="text-white mt-1">"@c.Message"</div>
-                                    <div class="small text-muted mt-1">👤 @c.Author • 🕒 Anchored via Blockchain</div>
-                                </div>
-                                <div class="text-end text-center">
-                                    <div class="badge bg-success bg-opacity-75 border border-success mb-1">✅ Verified</div>
-                                </div>
-                            </div>
-                        }
-                    </div>
-                </div>
-            }
 
             @if (activeTab == ActiveTab.Artifacts)
             {
                 <div class="glass-card p-4">
-                    <div class="mb-4 p-4 border border-secondary rounded bg-dark bg-opacity-50 text-center">
-                        <div class="fs-1 mb-2">📁</div>
-                        <h5 class="text-white mb-3">Secure Artifact Registration</h5>
-                        <p class="text-muted small mb-3">Files are hashed client-side and verified by the Oracle Node. The actual file is not stored on-chain.</p>
-                        <div class="d-inline-block position-relative">
-                            <InputFile OnChange="HandleFileStreaming" class="form-control bg-black text-white border-secondary" disabled="@(isUploading||!MyKeyService.IsLoggedIn)" />
-                            @if (isUploading)
-                            {
-                                <div class="mt-2 text-info animate-pulse fw-bold">⏳ Streaming & Hashing...</div>
-                            }
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <div>
+                            <h5 class="text-white mb-1">📦 Project Releases & Media Assets</h5>
+                            <small class="text-white-50">Direct upload of compiled binaries (.exe, .apk), archives, and media to IPFS.</small>
                         </div>
+
+                        <a href="/repo/@CurrentProjectId" class="btn btn-outline-warning fw-bold shadow-sm d-flex align-items-center gap-2">
+                            <span>🌐</span> Open Project Repository
+                        </a>
                     </div>
-                    <div class="chain-scroll-view">
-                        @foreach (var a in Artifacts)
-                        {
-                            <div class="d-flex align-items-center gap-3 border-bottom border-secondary py-3 px-2 hover-bg">
-                                <div class="fs-4">📄</div>
-                                <div class="flex-grow-1">
-                                    <div class="fw-bold text-white">@a.FileName</div>
-                                    <div class="small text-info font-monospace">@a.FileHash</div>
-                                    <div class="small text-muted">@a.RegisteredBy • @a.VerificationMethod</div>
+
+                    <div class="row g-4">
+                        <div class="col-md-5">
+                            <div class="p-4 rounded border border-secondary" style="background: rgba(0,0,0,0.3);">
+                                <h6 class="text-white mb-3">Upload New Asset</h6>
+
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Select a file (Max 50MB)</label>
+                                    <InputFile OnChange="HandleFileUpload" class="form-control bg-dark text-white border-secondary" disabled="@(isUploading || !MyKeyService.IsLoggedIn)" />
                                 </div>
-                                <div class="text-center"><span class="badge bg-success bg-opacity-75 border border-success">✅ Verified Oracle</span></div>
+
+                                @if (isUploading)
+                                {
+                                    <div class="alert alert-warning py-2 d-flex align-items-center gap-2 border-warning bg-transparent text-warning">
+                                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                                        @statusMessage
+                                    </div>
+                                }
+                                else if (!string.IsNullOrEmpty(statusMessage))
+                                {
+                                    <div class="alert alert-success py-2 bg-transparent border-success text-success">
+                                        ✔ @statusMessage
+                                    </div>
+                                }
+
+                                <div class="alert alert-info py-2 mt-3 bg-transparent border-info text-info small mb-0">
+                                    <strong>ℹ️ How it works:</strong> The file is uploaded to the decentralized IPFS network. Only its cryptographic CID (hash) is anchored to the blockchain.
+                                </div>
                             </div>
-                        }
+                        </div>
+
+                        <div class="col-md-7">
+                            <div class="p-3 rounded border border-secondary h-100" style="background: rgba(0,0,0,0.3);">
+                                <h6 class="text-white mb-3">Recent Uploads (IPFS CID)</h6>
+                                <div style="max-height: 250px; overflow-y: auto;">
+                                    @if (!Artifacts.Any())
+                                    {
+                                        <div class="text-muted text-center py-4">No assets uploaded yet.</div>
+                                    }
+                                    else
+                                    {
+                                        <ul class="list-group list-group-flush bg-transparent">
+                                            @foreach (var a in Artifacts.Take(5)) 
+                                            {
+                                                <li class="list-group-item bg-transparent border-secondary px-0 d-flex justify-content-between align-items-center hover-bg">
+                                                    <div class="text-truncate pe-3">
+                                                        <div class="text-white fw-bold">📄 @a.FileName</div>
+                                                        <div class="small text-info font-monospace text-truncate" style="max-width: 250px;">@a.FileHash</div>
+                                                    </div>
+                                                    <a href="http://127.0.0.1:8080/ipfs/@a.FileHash" target="_blank" class="btn btn-sm btn-outline-info flex-shrink-0">Download</a>
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             }
-
             @if (activeTab == ActiveTab.Analytics)
             {
                 <div class="row g-4">
@@ -308,8 +300,6 @@
                 </div>
             }
         </div>
-
-        <AuditLog Chain="chain" OnBlockSelect="(b) => selectedBlock = b" />
     }
     else
     {
@@ -469,9 +459,10 @@
     private bool isNewTask = false;
     private ProjectTask currentTaskModel = new();
 
-    private Timer? _timer;
-
-    protected override async Task OnInitializedAsync() { await SyncChain(); _timer = new Timer(async _ => await SyncChain(), null, 0, 2000); }
+    protected override async Task OnInitializedAsync()
+    {
+        await SyncChain();
+    }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -480,7 +471,6 @@
             StateHasChanged();
         }
     }
-    public void Dispose() => _timer?.Dispose();
 
     private async Task OnProjectChanged(ChangeEventArgs e)
     {
@@ -590,23 +580,6 @@
 
         localCommitHash = "";
         localCommitMessage = "";
-    }
-
-    private async Task HandleFileStreaming(InputFileChangeEventArgs e)
-    {
-        var file = e.File; if (file == null || !MyKeyService.IsLoggedIn) return;
-        if (file.Size > 50 * 1024 * 1024) { statusMessage = "Max 50MB"; return; }
-        isUploading = true; StateHasChanged();
-        try
-        {
-            using var call = BlockchainClient.RegisterArtifact();
-            var buf = new byte[64 * 1024]; using var s = file.OpenReadStream(50 * 1024 * 1024); int r;
-            while ((r = await s.ReadAsync(buf, 0, buf.Length)) > 0) await call.RequestStream.WriteAsync(new ArtifactChunk { FileName = file.Name, Owner = MyKeyService.UserName, Data = ByteString.CopyFrom(buf, 0, r) });
-            await call.RequestStream.CompleteAsync();
-            statusMessage = (await call.ResponseAsync).Message; await SyncChain();
-        }
-        catch (Exception ex) { statusMessage = ex.Message; }
-        finally { isUploading = false; StateHasChanged(); }
     }
 
     private async Task LoadAnalytics() { activeTab = ActiveTab.Analytics; try { analyticsData = await BlockchainClient.GetAnalyticsAsync(new EmptyRequest()); } catch (Exception ex) { statusMessage = ex.Message; } }
@@ -801,6 +774,55 @@
         CurrentProjectId = safeName;
         newProjectName = "";
         await SyncChain(); 
+    }
+
+    private async Task HandleFileUpload(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null || !MyKeyService.IsLoggedIn) return;
+
+        if (file.Size > 50 * 1024 * 1024)
+        {
+            statusMessage = "Ошибка: Файл превышает лимит в 50MB";
+            return;
+        }
+
+        isUploading = true;
+        StateHasChanged();
+
+        try
+        {
+            statusMessage = "Загрузка файла в локальную ноду IPFS...";
+            StateHasChanged();
+
+            string cid = await Ipfs.UploadFileAsync(file);
+
+            statusMessage = "Якорение CID файла в блокчейн...";
+            StateHasChanged();
+
+            var payload = new
+            {
+                Source = "ArtifactRegistry",
+                Type = "Register",
+                FileName = file.Name, 
+                FileHash = cid,       
+                RegisteredBy = MyKeyService.UserName,
+                VerificationMethod = "IPFS & Client Node"
+            };
+
+            await SendJsonBlock(payload);
+
+            statusMessage = $"Файл успешно сохранен! CID: {cid.Substring(0, 8)}...";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Сбой загрузки: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+            StateHasChanged();
+        }
     }
 
     public class CommitPayloadUI

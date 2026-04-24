@@ -1,0 +1,53 @@
+﻿<div class="diff-viewer-container rounded border border-secondary" style="background-color: #1e1e1e; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem; overflow-x: auto;">
+    @if (string.IsNullOrWhiteSpace(DiffText))
+    {
+        <div class="p-4 text-muted text-center">Выберите коммит для просмотра изменений...</div>
+    }
+    else
+    {
+        <table class="w-100" style="border-collapse: collapse;">
+            <tbody>
+                @foreach (var line in DiffText.Split('\n'))
+                {
+                    if (line.StartsWith("+++") || line.StartsWith("---"))
+                    {
+                        <tr style="background-color: #2d2d2d; font-weight: bold;">
+                            <td class="p-1 px-3 text-white-50" colspan="2">@line</td>
+                        </tr>
+                    }
+                    else if (line.StartsWith("@@"))
+                    {
+                        <tr style="background-color: rgba(0, 122, 204, 0.2);">
+                            <td class="p-1 px-3 text-info" colspan="2">@line</td>
+                        </tr>
+                    }
+                    else if (line.StartsWith("+"))
+                    {
+                        <tr style="background-color: rgba(40, 167, 69, 0.2);">
+                            <td class="text-end text-success pe-2 user-select-none" style="width: 40px; border-right: 1px solid #444;">+</td>
+                            <td class="p-1 px-3 text-success">@line</td>
+                        </tr>
+                    }
+                    else if (line.StartsWith("-"))
+                    {
+                        <tr style="background-color: rgba(220, 53, 69, 0.2);">
+                            <td class="text-end text-danger pe-2 user-select-none" style="width: 40px; border-right: 1px solid #444;">-</td>
+                            <td class="p-1 px-3 text-danger">@line</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        <tr>
+                            <td class="text-end text-white-50 pe-2 user-select-none" style="width: 40px; border-right: 1px solid #444;"></td>
+                            <td class="p-1 px-3" style="color: #d4d4d4;">@line</td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    [Parameter] public string DiffText { get; set; } = "";
+}

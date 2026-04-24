@@ -8,12 +8,15 @@ using Microsoft.Data.Sqlite;
 using Blockchain.Core;
 using System.Text.Json;
 using Google.Protobuf;
+using Microsoft.Extensions.Configuration;
 
 namespace Blockchain.Node.Services
 {
     public class BlockchainGrpcService : BlockchainService.BlockchainServiceBase
     {
         private readonly ILogger<BlockchainGrpcService> _logger;
+        private readonly IConfiguration _configuration;
+        private readonly string _dbFileName;
         private readonly BlockchainManager _blockchainManager;
         private readonly OracleIdentity _oracleIdentity;
         private readonly P2PNetworkService _p2pService;
@@ -23,18 +26,22 @@ namespace Blockchain.Node.Services
         private static int _lastIndexedBlock = -1;
         private static readonly object _cacheLock = new object();
 
-        private string DbConnectionString => "Data Source=nexus_node.db";
+        private string DbConnectionString => $"Data Source={_dbFileName}";
 
         public BlockchainGrpcService(
             ILogger<BlockchainGrpcService> logger,
+            IConfiguration configuration,
             BlockchainManager manager,
             OracleIdentity oracleIdentity,
             P2PNetworkService p2pService)
         {
             _logger = logger;
+            _configuration = configuration;
             _blockchainManager = manager;
             _oracleIdentity = oracleIdentity;
             _p2pService = p2pService;
+
+            _dbFileName = _configuration.GetConnectionString("DefaultNodeDb") ?? "nexus_node_default.db";
         }
 
         public override Task<StatusReply> AddPeer(PeerRequest request, ServerCallContext context)
@@ -71,7 +78,7 @@ namespace Blockchain.Node.Services
 
         public override Task<StatusReply> ReceiveBlock(BlockModel request, ServerCallContext context)
         {
-            var db = new Blockchain.Core.DatabaseManager();
+            var db = new Blockchain.Core.DatabaseManager(_dbFileName);
             string targetChannel = "System";
 
             try
@@ -89,7 +96,7 @@ namespace Blockchain.Node.Services
                     }
                 }
             }
-            catch { } 
+            catch { }
 
             var channelBlocks = db.LoadChain(targetChannel);
             string expectedPrevHash = channelBlocks.Count > 0 ? channelBlocks.Last().Hash : "0";
@@ -150,16 +157,13 @@ namespace Blockchain.Node.Services
         public override Task<ChainResponse> GetChain(ChainRequest request, ServerCallContext context)
         {
             var response = new ChainResponse();
-            var db = new Blockchain.Core.DatabaseManager();
+
+            var db = new Blockchain.Core.DatabaseManager(_dbFileName);
 
             string channelToRead = string.IsNullOrEmpty(request.ChannelId) ? "System" : request.ChannelId;
             string userName = string.IsNullOrEmpty(request.UserName) ? "Guest" : request.UserName;
 
             string role = db.GetUserRole(channelToRead, userName);
-            //if (role == "None" && channelToRead != "System")
-            //{
-            //    return Task.FromResult(response); 
-            //}
 
             var blocks = db.LoadChain(channelToRead);
 
@@ -184,17 +188,12 @@ namespace Blockchain.Node.Services
 
         public override Task<TaskResponse> GetProjectTasks(ProjectRequest request, ServerCallContext context)
         {
-            var response = new TaskResponse(); 
-            var db = new Blockchain.Core.DatabaseManager();
+            var response = new TaskResponse();
+
+            var db = new Blockchain.Core.DatabaseManager(_dbFileName);
 
             string role = db.GetUserRole(request.ProjectId, request.UserName);
             response.UserRole = role;
-
-            //if (role == "None" && request.ProjectId != "System")
-            //{
-            //    _logger.LogWarning($"[Security] Read-Access Denied for {request.UserName} to {request.ProjectId}");
-            //    return Task.FromResult(response);
-            //}
 
             try
             {
@@ -208,7 +207,7 @@ namespace Blockchain.Node.Services
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    response.Tasks.Add(new TaskItem 
+                    response.Tasks.Add(new TaskItem
                     {
                         Id = reader.GetString(0),
                         Title = reader.GetString(1),
@@ -253,31 +252,6 @@ namespace Blockchain.Node.Services
             return Task.FromResult(response);
         }
 
-        public override async Task<StatusReply> RegisterArtifact(IAsyncStreamReader<ArtifactChunk> requestStream, ServerCallContext context)
-        {
-            string fileName = ""; string owner = "";
-            using var sha256 = System.Security.Cryptography.SHA256.Create();
-
-            while (await requestStream.MoveNext())
-            {
-                var chunk = requestStream.Current;
-                if (string.IsNullOrEmpty(fileName)) { fileName = chunk.FileName; owner = chunk.Owner; }
-                sha256.TransformBlock(chunk.Data.ToByteArray(), 0, chunk.Data.Length, null, 0);
-            }
-
-            sha256.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-            string fileHash = BitConverter.ToString(sha256.Hash!).Replace("-", "").ToLower();
-
-            if (_syncedArtifacts.Contains(fileHash)) return new StatusReply { Success = false, Message = "Artifact already registered." };
-
-            string payload = JsonSerializer.Serialize(new { Source = "ArtifactRegistry", Type = "Register", FileName = fileName, FileHash = fileHash, RegisteredBy = owner, VerificationMethod = "Oracle Node" });
-            string signature = _oracleIdentity.SignData(payload);
-            var block = new Block { Data = payload, ValidatorPublicKey = _oracleIdentity.PublicKey, Signature = signature };
-
-            if (_blockchainManager.AddBlock(block)) { _syncedArtifacts.Add(fileHash); return new StatusReply { Success = true, Message = $"Artifact {fileName} secured. Hash: {fileHash}" }; }
-            return new StatusReply { Success = false, Message = "Failed to register artifact." };
-        }
-
         public override Task<AnalyticsResponse> GetAnalytics(EmptyRequest request, ServerCallContext context)
         {
             var resp = new AnalyticsResponse { TotalBlocks = _blockchainManager.Chain.Count, TotalCommits = _syncedCommits.Count, TotalArtifacts = _syncedArtifacts.Count };
@@ -303,11 +277,11 @@ namespace Blockchain.Node.Services
 
         public override Task<ProjectListResponse> GetMyProjects(UserRequest request, ServerCallContext context)
         {
-            var db = new Blockchain.Core.DatabaseManager();
+            var db = new Blockchain.Core.DatabaseManager(_dbFileName);
             var projects = db.GetUserProjects(request.UserName);
 
             var response = new ProjectListResponse();
-            response.ProjectIds.AddRange(projects); 
+            response.ProjectIds.AddRange(projects);
 
             return Task.FromResult(response);
         }

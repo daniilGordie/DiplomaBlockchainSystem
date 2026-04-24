@@ -1,0 +1,132 @@
+﻿@page "/repo/{ProjectId}"
+@using Blockchain.Node
+@using Blockchain.UI.Services
+@using Blockchain.UI.Models
+@using Blockchain.UI.Components
+@using System.Text.Json
+@inject BlockchainService.BlockchainServiceClient BlockchainClient
+@inject KeyService MyKeyService
+@inject NavigationManager Nav
+@inject HttpClient Http
+
+<div class="dashboard-container p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom border-secondary">
+        <div>
+            <button class="btn btn-sm btn-outline-secondary me-3" @onclick='() => Nav.NavigateTo("/")'>⬅ Назад</button>
+            <h2 class="d-inline-block m-0 text-white">🐙 Репозиторий: <span class="text-warning">@ProjectId</span></h2>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="glass-card p-3 h-100">
+                <h5 class="text-white mb-3">🕒 История коммитов</h5>
+                <div class="chain-scroll-view" style="max-height: 700px; overflow-y: auto;">
+                    @foreach (var c in Commits)
+                    {
+                        <div class="p-3 mb-2 rounded border @(selectedCommitHash == c.CommitHash ? "border-warning bg-dark" : "border-secondary hover-bg")"
+                             style="cursor: pointer;" @onclick="() => LoadDiff(c)">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="badge bg-primary">@c.CommitHash.Substring(0, 7)</span>
+                                <small class="text-muted">@c.Author</small>
+                            </div>
+                            <div class="text-white small fw-bold">@c.Message</div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-8">
+            <div class="glass-card p-0 h-100 d-flex flex-column overflow-hidden">
+                <div class="p-3 bg-dark border-bottom border-secondary d-flex justify-content-between">
+                    <h5 class="m-0 text-white">@(string.IsNullOrEmpty(selectedCommitHash) ? "📁 Артефакты проекта" : "📝 Просмотр изменений")</h5>
+                    @if (!string.IsNullOrEmpty(selectedCommitHash))
+                    {
+                        <button class="btn btn-sm btn-outline-light" @onclick="() => selectedCommitHash = null">Закрыть Diff</button>
+                    }
+                </div>
+
+                <div class="flex-grow-1 p-3" style="overflow-y: auto;">
+                    @if (string.IsNullOrEmpty(selectedCommitHash))
+                    {
+                        <table class="table table-dark">
+                            <thead>
+                                <tr><th>Имя файла</th><th>CID (IPFS)</th><th>Действия</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var a in Artifacts)
+                                {
+                                    <tr>
+                                        <td>📄 @a.FileName</td>
+                                        <td class="font-monospace small text-info">@a.FileHash.Substring(0, 10)...</td>
+                                        <td><a href="http://127.0.0.1:8080/ipfs/@a.FileHash" target="_blank" class="btn btn-sm btn-outline-info">Открыть</a></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else if (isLoadingDiff)
+                    {
+                        <div class="text-center p-5"><div class="spinner-border text-warning"></div></div>
+                    }
+                    else
+                    {
+                        <DiffViewer DiffText="@currentDiffText" />
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string ProjectId { get; set; } = "";
+    private List<CommitPayloadUI> Commits = new();
+    private List<ArtifactPayloadUI> Artifacts = new();
+    private string? selectedCommitHash;
+    private string currentDiffText = "";
+    private bool isLoadingDiff = false;
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        var res = await BlockchainClient.GetChainAsync(new ChainRequest { ChannelId = ProjectId, Count = 100 });
+        Commits.Clear(); Artifacts.Clear();
+        foreach (var b in res.Blocks)
+        {
+            using var doc = JsonDocument.Parse(b.Data);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("Type", out var t) && t.GetString() == "CodeCommit")
+            {
+                Commits.Add(new CommitPayloadUI
+                    {
+                        CommitHash = root.GetProperty("CommitHash").GetString()!,
+                        Message = root.GetProperty("Message").GetString()!,
+                        Author = root.GetProperty("User").GetString()!,
+                        PatchCid = root.TryGetProperty("PatchCid", out var p) ? p.GetString()! : ""
+                    });
+            }
+            else if (b.Data.Contains("ArtifactRegistry"))
+            {
+                var a = JsonSerializer.Deserialize<ArtifactPayloadUI>(b.Data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (a != null) Artifacts.Add(a);
+            }
+        }
+        Commits.Reverse();
+    }
+
+    private async Task LoadDiff(CommitPayloadUI commit)
+    {
+        if (string.IsNullOrEmpty(commit.PatchCid)) return;
+        selectedCommitHash = commit.CommitHash;
+        isLoadingDiff = true;
+        try
+        {
+            currentDiffText = await Http.GetStringAsync($"http://127.0.0.1:8080/ipfs/{commit.PatchCid}");
+        }
+        catch { currentDiffText = "Ошибка загрузки данных из IPFS."; }
+        finally { isLoadingDiff = false; }
+    }
+}

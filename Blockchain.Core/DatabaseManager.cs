@@ -8,11 +8,16 @@ namespace Blockchain.Core
 {
     public class DatabaseManager
     {
-        public string DbFileName { get; private set; } = "nexus_node.db";
+        public string DbFileName { get; private set; }
         private string ConnectionString => $"Data Source={DbFileName}";
 
-        public DatabaseManager(string dbName = "nexus_node.db")
+        public DatabaseManager(string dbName)
         {
+            if (string.IsNullOrWhiteSpace(dbName))
+            {
+                throw new ArgumentException("Имя базы данных не может быть пустым!", nameof(dbName));
+            }
+
             DbFileName = dbName;
             InitializeDatabase();
         }
@@ -51,6 +56,9 @@ namespace Blockchain.Core
                 cmd.ExecuteNonQuery();
 
                 cmd.CommandText = @"CREATE TABLE IF NOT EXISTS Mempool (TxId TEXT PRIMARY KEY, PayloadJson TEXT, Timestamp TEXT);";
+                cmd.ExecuteNonQuery();
+
+                cmd.CommandText = @"CREATE TABLE IF NOT EXISTS Users (UserName TEXT PRIMARY KEY, PublicKey TEXT);";
                 cmd.ExecuteNonQuery();
             }
         }
@@ -346,7 +354,7 @@ namespace Blockchain.Core
                     }
                     catch (Exception rowEx)
                     {
-                       
+
                         Console.WriteLine($"[CRITICAL] Ошибка чтения блока в БД (Channel: {safeChannel}): {rowEx.Message}");
                     }
                 }
@@ -403,7 +411,7 @@ namespace Blockchain.Core
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read()) list.Add(reader.GetString(0));
             }
-            catch { } 
+            catch { }
             return list;
         }
 

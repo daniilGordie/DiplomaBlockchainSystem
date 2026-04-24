@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Net.Http;
 using Grpc.Net.Client;
 using Blockchain.Node;
 
@@ -62,6 +63,42 @@ try
 
     string channelId = "Alpha";
 
+    var diffProcess = new Process
+    {
+        StartInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            Arguments = $"show {commitHash} --pretty=format: --unified=3",
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        }
+    };
+    diffProcess.Start();
+    string diffText = await diffProcess.StandardOutput.ReadToEndAsync();
+    await diffProcess.WaitForExitAsync();
+
+    string patchCid = "";
+    if (!string.IsNullOrWhiteSpace(diffText))
+    {
+        using var httpClient = new HttpClient();
+        using var content = new MultipartFormDataContent();
+        content.Add(new StringContent(diffText), "file", "diff.patch");
+        try
+        {
+            var ipfsRes = await httpClient.PostAsync("http://127.0.0.1:5001/api/v0/add", content);
+            if (ipfsRes.IsSuccessStatusCode)
+            {
+                var ipfsJson = await ipfsRes.Content.ReadAsStringAsync();
+                patchCid = JsonDocument.Parse(ipfsJson).RootElement.GetProperty("Hash").GetString() ?? "";
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[BlockChain Git Hook] Внимание: Ошибка загрузки Diff в IPFS: {ex.Message}");
+        }
+    }
+
     var payload = new
     {
         Type = "CodeCommit",
@@ -70,6 +107,7 @@ try
         Repository = "local-repo",
         CommitHash = commitHash,
         Message = message,
+        PatchCid = patchCid,    
         Timestamp = DateTime.UtcNow.ToString("O")
     };
 
@@ -182,3 +220,4 @@ static string SignData(string data, string privKeyHex)
         return "";
     }
 }
+

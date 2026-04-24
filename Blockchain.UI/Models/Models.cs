@@ -3,7 +3,7 @@
 namespace Blockchain.UI.Models
 {
     public enum ProjectTaskStatus { Todo = 0, InProgress = 1, Done = 2 }
-    public enum ActiveTab { Board, Team, GitHub, Artifacts, Analytics }
+    public enum ActiveTab { Board, Team, Artifacts, Analytics }
 
     public class ProjectTask
     {
@@ -41,6 +41,7 @@ namespace Blockchain.UI.Models
         public string CommitHash { get; set; } = "";
         public string Author { get; set; } = "";
         public string Message { get; set; } = "";
+        public string PatchCid { get; set; } = "";
     }
 
     public class ArtifactPayloadUI
@@ -50,4 +51,6 @@ namespace Blockchain.UI.Models
         public string RegisteredBy { get; set; } = "";
         public string VerificationMethod { get; set; } = "Client-Side";
     }
+
+
 }

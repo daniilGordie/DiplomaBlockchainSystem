@@ -13,8 +13,6 @@ service BlockchainService {
   rpc AddPeer (PeerRequest) returns (StatusReply);
   rpc GetPeers (EmptyRequest) returns (PeerListResponse);
 
-  rpc RegisterArtifact (stream ArtifactChunk) returns (StatusReply);
-
   rpc GetProjectTasks (ProjectRequest) returns (TaskResponse);
   rpc GetAnalytics (EmptyRequest) returns (AnalyticsResponse);
   rpc GetTaskHistory (TaskHistoryRequest) returns (TaskHistoryResponse);
@@ -46,8 +44,6 @@ message TaskHistoryItem {
   int32 blockIndex = 5; 
 }
 
-message ArtifactChunk { string fileName = 1; bytes data = 2; string owner = 3; }
-
 message ProjectRequest { string projectId = 1; string user_name = 2; }
 message EmptyRequest {}
 
@@ -55,6 +51,12 @@ message ChainRequest {
   int32 count = 1;
   string channel_id = 2;
   string user_name = 3; 
+}
+
+message ArtifactRequest { 
+  string fileName = 1; 
+  string ipfs_cid = 2; 
+  string owner = 3; 
 }
 
 message StatusReply { bool success = 1; string message = 2; }
