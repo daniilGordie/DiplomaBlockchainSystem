@@ -10,9 +10,9 @@ namespace Blockchain.UI.Services
     {
         public string GenerateMnemonic()
         {
-            if (Bip39Words.Wordlist.Length < 2048)
+            if (Bip39Words.Wordlist.Length != 2048)
             {
-                return GenerateSimpleRandomMnemonic();
+                throw new InvalidOperationException("Critical error. Dictionary is broken or empty.");
             }
 
             return GenerateBip39Mnemonic();
@@ -66,21 +66,6 @@ namespace Blockchain.UI.Services
             {
                 string chunk = bitsString.Substring(i * 11, 11);
                 int index = Convert.ToInt32(chunk, 2);
-                words.Add(Bip39Words.Wordlist[index]);
-            }
-
-            return string.Join(" ", words);
-        }
-
-        private string GenerateSimpleRandomMnemonic()
-        {
-            var words = new List<string>();
-            var random = new Random();
-            int maxIndex = Bip39Words.Wordlist.Length;
-
-            for (int i = 0; i < 12; i++)
-            {
-                int index = random.Next(0, maxIndex);
                 words.Add(Bip39Words.Wordlist[index]);
             }
 

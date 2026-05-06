@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Text.Json;
+using Blockchain.Core.Constants;
 
 namespace Blockchain.Core.Contracts
 {
@@ -11,20 +12,33 @@ namespace Blockchain.Core.Contracts
         {
             try
             {
+                if (NetworkParameters.IsGenesisModeEnabled)
+                {
+                    return true;
+                }
+
                 if (!data.Contains("\"Type\":")) return true;
 
-                Console.WriteLine($"\n[SmartContract Debug] Пришли данные: {data}");
+                Console.WriteLine($"\n[SmartContract Debug] Data turned back: {data}");
 
                 var evt = JsonSerializer.Deserialize<ContractTaskEvent>(data);
                 if (evt == null || string.IsNullOrEmpty(evt.ProjectId))
                 {
-                    Console.WriteLine("[SmartContract Debug] ❌ Отказ: Не удалось распарсить JSON или ProjectId пустой.");
+                    Console.WriteLine("[SmartContract Debug] ❌ Reject: Parsing failed, JSON or ProjectId is empty.");
                     return false;
                 }
 
-                Console.WriteLine($"[SmartContract Debug] Запрашиваем роль для юзера '{evt.User}' в проекте '{evt.ProjectId}'...");
+                string expectedPublicKey = db.GetUserPublicKey(evt.User);
+
+                if (!string.IsNullOrEmpty(expectedPublicKey) && expectedPublicKey != senderPublicKey)
+                {
+                    Console.WriteLine($"[SmartContract] ❌ Warning! Identity spoofing detected. Claimed User: {evt.User}");
+                    return false;
+                }
+
+                Console.WriteLine($"[SmartContract Debug] Requesting role for user '{evt.User}' in project '{evt.ProjectId}'...");
                 string senderRole = db.GetUserRole(evt.ProjectId, evt.User);
-                Console.WriteLine($"[SmartContract Debug] База данных вернула роль: '{senderRole}'");
+                Console.WriteLine($"[SmartContract Debug] Database returned role: '{senderRole}'");
 
                 if (evt.Type == "AssignRole")
                 {
@@ -55,12 +69,12 @@ namespace Blockchain.Core.Contracts
                     }
                 }
 
-                Console.WriteLine("[SmartContract Debug] ✅ Контракт успешно пройден!");
+                Console.WriteLine("[SmartContract Debug] ✅ Contract successfully verified!");
                 return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[SmartContract FATAL ERROR] Произошла скрытая ошибка кода: {ex.Message}");
+                Console.WriteLine($"[SmartContract FATAL ERROR] An unhandled code error occurred: {ex.Message}");
                 return false;
             }
         }

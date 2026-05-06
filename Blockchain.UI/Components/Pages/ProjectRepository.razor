@@ -12,15 +12,15 @@
 <div class="dashboard-container p-4">
     <div class="d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom border-secondary">
         <div>
-            <button class="btn btn-sm btn-outline-secondary me-3" @onclick='() => Nav.NavigateTo("/")'>⬅ Назад</button>
-            <h2 class="d-inline-block m-0 text-white">🐙 Репозиторий: <span class="text-warning">@ProjectId</span></h2>
+            <button class="btn btn-sm btn-outline-secondary me-3" @onclick='() => Nav.NavigateTo("/")'>⬅ Back</button>
+            <h2 class="d-inline-block m-0 text-white">🐙 Repository: <span class="text-warning">@ProjectId</span></h2>
         </div>
     </div>
 
     <div class="row g-4">
         <div class="col-md-4">
             <div class="glass-card p-3 h-100">
-                <h5 class="text-white mb-3">🕒 История коммитов</h5>
+                <h5 class="text-white mb-3">🕒 Commit History</h5>
                 <div class="chain-scroll-view" style="max-height: 700px; overflow-y: auto;">
                     @foreach (var c in Commits)
                     {
@@ -40,10 +40,10 @@
         <div class="col-md-8">
             <div class="glass-card p-0 h-100 d-flex flex-column overflow-hidden">
                 <div class="p-3 bg-dark border-bottom border-secondary d-flex justify-content-between">
-                    <h5 class="m-0 text-white">@(string.IsNullOrEmpty(selectedCommitHash) ? "📁 Артефакты проекта" : "📝 Просмотр изменений")</h5>
+                    <h5 class="m-0 text-white">@(string.IsNullOrEmpty(selectedCommitHash) ? "📁 Project Artifacts" : "📝 Changes View")</h5>
                     @if (!string.IsNullOrEmpty(selectedCommitHash))
                     {
-                        <button class="btn btn-sm btn-outline-light" @onclick="() => selectedCommitHash = null">Закрыть Diff</button>
+                        <button class="btn btn-sm btn-outline-light" @onclick="() => selectedCommitHash = null">Close Diff</button>
                     }
                 </div>
 
@@ -52,7 +52,7 @@
                     {
                         <table class="table table-dark">
                             <thead>
-                                <tr><th>Имя файла</th><th>CID (IPFS)</th><th>Действия</th></tr>
+                                <tr><th>File Name</th><th>CID (IPFS)</th><th>Actions</th></tr>
                             </thead>
                             <tbody>
                                 @foreach (var a in Artifacts)
@@ -60,7 +60,7 @@
                                     <tr>
                                         <td>📄 @a.FileName</td>
                                         <td class="font-monospace small text-info">@a.FileHash.Substring(0, 10)...</td>
-                                        <td><a href="http://127.0.0.1:8080/ipfs/@a.FileHash" target="_blank" class="btn btn-sm btn-outline-info">Открыть</a></td>
+                                        <td><a href="http://127.0.0.1:8080/ipfs/@a.FileHash" target="_blank" class="btn btn-sm btn-outline-info">Open</a></td>
                                     </tr>
                                 }
                             </tbody>
@@ -126,7 +126,7 @@
         {
             currentDiffText = await Http.GetStringAsync($"http://127.0.0.1:8080/ipfs/{commit.PatchCid}");
         }
-        catch { currentDiffText = "Ошибка загрузки данных из IPFS."; }
+        catch { currentDiffText = "Error loading data from IPFS."; }
         finally { isLoadingDiff = false; }
     }
 }

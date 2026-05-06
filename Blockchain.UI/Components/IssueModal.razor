@@ -1,76 +1,89 @@
-﻿@using static Blockchain.UI.Components.Pages.BlockchainDashboard
-@using Blockchain.UI.Models
+﻿@using Blockchain.UI.Models
+@using Blockchain.UI.Services
+@using System.IO
+@inject KeyService MyKeyService
 
 @if (IsOpen)
 {
     <div class="modal-backdrop-custom" style="background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);">
-        <div class="glass-card p-0 modal-content-custom animate-pop" style="background: #1e1e24; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+        <div class="glass-card p-0 modal-content-custom animate-pop" style="background: #1e1e24; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); max-width: 600px; margin: 50px auto;">
 
             <div class="p-3 border-bottom d-flex justify-content-between align-items-center" style="border-color: rgba(255,255,255,0.1) !important; background: rgba(255,255,255,0.02);">
                 <div class="d-flex align-items-center gap-3">
-                    <span class="badge bg-primary fs-6 px-3 py-2 rounded-pill shadow-sm">@(IsNewTask ? "New Issue" : TaskModel.Id)</span>
+                    <span class="badge bg-primary fs-6 px-3 py-2 rounded-pill shadow-sm">
+                        @(IsNewTask ? "New Issue" : TaskModel.Id)
+                    </span>
                     @if (!IsNewTask)
                     {
                         <span style="color: #adb5bd; font-size: 0.9rem;">Created by <strong class="text-white">@TaskModel.Creator</strong></span>
                     }
                 </div>
-                <button class="btn btn-sm text-white-50 border-0 fs-5" style="background: transparent;" @onclick="() => IsOpenChanged.InvokeAsync(false)">✕</button>
+                <button class="btn-close btn-close-white" @onclick="Close"></button>
             </div>
 
-            <div class="p-4 d-flex gap-4 modal-scroll" style="overflow-y:auto;">
+            <div class="p-4">
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-bold">Заголовок задачи</label>
+                    <input type="text" @bind="TaskModel.Title" class="form-control bg-dark text-white border-secondary" placeholder="Что нужно сделать?" />
+                </div>
 
-                <div class="flex-grow-1" style="width: 65%;">
-                    <div class="mb-4">
-                        <label class="fw-bold text-uppercase mb-2" style="color: #adb5bd; font-size: 0.75rem; letter-spacing: 0.5px;">Title</label>
-                        <input @bind="TaskModel.Title" class="form-control text-white shadow-none" placeholder="Brief summary of the issue..." style="background: #2b2b36; border: 1px solid #444; border-radius: 8px; padding: 0.75rem 1rem; font-size: 1.1rem;" />
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-bold">Описание</label>
+                    <textarea @bind="TaskModel.Description" class="form-control bg-dark text-white border-secondary" rows="4" placeholder="Детали задачи..."></textarea>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label text-muted small fw-bold">Исполнитель</label>
+                        <input type="text" @bind="TaskModel.Assignee" class="form-control bg-dark text-white border-secondary" placeholder="username" />
                     </div>
-                    <div class="mb-3">
-                        <label class="fw-bold text-uppercase mb-2" style="color: #adb5bd; font-size: 0.75rem; letter-spacing: 0.5px;">Description (Markdown supported)</label>
-                        <textarea @bind="TaskModel.Description" class="form-control text-white shadow-none" rows="7" placeholder="Add technical details, acceptance criteria, or steps to reproduce..." style="background: #2b2b36; border: 1px solid #444; border-radius: 8px; padding: 1rem;"></textarea>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label text-muted small fw-bold">Статус</label>
+                        <select @bind="TaskModel.Status" class="form-select bg-dark text-white border-secondary">
+                            <option value="@ProjectTaskStatus.Todo">To Do</option>
+                            <option value="@ProjectTaskStatus.InProgress">In Progress</option>
+                            <option value="@ProjectTaskStatus.Done">Done</option>
+                        </select>
                     </div>
                 </div>
 
-                <div style="width: 35%; border-left: 1px solid rgba(255,255,255,0.1);" class="ps-4">
-                    <div class="mb-4">
-                        <label class="fw-bold text-uppercase mb-2" style="color: #adb5bd; font-size: 0.75rem; letter-spacing: 0.5px;">Status</label>
-                        <select @bind="TaskModel.Status" class="form-select text-white shadow-none" style="background: #2b2b36; border: 1px solid #444; border-radius: 8px;">
-                            <option value="0">To Do</option>
-                            <option value="1">In Progress</option>
-                            <option value="2">Done</option>
-                        </select>
-                    </div>
-                    <div class="mb-4">
-                        <label class="fw-bold text-uppercase mb-2" style="color: #adb5bd; font-size: 0.75rem; letter-spacing: 0.5px;">Assignee</label>
-                        <div class="input-group">
-                            <span class="input-group-text border-0" style="background: #2b2b36; color: #adb5bd;">@("@")</span>
-                            <input @bind="TaskModel.Assignee" class="form-control text-white shadow-none border-start-0" placeholder="Username" style="background: #2b2b36; border: 1px solid #444; border-radius: 0 8px 8px 0;" />
-                        </div>
+                <div class="mt-4 p-3 rounded" style="background: rgba(13, 110, 253, 0.05); border: 1px dashed rgba(13, 110, 253, 0.3);">
+                    <h6 class="text-white mb-3 d-flex align-items-center gap-2">
+                        <span style="font-size: 1.2rem;">🔑</span> Transaction registration
+                    </h6>
+
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <div class="alert alert-danger py-2 small">@errorMessage</div>
+                    }
+
+                    <div class="mb-3">
+                        <label class="form-label text-muted small">Файл кошелька (wallet.json)</label>
+                        <InputFile OnChange="LoadKeystoreFile" class="form-control form-control-sm bg-dark text-white border-secondary" />
+                        @if (keystoreContent != null)
+                        {
+                            <div class="text-success small mt-1">✔ Файл загружен</div>
+                        }
                     </div>
 
-                    @if (true)
-                    {
-                        <div class="p-3 mt-4 rounded-3 shadow-sm" style="background: rgba(255, 193, 7, 0.15); border: 1px solid rgba(255, 193, 7, 0.4);">
-                            <div class="text-warning fw-bold mb-2 d-flex align-items-center gap-2">
-                                <span>⚡</span> Smart Contract Rules
-                            </div>
-                            <ul class="mb-0 ps-3" style="color: #e2e8f0; font-size: 0.85rem;">
-                                <li class="mb-1">Moving to <strong>"Done"</strong> mints 20 NXP.</li>
-                                <li>Only project members can update.</li>
-                            </ul>
-                        </div>
-                    }
+                    <div class="mb-0">
+                        <label class="form-label text-muted small">Пароль кошелька</label>
+                        <input type="password" @bind="walletPassword" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="Пароль для расшифровки ключа..." />
+                    </div>
                 </div>
             </div>
 
             <div class="p-3 text-end d-flex justify-content-between align-items-center" style="background: rgba(0,0,0,0.2); border-top: 1px solid rgba(255,255,255,0.1); border-radius: 0 0 12px 12px;">
                 <div class="text-muted font-monospace d-flex align-items-center gap-2" style="font-size: 0.85rem;">
-                    <span class="spinner-grow spinner-grow-sm text-success" role="status" style="width: 10px; height: 10px;"></span>
-                    Secured by PoW Mining
+                    <span class="spinner-grow spinner-grow-sm text-success" style="width: 10px; height: 10px;"></span>
+                    Secured by Keystore
                 </div>
                 <div>
-                    <button class="btn btn-outline-secondary me-2 fw-bold" style="border-radius: 8px; padding: 0.5rem 1.5rem;" @onclick="() => IsOpenChanged.InvokeAsync(false)">Cancel</button>
-                    <button class="btn btn-primary fw-bold shadow" style="border-radius: 8px; padding: 0.5rem 1.5rem;" @onclick="() => OnSave.InvokeAsync()" disabled="@(!IsLoggedIn)">
-                        @(IsNewTask ? "Create & Mine" : "Save & Mine")
+                    <button class="btn btn-outline-secondary me-2 fw-bold" @onclick="Close">Cancel</button>
+                    <button class="btn btn-primary fw-bold shadow"
+                            @onclick="HandleSaveAndMine"
+                            disabled="@(keystoreContent == null || string.IsNullOrEmpty(walletPassword) || string.IsNullOrEmpty(TaskModel.Title))">
+                        @(IsNewTask ? "Sign & Create" : "Sign & Save")
                     </button>
                 </div>
             </div>
@@ -78,12 +91,92 @@
     </div>
 }
 
+<style>
+    .animate-pop {
+        animation: pop 0.3s cubic-bezier(0.26, 0.53, 0.74, 1.48);
+    }
+    @System.Text.RegularExpressions.Regex.Unescape("@") keyframes pop {
+        0%
+
+    {
+        opacity: 0;
+        transform: scale(0.7);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    }
+</style>
+
 @code {
     [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public bool IsNewTask { get; set; }
+    [Parameter] public ProjectTask TaskModel { get; set; } = new();
     [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
 
-    [Parameter] public ProjectTask TaskModel { get; set; } = new();
-    [Parameter] public bool IsNewTask { get; set; }
-    [Parameter] public EventCallback OnSave { get; set; }
-    [Parameter] public bool IsLoggedIn { get; set; }
+    [Parameter] public EventCallback<(TaskEvent Event, string Keystore, string Password)> OnSaveWithCredentials { get; set; }
+
+    private string? keystoreContent;
+    private string? walletPassword;
+    private string? errorMessage;
+
+    private async Task Close() => await IsOpenChanged.InvokeAsync(false);
+
+    private async Task LoadKeystoreFile(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            errorMessage = null;
+            var file = e.File;
+            using var stream = file.OpenReadStream();
+            using var reader = new StreamReader(stream);
+            keystoreContent = await reader.ReadToEndAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Ошибка при чтении файла.";
+        }
+    }
+
+    private async Task HandleSaveAndMine()
+    {
+        errorMessage = null;
+
+        if (string.IsNullOrEmpty(keystoreContent) || string.IsNullOrEmpty(walletPassword))
+        {
+            errorMessage = "Загрузите файл и введите пароль.";
+            return;
+        }
+
+        try
+        {
+            var taskEvent = new TaskEvent
+                {
+                    Type = IsNewTask ? "Create" : "Move",
+                    TaskId = TaskModel.Id,
+                    Title = TaskModel.Title,
+                    Description = TaskModel.Description,
+                    Assignee = TaskModel.Assignee,
+                    Status = (int)TaskModel.Status,
+                    ProjectId = TaskModel.ProjectId,
+                    User = MyKeyService.UserName 
+                };
+
+            string jsonData = System.Text.Json.JsonSerializer.Serialize(taskEvent);
+
+            string signature = MyKeyService.SignDataWithKeystore(keystoreContent, walletPassword, jsonData);
+
+            await OnSaveWithCredentials.InvokeAsync((taskEvent, keystoreContent, walletPassword));
+
+            walletPassword = null;
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Ошибка: " + ex.Message;
+        }
+    }
 }

@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Blockchain.Core.Contracts;
-using Blockchain.Core.Constants; 
+using Blockchain.Core.Constants;
 
 namespace Blockchain.Core
 {
@@ -10,27 +10,27 @@ namespace Blockchain.Core
     {
         private readonly DatabaseManager _db;
         private readonly ContractExecutor _executor;
-        public List<Block> Chain { get; private set; }
 
         public BlockchainManager(string dbFileName = "nexus_node.db")
         {
             _db = new DatabaseManager(dbFileName);
             _executor = new ContractExecutor();
-            Chain = _db.LoadChain();
 
-            if (Chain.Count == 0)
+            var currentChain = _db.LoadChain("System");
+            if (currentChain.Count == 0)
             {
                 AddGenesisBlock();
             }
-            else if (!IsValidChain())
+            else if (!IsValidChain("System"))
             {
-                Console.WriteLine(" Blockchain integrity check failed!");
+                Console.WriteLine("[BlockchainManager] Blockchain integrity check failed!");
             }
         }
 
-        public Block GetLatestBlock()
+        public Block GetLatestBlock(string channelId = "System")
         {
-            return Chain.LastOrDefault();
+            var channelChain = _db.LoadChain(channelId);
+            return channelChain.LastOrDefault();
         }
 
         public void AddGenesisBlock()
@@ -43,47 +43,57 @@ namespace Blockchain.Core
                 Timestamp = DateTime.UtcNow
             };
             MineBlock(genesisBlock);
-            Chain.Add(genesisBlock);
             _db.SaveBlock(genesisBlock);
         }
 
         public bool AddBlock(Block newBlock)
         {
-            var latestBlock = GetLatestBlock();
-            newBlock.Index = latestBlock.Index + 1;
-            newBlock.PreviousHash = latestBlock.Hash;
+            var latestBlock = GetLatestBlock(newBlock.ChannelId);
 
-            if (!_executor.Execute(newBlock.Data, newBlock.ValidatorPublicKey, _db))
+            int expectedIndex = latestBlock != null ? latestBlock.Index + 1 : 0;
+            string expectedPrevHash = latestBlock != null ? latestBlock.Hash : "0";
+
+            if (newBlock.Index != expectedIndex)
             {
+                Console.WriteLine($"[Blockchain] Invalid Index. Expected {expectedIndex}, got {newBlock.Index}");
+                return false;
+            }
+
+            if (newBlock.PreviousHash != expectedPrevHash)
+            {
+                Console.WriteLine("[Blockchain] Invalid PreviousHash.");
+                return false;
+            }
+
+            if (!newBlock.VerifySignature())
+            {
+                Console.WriteLine("[Blockchain] Block signature verification failed!");
                 return false;
             }
 
             MineBlock(newBlock);
-            Chain.Add(newBlock);
-            _db.SaveBlock(newBlock);
+            _db.SaveBlock(newBlock, newBlock.ChannelId);
             return true;
         }
 
         public bool ProcessPeerBlock(Block peerBlock)
         {
-            var latestBlock = GetLatestBlock();
-            if (peerBlock.Index != latestBlock.Index + 1 || peerBlock.PreviousHash != latestBlock.Hash)
+            var latestBlock = GetLatestBlock(peerBlock.ChannelId);
+
+            int expectedIndex = latestBlock != null ? latestBlock.Index + 1 : 0;
+            string expectedPrevHash = latestBlock != null ? latestBlock.Hash : "0";
+
+            if (peerBlock.Index != expectedIndex || peerBlock.PreviousHash != expectedPrevHash)
             {
+                Console.WriteLine($"[Blockchain] Channel '{peerBlock.ChannelId}' rejection: Index or Hash mismatch.");
                 return false;
             }
 
-            if (!_executor.Execute(peerBlock.Data, peerBlock.ValidatorPublicKey, _db))
-            {
-                return false;
-            }
+            if (!peerBlock.VerifySignature()) return false;
+            if (!_executor.Execute(peerBlock.Data, peerBlock.ValidatorPublicKey, _db)) return false;
+            if (!peerBlock.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
 
-            if (!peerBlock.Hash.StartsWith(ConsensusRules.TargetPrefix))
-            {
-                return false;
-            }
-
-            Chain.Add(peerBlock);
-            _db.SaveBlock(peerBlock);
+            _db.SaveBlock(peerBlock, peerBlock.ChannelId);
             return true;
         }
 
@@ -92,42 +102,25 @@ namespace Blockchain.Core
             do
             {
                 block.Nonce++;
-                block.Hash = CalculateHash(block);
+                block.Hash = block.CalculateHash();
             }
-            while (!block.Hash.StartsWith(ConsensusRules.TargetPrefix));
+            while (!block.Hash.StartsWith(NetworkParameters.TargetPrefix));
         }
 
-        public bool IsValidChain()
+        public bool IsValidChain(string channelId = "System")
         {
-            for (int i = 1; i < Chain.Count; i++)
+            var chain = _db.LoadChain(channelId);
+            for (int i = 1; i < chain.Count; i++)
             {
-                var currentBlock = Chain[i];
-                var previousBlock = Chain[i - 1];
+                var currentBlock = chain[i];
+                var previousBlock = chain[i - 1];
 
-                if (currentBlock.Hash != CalculateHash(currentBlock)) return false;
+                if (currentBlock.Hash != currentBlock.CalculateHash()) return false;
                 if (currentBlock.PreviousHash != previousBlock.Hash) return false;
-
-               
-                if (!currentBlock.Hash.StartsWith(ConsensusRules.TargetPrefix)) return false;
+                if (!currentBlock.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
+                if (!currentBlock.VerifySignature()) return false;
             }
             return true;
-        }
-
-        public void SubmitToMempool(string txId, string json)
-        {
-            _db.SaveToMempool(txId, json);
-        }
-
-        private string CalculateHash(Block block)
-        {
-            using (var sha256 = System.Security.Cryptography.SHA256.Create())
-            {
-                string rawData = $"{block.PreviousHash}{block.Timestamp:O}{block.Data}{block.ValidatorPublicKey}{block.Nonce}";
-
-                byte[] bytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawData));
-
-                return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
-            }
         }
     }
 }

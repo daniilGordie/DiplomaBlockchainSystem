@@ -9,6 +9,10 @@ using Blockchain.Core;
 using System.Text.Json;
 using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
+using Blockchain.Core.Contracts;
+using Microsoft.AspNetCore.SignalR;
+using System.Security.Cryptography;
+using Blockchain.Node.Hubs;
 
 namespace Blockchain.Node.Services
 {
@@ -20,11 +24,10 @@ namespace Blockchain.Node.Services
         private readonly BlockchainManager _blockchainManager;
         private readonly OracleIdentity _oracleIdentity;
         private readonly P2PNetworkService _p2pService;
+        private readonly IHubContext<BlockchainHub> _hubContext;
 
         private static HashSet<string> _syncedCommits = new();
         private static HashSet<string> _syncedArtifacts = new();
-        private static int _lastIndexedBlock = -1;
-        private static readonly object _cacheLock = new object();
 
         private string DbConnectionString => $"Data Source={_dbFileName}";
 
@@ -33,21 +36,53 @@ namespace Blockchain.Node.Services
             IConfiguration configuration,
             BlockchainManager manager,
             OracleIdentity oracleIdentity,
-            P2PNetworkService p2pService)
+            P2PNetworkService p2pService,
+            IHubContext<BlockchainHub> hubContext)
         {
             _logger = logger;
             _configuration = configuration;
             _blockchainManager = manager;
             _oracleIdentity = oracleIdentity;
             _p2pService = p2pService;
+            _hubContext = hubContext;
 
             _dbFileName = _configuration.GetConnectionString("DefaultNodeDb") ?? "nexus_node_default.db";
         }
 
+        private bool VerifySignature(string data, string signatureBase64, string publicKeyBase64)
+        {
+            try
+            {
+                byte[] signatureBytes = Convert.FromBase64String(signatureBase64);
+
+                if (signatureBytes.Length != 64)
+                {
+                    _logger.LogWarning($"[Security] Rejected: Invalid signature length ({signatureBytes.Length} bytes). Potential deserialization attack vector.");
+                    return false;
+                }
+
+                using var ecdsa = ECDsa.Create();
+                ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(publicKeyBase64), out _);
+
+                byte[] dataBytes = System.Text.Encoding.UTF8.GetBytes(data);
+                return ecdsa.VerifyData(dataBytes, signatureBytes, HashAlgorithmName.SHA256);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"[Security] Critical signature verification error: {ex.Message}");
+                return false;
+            }
+        }
+
         public override Task<StatusReply> AddPeer(PeerRequest request, ServerCallContext context)
         {
-            _p2pService.AddPeer(request.Url);
-            return Task.FromResult(new StatusReply { Success = true, Message = "Peer added" });
+            if (Uri.TryCreate(request.Url, UriKind.Absolute, out var uriResult) &&
+               (uriResult.Scheme == Uri.UriSchemeHttp || uriResult.Scheme == Uri.UriSchemeHttps))
+            {
+                _p2pService.AddPeer(request.Url);
+                return Task.FromResult(new StatusReply { Success = true, Message = "Peer added" });
+            }
+            return Task.FromResult(new StatusReply { Success = false, Message = "Invalid URL format" });
         }
 
         public override Task<PeerListResponse> GetPeers(EmptyRequest request, ServerCallContext context)
@@ -65,10 +100,11 @@ namespace Blockchain.Node.Services
                 Data = request.Data,
                 PreviousHash = request.PreviousHash,
                 Hash = request.Hash,
-                Timestamp = DateTime.Parse(request.Timestamp),
+                Timestamp = DateTime.Parse(request.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind),
                 ValidatorPublicKey = request.ValidatorPublicKey,
                 Signature = request.Signature,
-                Nonce = request.Nonce
+                Nonce = request.Nonce,
+                ChannelId = request.ChannelId
             };
 
             bool isAccepted = _blockchainManager.ProcessPeerBlock(peerBlock);
@@ -76,94 +112,86 @@ namespace Blockchain.Node.Services
             return Task.FromResult(new StatusReply { Success = isAccepted, Message = isAccepted ? "Accepted" : "Rejected" });
         }
 
-        public override Task<StatusReply> ReceiveBlock(BlockModel request, ServerCallContext context)
+        public override async Task<StatusReply> ReceiveBlock(BlockModel request, ServerCallContext context)
         {
-            var db = new Blockchain.Core.DatabaseManager(_dbFileName);
-            string targetChannel = "System";
-
             try
             {
-                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var taskEvent = System.Text.Json.JsonSerializer.Deserialize<Blockchain.Core.Contracts.ContractTaskEvent>(request.Data, options);
+                string signableData = $"{request.Index}{request.Timestamp}{request.Data}{request.PreviousHash}";
+                bool isSigValid = VerifySignature(signableData, request.Signature, request.ValidatorPublicKey);
 
-                if (taskEvent != null && !string.IsNullOrEmpty(taskEvent.ProjectId))
+                if (!isSigValid)
+                    return new StatusReply { Success = false, Message = "Crypto Fraud Detected: Invalid Signature" };
+
+                var db = new Blockchain.Core.DatabaseManager(_dbFileName);
+
+                var contract = new TaskContract();
+                if (!contract.Validate(request.Data, request.ValidatorPublicKey, db))
+                    return new StatusReply { Success = false, Message = "Access Denied by Smart Contract" };
+
+                var newBlock = new Block
                 {
-                    if (taskEvent.Type != "CreateProject" && taskEvent.Type != "AssignRole")
+                    Index = request.Index,
+                    Data = request.Data,
+                    PreviousHash = request.PreviousHash,
+                    Hash = request.Hash,
+                    Timestamp = DateTime.Parse(request.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind),
+                    ValidatorPublicKey = request.ValidatorPublicKey,
+                    Signature = request.Signature,
+                    Nonce = request.Nonce,
+                    ChannelId = request.ChannelId
+                };
+
+                _blockchainManager.ProcessPeerBlock(newBlock);
+
+                if (_hubContext != null)
+                {
+                    await _hubContext.Clients.Group(request.ChannelId).SendAsync("NewBlockBroadcast", request);
+
+                    if (request.Data.Contains("\"Type\":\"Transfer\""))
                     {
-                        targetChannel = taskEvent.ProjectId;
-                        if (!db.IsProjectExists(taskEvent.ProjectId))
-                            return Task.FromResult(new StatusReply { Success = false, Message = "Project does not exist." });
+                        using var doc = JsonDocument.Parse(request.Data);
+                        var root = doc.RootElement;
+                        if (root.TryGetProperty("TargetUser", out var targetUserProp) &&
+                            root.TryGetProperty("Amount", out var amountProp) &&
+                            root.TryGetProperty("User", out var senderProp))
+                        {
+                            string targetUser = targetUserProp.GetString() ?? "";
+                            int amount = amountProp.GetInt32();
+                            string sender = senderProp.GetString() ?? "Unknown";
+
+                            await _hubContext.Clients.Group($"USER_{targetUser}").SendAsync("FinancialTransferReceived", sender, amount);
+                        }
                     }
                 }
+
+                return new StatusReply { Success = true, Message = "Block anchored successfully via PoC" };
             }
-            catch { }
-
-            var channelBlocks = db.LoadChain(targetChannel);
-            string expectedPrevHash = channelBlocks.Count > 0 ? channelBlocks.Last().Hash : "0";
-            int expectedIndex = channelBlocks.Count;
-
-            if (request.PreviousHash != expectedPrevHash)
+            catch (Exception ex)
             {
-                _logger.LogWarning($"[Chain Mismatch] Channel: {targetChannel}. Expected: {expectedPrevHash}, Got: {request.PreviousHash}");
-                return Task.FromResult(new StatusReply { Success = false, Message = "Chain mismatch (PreviousHash)" });
-            }
-
-            string rawData = $"{request.PreviousHash}{request.Timestamp}{request.Data}{request.ValidatorPublicKey}{request.Nonce}";
-            string calculatedHash;
-            using (var sha256 = System.Security.Cryptography.SHA256.Create())
-            {
-                byte[] bytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawData));
-                calculatedHash = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
-            }
-
-            if (calculatedHash != request.Hash.ToLowerInvariant() || !calculatedHash.StartsWith(Blockchain.Core.Constants.ConsensusRules.TargetPrefix))
-            {
-                return Task.FromResult(new StatusReply { Success = false, Message = "Invalid PoW" });
-            }
-
-            var newBlock = new Blockchain.Core.Block
-            {
-                Index = expectedIndex,
-                Data = request.Data,
-                PreviousHash = request.PreviousHash,
-                Hash = request.Hash,
-                Timestamp = DateTime.Parse(request.Timestamp),
-                ValidatorPublicKey = request.ValidatorPublicKey,
-                Signature = request.Signature,
-                Nonce = request.Nonce,
-                ChannelId = targetChannel
-            };
-
-            bool isAccepted = _blockchainManager.AddBlock(newBlock);
-
-            if (isAccepted)
-            {
-                _logger.LogInformation($"[Node Router] Block {newBlock.Hash.Substring(0, 8)}... accepted in channel: {targetChannel}");
-                try { _p2pService.BroadcastBlockAsync(newBlock); } catch { }
-                return Task.FromResult(new StatusReply { Success = true, Message = $"Block accepted in channel: {targetChannel}" });
-            }
-            else
-            {
-                return Task.FromResult(new StatusReply { Success = false, Message = "Access Denied by Smart Contract." });
+                _logger.LogError($"[ReceiveBlock] Error: {ex.Message}");
+                return new StatusReply { Success = false, Message = $"Server Error: {ex.Message}" };
             }
         }
 
         public override Task<BlockModel> GetLastBlock(EmptyRequest request, ServerCallContext context)
         {
             var b = _blockchainManager.GetLatestBlock();
-            return Task.FromResult(new BlockModel { Index = b.Index, Data = b.Data, Hash = b.Hash, PreviousHash = b.PreviousHash, Timestamp = b.Timestamp.ToString("O"), ValidatorPublicKey = b.ValidatorPublicKey, Signature = b.Signature, Nonce = b.Nonce });
+            return Task.FromResult(new BlockModel { Index = b.Index, Data = b.Data, Hash = b.Hash, PreviousHash = b.PreviousHash, Timestamp = b.Timestamp.ToString("O"), ValidatorPublicKey = b.ValidatorPublicKey ?? "", Signature = b.Signature ?? "", Nonce = b.Nonce });
         }
 
         public override Task<ChainResponse> GetChain(ChainRequest request, ServerCallContext context)
         {
             var response = new ChainResponse();
-
             var db = new Blockchain.Core.DatabaseManager(_dbFileName);
 
             string channelToRead = string.IsNullOrEmpty(request.ChannelId) ? "System" : request.ChannelId;
             string userName = string.IsNullOrEmpty(request.UserName) ? "Guest" : request.UserName;
 
             string role = db.GetUserRole(channelToRead, userName);
+            if (role == "None" && channelToRead != "System")
+            {
+                return Task.FromResult(response);
+            }
 
             var blocks = db.LoadChain(channelToRead);
 
@@ -176,7 +204,7 @@ namespace Blockchain.Node.Services
                     Data = block.Data,
                     PreviousHash = block.PreviousHash,
                     Hash = block.Hash,
-                    ValidatorPublicKey = block.ValidatorPublicKey,
+                    ValidatorPublicKey = block.ValidatorPublicKey ?? "",
                     Signature = block.Signature ?? "",
                     Nonce = block.Nonce,
                     ChannelId = block.ChannelId
@@ -189,11 +217,16 @@ namespace Blockchain.Node.Services
         public override Task<TaskResponse> GetProjectTasks(ProjectRequest request, ServerCallContext context)
         {
             var response = new TaskResponse();
-
             var db = new Blockchain.Core.DatabaseManager(_dbFileName);
 
             string role = db.GetUserRole(request.ProjectId, request.UserName);
             response.UserRole = role;
+
+            if (role == "None" && !string.IsNullOrEmpty(request.ProjectId) && request.ProjectId != "System")
+            {
+                _logger.LogWarning($"[Security] User '{request.UserName}' attempted to access tasks for project '{request.ProjectId}' without permissions.");
+                return Task.FromResult(response);
+            }
 
             try
             {
@@ -201,7 +234,7 @@ namespace Blockchain.Node.Services
                 conn.Open();
                 using var cmd = conn.CreateCommand();
 
-                cmd.CommandText = "SELECT TaskId, Title, Creator, Assignee, Status, ProjectId, Description, ParentTaskId, BranchInfo FROM Tasks WHERE ProjectId = $p OR $p = ''";
+                cmd.CommandText = "SELECT TaskId, Title, Creator, Assignee, Status, ProjectId, Description, ParentTaskId, BranchInfo FROM Tasks WHERE ProjectId = $p";
                 cmd.Parameters.AddWithValue("$p", request.ProjectId ?? "Alpha");
 
                 using var reader = cmd.ExecuteReader();
@@ -229,10 +262,13 @@ namespace Blockchain.Node.Services
         public override Task<TaskHistoryResponse> GetTaskHistory(TaskHistoryRequest request, ServerCallContext context)
         {
             var response = new TaskHistoryResponse();
-            var blocks = _blockchainManager.Chain.Where(b => b.Data.Contains(request.TaskId)).ToList();
+
+            var db = new Blockchain.Core.DatabaseManager(_dbFileName);
+            var blocks = db.LoadChain("System");
 
             foreach (var b in blocks)
             {
+                if (!b.Data.Contains(request.TaskId)) continue;
                 try
                 {
                     using var doc = JsonDocument.Parse(b.Data);
@@ -254,7 +290,11 @@ namespace Blockchain.Node.Services
 
         public override Task<AnalyticsResponse> GetAnalytics(EmptyRequest request, ServerCallContext context)
         {
-            var resp = new AnalyticsResponse { TotalBlocks = _blockchainManager.Chain.Count, TotalCommits = _syncedCommits.Count, TotalArtifacts = _syncedArtifacts.Count };
+            // NOTE: Removed access to _blockchainManager.Chain.Count.
+            var db = new Blockchain.Core.DatabaseManager(_dbFileName);
+            var blocks = db.LoadChain("System");
+            var resp = new AnalyticsResponse { TotalBlocks = blocks.Count, TotalCommits = _syncedCommits.Count, TotalArtifacts = _syncedArtifacts.Count };
+
             try
             {
                 using var conn = new SqliteConnection(DbConnectionString);

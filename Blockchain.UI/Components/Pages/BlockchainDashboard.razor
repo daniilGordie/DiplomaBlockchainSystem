@@ -17,6 +17,9 @@
 @inject KeyService MyKeyService
 @inject Blockchain.UI.Services.IpfsService Ipfs
 @using Blockchain.UI.Models
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.Extensions.Configuration
+@inject IConfiguration Config
 
 <PageTitle>Nexus Collaboration Platform</PageTitle>
 
@@ -25,7 +28,10 @@
         <div class="d-flex align-items-center gap-3">
             <div class="fs-2 animate-pulse">🚀</div>
             <div>
-                <h2 class="m-0 fw-bold text-white">Nexus <span class="text-warning">Workplace</span></h2>
+                <h2 class="m-0 fw-bold text-white">
+                    Nexus <span class="text-warning">Workplace</span>
+                    <span class="badge bg-success ms-2 animate-pulse" style="font-size: 0.5em; vertical-align: middle;">Genesis Mode Active</span>
+                </h2>
                 <small class="text-muted">Multi-Project Decentralized Management</small>
             </div>
         </div>
@@ -90,6 +96,21 @@
         </div>
     }
 
+    @if (showPasswordEntry)
+    {
+        <div class="modal-backdrop-custom" style="z-index: 3000;">
+            <div class="glass-card p-4 text-center shadow-lg animate-pop" style="max-width: 450px;">
+                <div class="fs-1 mb-3">💾</div>
+                <h4 class="text-warning mb-2">Save Your Wallet</h4>
+                <p class="text-white-50 small mb-4">
+                    Create a strong password. It will encrypt your private key inside the <strong class="text-white">wallet.json</strong> file. You will need this file to sign any actions.
+                </p>
+                <input type="password" @bind="newUserPassword" @bind:event="oninput" class="form-control bg-dark text-white border-warning mb-3 shadow-none" placeholder="Password for wallet.json" />
+                <button class="btn btn-warning w-100 fw-bold" @onclick="DownloadAndFinishRegistration">Download File & Finish</button>
+            </div>
+        </div>
+    }
+
     @if (MyKeyService.IsLoggedIn)
     {
         <ul class="nav nav-pills mb-4 gap-2">
@@ -134,7 +155,7 @@
                                     <option value="QA">QA</option>
                                     <option value="Observer">Observer</option>
                                 </select>
-                                <button class="btn btn-primary fw-bold" @onclick="InviteMember" disabled="@isMining">2. Grant Access & Mine</button>
+                                <button class="btn btn-primary fw-bold" @onclick="InviteMember" disabled="@isMining">2. Grant Access & Anchor</button>
                             </div>
                         </div>
                     </div>
@@ -212,7 +233,7 @@
                                     else
                                     {
                                         <ul class="list-group list-group-flush bg-transparent">
-                                            @foreach (var a in Artifacts.Take(5)) 
+                                            @foreach (var a in Artifacts.Take(5))
                                             {
                                                 <li class="list-group-item bg-transparent border-secondary px-0 d-flex justify-content-between align-items-center hover-bg">
                                                     <div class="text-truncate pe-3">
@@ -233,7 +254,7 @@
             @if (activeTab == ActiveTab.Analytics)
             {
                 <div class="row g-4">
-                    <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-light"><h3 class="fw-bold text-white m-0">@analyticsData.TotalBlocks</h3><div class="text-white-50 small text-uppercase">Blocks Mined</div></div></div>
+                    <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-light"><h3 class="fw-bold text-white m-0">@analyticsData.TotalBlocks</h3><div class="text-white-50 small text-uppercase">Blocks Anchored</div></div></div>
                     <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-info"><h3 class="fw-bold text-info m-0">@analyticsData.TotalTasks</h3><div class="text-white-50 small text-uppercase">Tasks Managed</div></div></div>
                     <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-success"><h3 class="fw-bold text-success m-0">@analyticsData.TasksDone</h3><div class="text-white-50 small text-uppercase">Completed</div></div></div>
                     <div class="col-md-3"><div class="glass-card p-3 text-center border-bottom border-4 border-warning"><h3 class="fw-bold text-warning m-0">@analyticsData.TotalArtifacts</h3><div class="text-white-50 small text-uppercase">Files Secured</div></div></div>
@@ -320,18 +341,17 @@
         <div class="modal-backdrop-custom" style="z-index: 9999;">
             <div class="glass-card p-5 text-center shadow-lg" style="border: 2px solid #ffc107; background: rgba(20,20,25,0.95);">
                 <div class="spinner-border text-warning mb-4" style="width: 4rem; height: 4rem; border-width: 0.3em;" role="status"></div>
-                <h3 class="text-white fw-bold mb-2">⛏️ Mining Block...</h3>
-                <p class="text-muted font-monospace small mb-1">Calculating SHA-256 Proof of Work</p>
-                <p class="text-warning font-monospace small mb-0">Target difficulty: 000...</p>
+                <h3 class="text-white fw-bold mb-2">🧱 Anchoring State...</h3>
+                <p class="text-muted font-monospace small mb-1">Validating Proof of Contribution (PoC) & Hashing</p>
+                <p class="text-warning font-monospace small mb-0">Sybil-Resistance Target: 000</p>
             </div>
         </div>
     }
 
-    <IssueModal @bind-IsOpen="isTaskModalOpen"
-                TaskModel="currentTaskModel"
+    <IssueModal @bind-IsOpen="isIssueModalOpen"
                 IsNewTask="isNewTask"
-                IsLoggedIn="MyKeyService.IsLoggedIn"
-                OnSave="SaveTaskModal" />
+                TaskModel="editingTask"
+                OnSaveWithCredentials="HandleTaskSigningAndMining" />
 
     @if (selectedBlock != null)
     {
@@ -425,6 +445,9 @@
 </div>
 
 @code {
+    private HubConnection? hubConnection;
+    private bool autoSignGit = true;
+
     private ActiveTab activeTab = ActiveTab.Board;
     private List<ProjectTask> Tasks = new();
     private List<CommitPayloadUI> Commits = new();
@@ -435,13 +458,17 @@
     private List<TaskHistoryItem>? viewingHistory = null;
     private List<string> myProjects = new();
 
+    private string? newUserPassword;
+    private bool showPasswordEntry = false;
+
     private string localRepoName = "nexus-core";
     private string localCommitMessage = "";
     private string localCommitHash = "";
     private string newProjectName = "";
     private string newMemberName = "";
     private string newMemberRole = "Developer";
-    private string CurrentProjectId = "Alpha";
+
+    private string CurrentProjectId = "System";
     private string userNameInput = "";
     private string restoreMnemonic = "";
     private string statusMessage = "";
@@ -455,27 +482,247 @@
     private string targetTransferUser = "";
     private int transferAmount = 5;
 
+    private bool isIssueModalOpen = false;
+    private bool isNewTask = true;
+    private ProjectTask editingTask = new();
+
     private bool isTaskModalOpen = false;
-    private bool isNewTask = false;
     private ProjectTask currentTaskModel = new();
 
     protected override async Task OnInitializedAsync()
     {
-        await SyncChain();
+        string nodeUrl = Config["NodeUrl"] ?? throw new InvalidOperationException("NodeUrl not found!");
+
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl($"{nodeUrl}/blockchainHub")
+            .WithAutomaticReconnect()
+            .Build();
+
+        hubConnection.On<BlockModel>("NewBlockBroadcast", (block) =>
+        {
+            if (block.ChannelId == CurrentProjectId || block.ChannelId == "System")
+            {
+                ApplyBlockToUI(block);
+                InvokeAsync(StateHasChanged);
+            }
+        });
+
+        hubConnection.On<GitCommitIntent>("PendingCommitReceived", async (intent) =>
+        {
+            if (autoSignGit && MyKeyService.IsLoggedIn)
+            {
+                await SignAndAnchorCommit(intent);
+            }
+        });
+
+        await hubConnection.StartAsync();
     }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
             await MyKeyService.LoadFromStorage();
+
+            if (MyKeyService.IsLoggedIn)
+            {
+                await JoinSignalRGroups();
+                await SyncChain();
+            }
+            else
+            {
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task JoinSignalRGroups()
+    {
+        if (hubConnection != null && hubConnection.State == HubConnectionState.Connected && MyKeyService.IsLoggedIn)
+        {
+            try
+            {
+                await hubConnection.InvokeAsync("RegisterUser", MyKeyService.UserName);
+                await hubConnection.InvokeAsync("JoinProject", "System");
+                if (!string.IsNullOrEmpty(CurrentProjectId))
+                {
+                    await hubConnection.InvokeAsync("JoinProject", CurrentProjectId);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SignalR] Error subscribing to channel: {ex.Message}");
+            }
+        }
+    }
+
+    private string ComputeSimpleHash(string data)
+    {
+        using var sha256 = SHA256.Create();
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(data);
+        return BitConverter.ToString(sha256.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+    }
+
+    private async Task MineBlockLocal(BlockModel block)
+    {
+        await Task.Delay(10);
+
+        DateTime dt = DateTime.Parse(block.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind);
+        string timeStringS = dt.ToString("s");
+
+        block.Nonce = 0;
+
+        using var sha256 = SHA256.Create();
+
+        string baseData = $"{block.Index}{timeStringS}{block.Data}{block.PreviousHash}{block.ValidatorPublicKey}{block.Signature}";
+
+        while (true)
+        {
+            block.Nonce++;
+            string rawData = baseData + block.Nonce;
+
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(rawData);
+            byte[] hashBytes = sha256.ComputeHash(bytes);
+
+            // Fast Hex conversion
+            block.Hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
+
+            if (block.Hash.StartsWith("000"))
+                break;
+
+            if (block.Nonce % 500 == 0)
+            {
+                await Task.Yield();
+            }
+        }
+    }
+
+    private void ApplyBlockToUI(BlockModel block)
+    {
+        if (string.IsNullOrWhiteSpace(block.Data)) return;
+        try
+        {
+            using var doc = JsonDocument.Parse(block.Data);
+            var root = doc.RootElement;
+            string type = root.TryGetProperty("Type", out var t) ? t.GetString() ?? "" : "";
+
+            if (type == "CodeCommit")
+            {
+                Commits.Insert(0, new CommitPayloadUI
+                    {
+                        Repository = root.TryGetProperty("Repository", out var r) || root.TryGetProperty("repository", out r) ? r.GetString() ?? "Unknown" : "Unknown",
+                        CommitHash = root.TryGetProperty("CommitHash", out var h) || root.TryGetProperty("commitHash", out h) ? h.GetString() ?? "" : "",
+                        Message = root.TryGetProperty("Message", out var m) || root.TryGetProperty("message", out m) ? m.GetString() ?? "" : "",
+                        Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() ?? "Anon" : "Anon"
+                    });
+            }
+            else if (type == "Create")
+            {
+                string tId = root.TryGetProperty("TaskId", out var idProp) ? idProp.GetString() ?? "" : "";
+                if (!string.IsNullOrEmpty(tId) && !Tasks.Any(x => x.Id == tId))
+                {
+                    Tasks.Add(new ProjectTask
+                        {
+                            Id = tId,
+                            Title = root.TryGetProperty("Title", out var tProp) ? tProp.GetString() ?? "" : "",
+                            Assignee = root.TryGetProperty("Assignee", out var aProp) ? aProp.GetString() ?? "" : "",
+                            ProjectId = root.TryGetProperty("ProjectId", out var pProp) ? pProp.GetString() ?? "" : "",
+                            Status = root.TryGetProperty("Status", out var sProp) ? (ProjectTaskStatus)sProp.GetInt32() : ProjectTaskStatus.Todo
+                        });
+                }
+            }
+            else if (type == "Move" || type == "Update")
+            {
+                string tId = root.TryGetProperty("TaskId", out var idProp) ? idProp.GetString() ?? "" : "";
+                var task = Tasks.FirstOrDefault(x => x.Id == tId);
+                if (task != null)
+                {
+                    task.Status = root.TryGetProperty("Status", out var sProp) ? (ProjectTaskStatus)sProp.GetInt32() : task.Status;
+                }
+            }
+            chain.Add(block);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ApplyBlockToUI] JSON parsing error: {ex.Message}");
+        }
+    }
+
+    private async Task SignAndAnchorCommit(GitCommitIntent intent)
+    {
+        try
+        {
+            isMining = true;
+            StateHasChanged();
+
+            var payload = new
+            {
+                Type = "CodeCommit",
+                ProjectId = CurrentProjectId ?? "System",
+                Repository = intent.Repository,
+                CommitHash = intent.CommitHash,
+                Message = intent.Message,
+                PatchCid = intent.PatchCid,
+                User = MyKeyService.UserName
+            };
+
+            string json = JsonSerializer.Serialize(payload);
+            string targetChannel = CurrentProjectId ?? "System";
+
+            var chainResp = await BlockchainClient.GetChainAsync(new ChainRequest
+                {
+                    Count = 1,
+                    ChannelId = targetChannel,
+                    UserName = MyKeyService.UserName ?? "Guest"
+                });
+
+            string prevHash = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Hash : "0";
+            int nextIndex = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Index + 1 : 0;
+            string timestamp = DateTime.UtcNow.ToString("O");
+            string pubKey = MyKeyService.PublicKey;
+
+            string signableData = $"{nextIndex}{timestamp}{json}{prevHash}";
+            string signature = MyKeyService.SignData(signableData);
+
+            var block = new BlockModel
+                {
+                    Index = nextIndex,
+                    Timestamp = timestamp,
+                    Data = json,
+                    PreviousHash = prevHash,
+                    ValidatorPublicKey = pubKey,
+                    Signature = signature,
+                    ChannelId = targetChannel
+                };
+
+            await MineBlockLocal(block);
+
+            var r = await BlockchainClient.ReceiveBlockAsync(block);
+            if (r.Success)
+            {
+                statusMessage = "🚀 Git commit automatically anchored into the blockchain!";
+                await SyncChain();
+            }
+            else
+            {
+                statusMessage = $"❌ Contract Error: {r.Message}";
+            }
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"⚠️ Error: {ex.Message}";
+        }
+        finally
+        {
+            isMining = false;
             StateHasChanged();
         }
     }
 
     private async Task OnProjectChanged(ChangeEventArgs e)
     {
-        CurrentProjectId = e.Value?.ToString() ?? "Alpha";
-
+        CurrentProjectId = e.Value?.ToString() ?? "System";
+        await JoinSignalRGroups();
         await SyncChain();
     }
 
@@ -496,49 +743,62 @@
         await SendJsonBlock(payload);
         newMemberName = "";
     }
+
     private string FormatJson(string json) { try { using var doc = JsonDocument.Parse(json); return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true }); } catch { return json; } }
 
-    private async Task CreateWallet() { if (!string.IsNullOrWhiteSpace(userNameInput)) await MyKeyService.CreateNewWallet(userNameInput); }
+    private async Task CreateWallet()
+    {
+        if (!string.IsNullOrWhiteSpace(userNameInput))
+        {
+            await Logout();
+            await MyKeyService.CreateNewWallet(userNameInput);
+            showPasswordEntry = true;
+            await JoinSignalRGroups();
+            await SyncChain();
+        }
+    }
+
     private void RestoreMode() => isRestoreMode = !isRestoreMode;
-    private async Task RestoreWallet() { if (await MyKeyService.RestoreWallet(restoreMnemonic, userNameInput)) isRestoreMode = false; }
+
+    private async Task RestoreWallet()
+    {
+        if (await MyKeyService.RestoreWallet(restoreMnemonic, userNameInput))
+        {
+            isRestoreMode = false;
+            await JoinSignalRGroups();
+            await SyncChain();
+        }
+    }
+
     private void DismissMnemonic() { if (MyKeyService.CurrentMnemonic != null) MyKeyService.RestoreWallet(MyKeyService.CurrentMnemonic, MyKeyService.UserName); }
     private async Task Logout() => await MyKeyService.Logout();
 
-    private void OpenTaskModal(ProjectTask? task = null)
+    private void OpenTaskModal(ProjectTask? task)
     {
         if (task == null)
         {
             isNewTask = true;
-            currentTaskModel = new ProjectTask { Id = "TSK-" + Guid.NewGuid().ToString().Substring(0, 5).ToUpper(), Status = ProjectTaskStatus.Todo, ProjectId = CurrentProjectId, Assignee = MyKeyService.UserName };
+            editingTask = new ProjectTask
+                {
+                    Id = "TSK-" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper(),
+                    ProjectId = CurrentProjectId ?? "System",
+                    Status = ProjectTaskStatus.Todo
+                };
         }
         else
         {
             isNewTask = false;
-            currentTaskModel = new ProjectTask { Id = task.Id, Title = task.Title, Description = task.Description, Assignee = task.Assignee, Status = task.Status, BranchInfo = task.BranchInfo, ParentTaskId = task.ParentTaskId, Creator = task.Creator, ProjectId = task.ProjectId };
+            editingTask = new ProjectTask
+                {
+                    Id = task.Id,
+                    Title = task.Title,
+                    Description = task.Description,
+                    Assignee = task.Assignee,
+                    Status = task.Status,
+                    ProjectId = task.ProjectId
+                };
         }
-        isTaskModalOpen = true;
-    }
-
-    private async Task SaveTaskModal()
-    {
-        if (string.IsNullOrWhiteSpace(currentTaskModel.Title)) return;
-
-        var evt = new TaskEvent
-            {
-                Type = isNewTask ? "Create" : "Update",
-                TaskId = currentTaskModel.Id,
-                Title = currentTaskModel.Title,
-                Description = currentTaskModel.Description ?? "",
-                Status = (int)currentTaskModel.Status,
-                User = MyKeyService.UserName,
-                Assignee = currentTaskModel.Assignee ?? "",
-                ParentTaskId = currentTaskModel.ParentTaskId ?? "",
-                BranchInfo = currentTaskModel.BranchInfo ?? "",
-                ProjectId = CurrentProjectId
-            };
-
-        isTaskModalOpen = false;
-        await SendJsonBlock(evt);
+        isIssueModalOpen = true;
     }
 
     private async Task AssignRole() { if (string.IsNullOrWhiteSpace(targetRoleUser)) return; await SendJsonBlock(new TaskEvent { Type = "AssignRole", TargetUser = targetRoleUser, Role = targetRole, User = MyKeyService.UserName, ProjectId = CurrentProjectId }); targetRoleUser = ""; }
@@ -560,10 +820,7 @@
                               cleanHash.Length <= 40 &&
                               System.Text.RegularExpressions.Regex.IsMatch(cleanHash, "^[a-f0-9]+$");
 
-        if (!isValidGitHash || string.IsNullOrWhiteSpace(localCommitMessage))
-        {
-            return;
-        }
+        if (!isValidGitHash || string.IsNullOrWhiteSpace(localCommitMessage)) return;
 
         var payload = new
         {
@@ -571,7 +828,7 @@
             User = MyKeyService.UserName,
             ProjectId = CurrentProjectId,
             Repository = localRepoName,
-            CommitHash = cleanHash, 
+            CommitHash = cleanHash,
             Message = localCommitMessage,
             Timestamp = DateTime.UtcNow.ToString("O")
         };
@@ -586,28 +843,7 @@
 
     private double GetPercent(int count) => analyticsData.TotalTasks > 0 ? Math.Round((double)count / analyticsData.TotalTasks * 100, 1) : 0;
 
-    private (string Hash, long Nonce) MineBlockData(string prevHash, string timestamp, string data, string pubKey, int difficulty)
-    {
-        using var sha256 = System.Security.Cryptography.SHA256.Create();
-        string target = new string('0', difficulty);
-        long nonce = 0;
-        string hash = "";
-
-        while (true)
-        {
-            string rawData = $"{prevHash}{timestamp}{data}{pubKey}{nonce}";
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(rawData);
-            hash = BitConverter.ToString(sha256.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
-
-            if (hash.StartsWith(target))
-            {
-                return (hash, nonce);
-            }
-            nonce++;
-        }
-    }
-
-    private async Task SendJsonBlock<T>(T payload)
+    private async Task<bool> SendJsonBlock<T>(T payload)
     {
         try
         {
@@ -615,44 +851,47 @@
             StateHasChanged();
 
             string json = JsonSerializer.Serialize(payload);
-
             string targetChannel = (json.Contains("\"Type\":\"CreateProject\"") || json.Contains("\"Type\":\"AssignRole\""))
                                     ? "System"
                                     : CurrentProjectId;
 
             var cR = await BlockchainClient.GetChainAsync(new ChainRequest
-                {
-                    Count = 1,
-                    ChannelId = targetChannel,
-                    UserName = MyKeyService.UserName ?? "Guest" 
-                });
+                { Count = 1, ChannelId = targetChannel, UserName = MyKeyService.UserName ?? "Guest" });
 
             string prevHash = cR.Blocks.Count > 0 ? cR.Blocks.Last().Hash : "0";
-
-            string sig = MyKeyService.SignData(json);
+            int expectedIndex = cR.Blocks.Count > 0 ? cR.Blocks.Last().Index + 1 : 0;
             string timestamp = DateTime.UtcNow.ToString("O");
             string pubKey = MyKeyService.PublicKey;
 
-            var mined = await Task.Run(() => MineBlockData(prevHash, timestamp, json, pubKey, 3));
+            string signableData = $"{expectedIndex}{timestamp}{json}{prevHash}";
+            string sig = MyKeyService.SignData(signableData);
 
             var blk = new BlockModel
                 {
+                    Index = expectedIndex,
                     Data = json,
                     Timestamp = timestamp,
                     PreviousHash = prevHash,
-                    Hash = mined.Hash,
+                    Hash = ComputeSimpleHash(signableData),
                     ValidatorPublicKey = pubKey,
                     Signature = sig,
-                    Nonce = mined.Nonce,
-                    ChannelId = targetChannel 
+                    ChannelId = targetChannel
                 };
 
-            var r = await BlockchainClient.ReceiveBlockAsync(blk);
-            statusMessage = r.Success ? $"✅ Mined! Nonce: {mined.Nonce}" : $"❌ Rejected: {r.Message}";
+            await MineBlockLocal(blk);
 
-            await SyncChain();
+            var r = await BlockchainClient.ReceiveBlockAsync(blk);
+            statusMessage = r.Success ? $"✅ Success! (PoC)" : $"❌ Rejected: {r.Message}";
+
+            if (r.Success) await SyncChain();
+
+            return r.Success;
         }
-        catch (Exception ex) { statusMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            statusMessage = ex.Message;
+            return false;
+        }
         finally { isMining = false; StateHasChanged(); }
     }
 
@@ -664,10 +903,11 @@
             {
                 var projRes = await BlockchainClient.GetMyProjectsAsync(new UserRequest { UserName = MyKeyService.UserName });
                 myProjects = projRes.ProjectIds.ToList();
-                
-                if ((!myProjects.Contains(CurrentProjectId) || CurrentProjectId == "Alpha") && myProjects.Count > 0)
+
+                if ((!myProjects.Contains(CurrentProjectId) || CurrentProjectId == "System") && myProjects.Count > 0)
                 {
                     CurrentProjectId = myProjects.First();
+                    await JoinSignalRGroups();
                 }
             }
 
@@ -679,7 +919,7 @@
 
             Tasks = tR.Tasks.Select(t => new ProjectTask { Id = t.Id, Title = t.Title, Creator = t.Creator, Assignee = t.Assignee, Status = (ProjectTaskStatus)t.Status, ProjectId = t.ProjectId, Description = t.Description, ParentTaskId = t.ParentTaskId, BranchInfo = t.BranchInfo }).ToList();
 
-            if (Tasks.Count > 0 || MyKeyService.IsLoggedIn) 
+            if (Tasks.Count > 0 || MyKeyService.IsLoggedIn)
             {
                 var cR = await BlockchainClient.GetChainAsync(new ChainRequest
                     {
@@ -709,71 +949,165 @@
         var cL = new List<CommitPayloadUI>();
         var aL = new List<ArtifactPayloadUI>();
 
-        Console.WriteLine($"[DEBUG] Total blocks loaded: {blocks.Count}");
-
         foreach (var b in blocks)
         {
             if (string.IsNullOrWhiteSpace(b.Data)) continue;
 
             try
             {
-                using var doc = System.Text.Json.JsonDocument.Parse(b.Data);
+                using var doc = JsonDocument.Parse(b.Data);
                 var root = doc.RootElement;
 
                 string eventType = "";
                 if (root.TryGetProperty("Type", out var t1)) eventType = t1.GetString() ?? "";
                 else if (root.TryGetProperty("type", out var t2)) eventType = t2.GetString() ?? "";
 
-                Console.WriteLine($"[DEBUG] Block {b.Index}: Type = '{eventType}'");
-
                 if (eventType == "CodeCommit")
                 {
                     cL.Add(new CommitPayloadUI
                         {
-                            Repository = root.TryGetProperty("Repository", out var r) || root.TryGetProperty("repository", out r) ? r.GetString() : "Unknown",
-                            CommitHash = root.TryGetProperty("CommitHash", out var h) || root.TryGetProperty("commitHash", out h) ? h.GetString() : "",
-                            Message = root.TryGetProperty("Message", out var m) || root.TryGetProperty("message", out m) ? m.GetString() : "",
-                            Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() : "Anon"
+                            Repository = root.TryGetProperty("Repository", out var r) || root.TryGetProperty("repository", out r) ? r.GetString() ?? "Unknown" : "Unknown",
+                            CommitHash = root.TryGetProperty("CommitHash", out var h) || root.TryGetProperty("commitHash", out h) ? h.GetString() ?? "" : "",
+                            Message = root.TryGetProperty("Message", out var m) || root.TryGetProperty("message", out m) ? m.GetString() ?? "" : "",
+                            Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() ?? "Anon" : "Anon"
                         });
-                    Console.WriteLine($"[DEBUG] 🟢 Successfully parsed CodeCommit! Hash: {cL.Last().CommitHash}");
                 }
                 else if (b.Data.Contains("ArtifactRegistry"))
                 {
-                    var a = System.Text.Json.JsonSerializer.Deserialize<ArtifactPayloadUI>(b.Data, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    var a = JsonSerializer.Deserialize<ArtifactPayloadUI>(b.Data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     if (a != null) aL.Add(a);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DEBUG] ❌ Failed to parse JSON in block {b.Hash}: {ex.Message}\nRaw Data: {b.Data}");
+                Console.WriteLine($"[DEBUG] ❌ Failed to parse JSON in block {b.Hash}: {ex.Message}");
             }
         }
 
         Commits = cL.AsEnumerable().Reverse().ToList();
         Artifacts = aL;
-
-        Console.WriteLine($"[DEBUG] Rebuild finished. Commits to render: {Commits.Count}");
     }
 
     private async Task CreateNewProject()
     {
         if (string.IsNullOrWhiteSpace(newProjectName)) return;
-        string safeName = new string(newProjectName.Where(char.IsLetterOrDigit).ToArray());
-        if (string.IsNullOrEmpty(safeName)) return;
+
+        string cleanName = new string(newProjectName.Where(char.IsLetterOrDigit).ToArray());
+        if (string.IsNullOrEmpty(cleanName)) return;
+
+        string rawToHash = $"{MyKeyService.PublicKey}{DateTime.UtcNow.Ticks}{cleanName}";
+
+        string channelHash = ComputeSimpleHash(rawToHash).Substring(0, 8);
+
+        string channelId = $"{cleanName}_{channelHash}";
 
         var payload = new
         {
             Type = "CreateProject",
             User = MyKeyService.UserName,
-            ProjectId = safeName,
+            ProjectId = channelId,
             Timestamp = DateTime.UtcNow.ToString("O")
         };
 
-        await SendJsonBlock(payload);
+        bool isSuccess = await SendJsonBlock(payload);
 
-        CurrentProjectId = safeName;
-        newProjectName = "";
-        await SyncChain(); 
+        if (isSuccess)
+        {
+            CurrentProjectId = channelId;
+            newProjectName = "";
+            await JoinSignalRGroups();
+            await SyncChain();
+        }
+        else
+        {
+            Console.WriteLine("[UI] Project creation failed. Switch aborted.");
+        }
+    }
+
+    private async Task DownloadAndFinishRegistration()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(newUserPassword))
+            {
+                statusMessage = "⚠️ Please enter a password for encryption!";
+                return;
+            }
+
+            statusMessage = "⏳ Generating keystore file...";
+            StateHasChanged();
+
+            string keystoreJson = MyKeyService.ExportKeystore(newUserPassword);
+
+            var fileStream = new MemoryStream(Encoding.UTF8.GetBytes(keystoreJson));
+            using var streamRef = new DotNetStreamReference(stream: fileStream);
+
+            await JS.InvokeVoidAsync("downloadFileFromStream", "nexus_wallet.json", streamRef);
+
+            showPasswordEntry = false;
+            statusMessage = "✅ wallet.json successfully downloaded! Please save it in a secure location.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"❌ Export failed: {ex.Message}";
+        }
+    }
+
+    private async Task HandleTaskSigningAndMining((TaskEvent Event, string Keystore, string Password) args)
+    {
+        try
+        {
+            isMining = true;
+            statusMessage = "🔄 Finalizing block (PoC)...";
+            StateHasChanged();
+
+            string json = JsonSerializer.Serialize(args.Event);
+            string targetChannel = args.Event.ProjectId;
+
+            var chainResp = await BlockchainClient.GetChainAsync(new ChainRequest
+                {
+                    Count = 1,
+                    ChannelId = targetChannel,
+                    UserName = MyKeyService.UserName
+                });
+
+            string prevHash = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Hash : "0";
+            int expectedIndex = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Index + 1 : 0;
+            string timestamp = DateTime.UtcNow.ToString("O");
+            string pubKey = MyKeyService.PublicKey;
+
+            string signableData = $"{expectedIndex}{timestamp}{json}{prevHash}";
+
+            string correctSignature = MyKeyService.SignDataWithKeystore(args.Keystore, args.Password, signableData);
+
+            var blk = new BlockModel
+                {
+                    Index = expectedIndex,
+                    Data = json,
+                    Timestamp = timestamp,
+                    PreviousHash = prevHash,
+                    Hash = ComputeSimpleHash(signableData),
+                    ValidatorPublicKey = pubKey,
+                    Signature = correctSignature,
+                    ChannelId = targetChannel
+                };
+
+            await MineBlockLocal(blk);
+
+            var r = await BlockchainClient.ReceiveBlockAsync(blk);
+            statusMessage = r.Success ? "✅ Task successfully written to the blockchain!" : $"❌ Node Error: {r.Message}";
+
+            if (r.Success) await SyncChain();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = "⚠️ Error: " + ex.Message;
+        }
+        finally
+        {
+            isMining = false;
+            StateHasChanged();
+        }
     }
 
     private async Task HandleFileUpload(InputFileChangeEventArgs e)
@@ -783,7 +1117,7 @@
 
         if (file.Size > 50 * 1024 * 1024)
         {
-            statusMessage = "Ошибка: Файл превышает лимит в 50MB";
+            statusMessage = "Error: File size exceeds the 50MB limit";
             return;
         }
 
@@ -792,53 +1126,36 @@
 
         try
         {
-            statusMessage = "Загрузка файла в локальную ноду IPFS...";
+            statusMessage = "Uploading file to local IPFS node...";
             StateHasChanged();
 
             string cid = await Ipfs.UploadFileAsync(file);
 
-            statusMessage = "Якорение CID файла в блокчейн...";
+            statusMessage = "Anchoring file CID to blockchain...";
             StateHasChanged();
 
             var payload = new
             {
-                Source = "ArtifactRegistry",
+                Source = "UserArtifact",
                 Type = "Register",
-                FileName = file.Name, 
-                FileHash = cid,       
+                FileName = file.Name,
+                FileHash = cid,
                 RegisteredBy = MyKeyService.UserName,
                 VerificationMethod = "IPFS & Client Node"
             };
 
             await SendJsonBlock(payload);
 
-            statusMessage = $"Файл успешно сохранен! CID: {cid.Substring(0, 8)}...";
+            statusMessage = $"File successfully saved! CID: {cid.Substring(0, 8)}...";
         }
         catch (Exception ex)
         {
-            statusMessage = $"Сбой загрузки: {ex.Message}";
+            statusMessage = $"Upload failed: {ex.Message}";
         }
         finally
         {
             isUploading = false;
             StateHasChanged();
         }
-    }
-
-    public class CommitPayloadUI
-    {
-        public string Repository { get; set; } = "";
-        public string CommitHash { get; set; } = "";
-        public string Message { get; set; } = "";
-        public string Author { get; set; } = "";
-    }
-
-    public class BlockCommitEvent
-    {
-        public string Type { get; set; }
-        public string Repository { get; set; }
-        public string CommitHash { get; set; }
-        public string Message { get; set; }
-        public string User { get; set; }
     }
 }

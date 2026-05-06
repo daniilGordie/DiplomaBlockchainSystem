@@ -16,6 +16,13 @@ namespace Blockchain.Core.Contracts
                 var evt = JsonSerializer.Deserialize<ContractTaskEvent>(data);
                 if (evt == null) return false;
 
+                string expectedPublicKey = db.GetUserPublicKey(evt.User);
+                if (!string.IsNullOrEmpty(expectedPublicKey) && expectedPublicKey != senderPublicKey)
+                {
+                    Console.WriteLine($"[SmartContract] Identity spoofing detected! User: {evt.User}");
+                    return false;
+                }
+
                 if (evt.Type == "Mint")
                 {
                     Console.WriteLine("[SmartContract] Minting rejected: Only Proof-of-Work events can mint NXP.");
@@ -27,11 +34,11 @@ namespace Blockchain.Core.Contracts
                     if (evt.Amount <= 0) return false;
                     if (string.IsNullOrEmpty(evt.TargetUser)) return false;
 
-                    int currentBalance = db.GetUserBalance(evt.User); 
+                    int currentBalance = db.GetUserBalance(evt.User);
 
                     if (currentBalance < evt.Amount)
                     {
-                        Console.WriteLine($"[SmartContract] Transfer rejected: {evt.User} has insufficient funds. Balance: {currentBalance}, Trying to send: {evt.Amount}");
+                        Console.WriteLine($"[SmartContract] Transfer rejected: {evt.User} has insufficient funds.");
                         return false;
                     }
                 }

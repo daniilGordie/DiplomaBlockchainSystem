@@ -2,7 +2,7 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using Microsoft.Extensions.Configuration; 
+using Microsoft.Extensions.Configuration;
 
 namespace Blockchain.Node.Services
 {
@@ -16,12 +16,11 @@ namespace Blockchain.Node.Services
 
         public OracleIdentity(IConfiguration config)
         {
-            _keyPassword = config["OracleKeyPassword"];
+            _keyPassword = config["OraclePublicKey"];
 
-            
             if (string.IsNullOrEmpty(_keyPassword))
             {
-                throw new InvalidOperationException("❌ ОШИБКА: 'OracleKeyPassword' не найден в appsettings.json!");
+                throw new InvalidOperationException("❌ ERROR: 'OracleKeyPassword' was not found in appsettings.json!");
             }
 
             _ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);

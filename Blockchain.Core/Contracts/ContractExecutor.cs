@@ -10,8 +10,10 @@ namespace Blockchain.Core.Contracts
         {
             _contracts = new List<ISmartContract>
             {
-                new AccessControlContract()
-               
+                new AccessControlContract(),
+                new OracleContract(),
+                new ReputationContract(),
+                new TaskContract()
             };
         }
 

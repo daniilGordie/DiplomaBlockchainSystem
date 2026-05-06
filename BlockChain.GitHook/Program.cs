@@ -1,223 +1,140 @@
 ﻿using System;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Tasks;
-using System.Net.Http;
-using Grpc.Net.Client;
-using Blockchain.Node;
+using Microsoft.Extensions.Configuration;
 
-using Org.BouncyCastle.Asn1.Sec;
-using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Crypto.Signers;
-using Org.BouncyCastle.Crypto.Digests;
-using Org.BouncyCastle.Math;
-
-Console.WriteLine("[BlockChain Git Hook] Инициализация якорения коммита...");
-
-try
+class Program
 {
-    string keyFilePath = ".git/hooks/my_keys.json";
-    string myPubKey = "System"; 
-    string myPrivKeyHex = "";
-
-    if (File.Exists(keyFilePath))
+    static async Task<int> Main(string[] args)
     {
-        var keys = JsonSerializer.Deserialize<JsonElement>(File.ReadAllText(keyFilePath));
-        myPubKey = keys.GetProperty("publicKey").GetString() ?? "System";
-        myPrivKeyHex = keys.GetProperty("privateKeyHex").GetString() ?? "";
-    }
-    else
-    {
-        Console.WriteLine("[BlockChain Git Hook] Внимание: Файл my_keys.json не найден. Коммит пойдет от имени 'System'.");
-    }
+        var config = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .Build();
 
-    var process = new Process
-    {
-        StartInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            Arguments = "log -1 --format=\"%H|%an|%s\"",
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        }
-    };
-    process.Start();
-    string gitOutput = await process.StandardOutput.ReadToEndAsync();
-    await process.WaitForExitAsync();
+        // Extracting secret for webhook signing
+        string webhookSecret = config["WebhookSecret"]
+            ?? throw new InvalidOperationException("Critical Error: 'WebhookSecret' was not found in appsettings.json");
 
-    if (string.IsNullOrWhiteSpace(gitOutput))
-    {
-        Console.WriteLine("[BlockChain Git Hook] Ошибка: Не удалось получить данные Git.");
-        return 0;
-    }
+        Console.WriteLine("[Nexus Git Hook] Initializing commit intercept...");
 
-    var parts = gitOutput.Trim().Split('|', 3);
-    string commitHash = parts[0];
-    string author = parts[1];
-    string message = parts[2];
-
-    string channelId = "Alpha";
-
-    var diffProcess = new Process
-    {
-        StartInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            Arguments = $"show {commitHash} --pretty=format: --unified=3",
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        }
-    };
-    diffProcess.Start();
-    string diffText = await diffProcess.StandardOutput.ReadToEndAsync();
-    await diffProcess.WaitForExitAsync();
-
-    string patchCid = "";
-    if (!string.IsNullOrWhiteSpace(diffText))
-    {
-        using var httpClient = new HttpClient();
-        using var content = new MultipartFormDataContent();
-        content.Add(new StringContent(diffText), "file", "diff.patch");
         try
         {
-            var ipfsRes = await httpClient.PostAsync("http://127.0.0.1:5001/api/v0/add", content);
-            if (ipfsRes.IsSuccessStatusCode)
+            var process = new Process
             {
-                var ipfsJson = await ipfsRes.Content.ReadAsStringAsync();
-                patchCid = JsonDocument.Parse(ipfsJson).RootElement.GetProperty("Hash").GetString() ?? "";
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = "log -1 --format=\"%H|%an|%s\"",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            string gitOutput = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (string.IsNullOrWhiteSpace(gitOutput))
+            {
+                Console.WriteLine("[Nexus Git Hook] ❌ Error: Failed to retrieve Git data.");
+                return 1;
+            }
+
+            var parts = gitOutput.Trim().Split('|', 3);
+            string commitHash = parts[0];
+            string author = parts[1];
+            string message = parts[2];
+
+            Console.WriteLine($"[Nexus Git Hook] Commit detected: {commitHash[..7]} by {author}");
+
+            string patchCid = "";
+            var diffProcess = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = $"show {commitHash} --pretty=format: --unified=3",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            diffProcess.Start();
+            string diffText = await diffProcess.StandardOutput.ReadToEndAsync();
+            await diffProcess.WaitForExitAsync();
+
+            if (!string.IsNullOrWhiteSpace(diffText))
+            {
+                using var httpClientIpfs = new HttpClient();
+                using var content = new MultipartFormDataContent();
+                content.Add(new StringContent(diffText), "file", "diff.patch");
+                try
+                {
+                    var ipfsRes = await httpClientIpfs.PostAsync("http://127.0.0.1:5001/api/v0/add", content);
+                    if (ipfsRes.IsSuccessStatusCode)
+                    {
+                        var ipfsJson = await ipfsRes.Content.ReadAsStringAsync();
+                        patchCid = JsonDocument.Parse(ipfsJson).RootElement.GetProperty("Hash").GetString() ?? "";
+                        Console.WriteLine($"[Nexus Git Hook] Diff successfully uploaded to IPFS. CID: {patchCid[..7]}...");
+                    }
+                }
+                catch (Exception)
+                {
+                    Console.WriteLine("[Nexus Git Hook] ⚠️ Warning: Local IPFS node is unreachable. Diff skipped.");
+                }
+            }
+
+            var intent = new
+            {
+                Repository = "local-repo",
+                CommitHash = commitHash,
+                Message = message,
+                Author = author,
+                PatchCid = patchCid
+            };
+
+            using var clientNode = new HttpClient();
+
+            string jsonPayload = JsonSerializer.Serialize(intent);
+            string signature = ComputeHmacSha256(jsonPayload, webhookSecret);
+
+            clientNode.DefaultRequestHeaders.Add("X-Hub-Signature-256", $"sha256={signature}");
+
+            using var jsonContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+            var response = await clientNode.PostAsync("https://localhost:7066/api/webhooks/git", jsonContent);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine("[Nexus Git Hook] ✅ Notification successfully sent to the node.");
+                Console.WriteLine("[Nexus Git Hook] 🔔 Please open the Nexus dashboard for cryptographic signing!");
+            }
+            else
+            {
+                Console.WriteLine($"[Nexus Git Hook] ❌ Error communicating with Node Broker. Status Code: {response.StatusCode}");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[BlockChain Git Hook] Внимание: Ошибка загрузки Diff в IPFS: {ex.Message}");
+            Console.WriteLine($"[Nexus Git Hook] ⚠️ Critical error occurred: {ex.Message}");
         }
+
+        return 0;
     }
 
-    var payload = new
+    private static string ComputeHmacSha256(string payload, string secret)
     {
-        Type = "CodeCommit",
-        User = author,
-        ProjectId = channelId,
-        Repository = "local-repo",
-        CommitHash = commitHash,
-        Message = message,
-        PatchCid = patchCid,    
-        Timestamp = DateTime.UtcNow.ToString("O")
-    };
+        byte[] secretBytes = Encoding.UTF8.GetBytes(secret);
+        byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
 
-    string jsonPayload = JsonSerializer.Serialize(payload);
+        using var hmac = new HMACSHA256(secretBytes);
+        byte[] hashBytes = hmac.ComputeHash(payloadBytes);
 
-    using var channel = GrpcChannel.ForAddress("http://localhost:5041");
-    var client = new BlockchainService.BlockchainServiceClient(channel);
-
-    var chainResp = await client.GetChainAsync(new ChainRequest
-    {
-        Count = 1,
-        ChannelId = channelId,
-        UserName = author
-    });
-
-    string prevHash = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Hash : "0";
-    int expectedIndex = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Index + 1 : 0;
-
-    Console.WriteLine($"[BlockChain Git Hook] Вычисление PoW для канала {channelId}...");
-
-    string timestamp = DateTime.UtcNow.ToString("O");
-
-    long nonce = 0;
-    string hash = "";
-    string targetPrefix = "000";
-
-    using var sha256 = SHA256.Create();
-    while (true)
-    {
-        string rawData = $"{prevHash}{timestamp}{jsonPayload}{myPubKey}{nonce}";
-        byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(rawData));
-        hash = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
-
-        if (hash.StartsWith(targetPrefix))
-        {
-            break;
-        }
-        nonce++;
-    }
-
-    Console.WriteLine($"[BlockChain Git Hook] Блок найден! Nonce: {nonce}, Hash: {hash[..15]}...");
-
-    string signature = "";
-    if (!string.IsNullOrEmpty(myPrivKeyHex))
-    {
-        signature = SignData(jsonPayload, myPrivKeyHex);
-    }
-
-    var block = new BlockModel
-    {
-        Index = expectedIndex,
-        Timestamp = timestamp,
-        Data = jsonPayload,
-        PreviousHash = prevHash,
-        Hash = hash,
-        ValidatorPublicKey = myPubKey,
-        Signature = signature,
-        Nonce = nonce,
-        ChannelId = channelId
-    };
-
-    var reply = await client.ReceiveBlockAsync(block);
-
-    if (reply.Success)
-    {
-        Console.WriteLine($"[BlockChain Git Hook] ✅ Коммит успешно заякорен в блокчейн: {reply.Message}");
-    }
-    else
-    {
-        Console.WriteLine($"[BlockChain Git Hook] ❌ Блок отклонен смарт-контрактом: {reply.Message}");
+        return Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
 }
-catch (Exception ex)
-{
-    Console.WriteLine($"[BlockChain Git Hook] ⚠️ Ошибка синхронизации с блокчейном: {ex.Message}");
-}
-
-return 0;
-
-static string SignData(string data, string privKeyHex)
-{
-    try
-    {
-        var privateKeyBytes = Convert.FromHexString(privKeyHex);
-        var curve = SecNamedCurves.GetByName("secp256r1");
-        var domainParams = new ECDomainParameters(curve.Curve, curve.G, curve.N, curve.H);
-        var privKeyParams = new ECPrivateKeyParameters(new BigInteger(1, privateKeyBytes), domainParams);
-
-        var signer = new ECDsaSigner();
-        signer.Init(true, privKeyParams);
-
-        var digest = new Sha256Digest();
-        byte[] dataBytes = Encoding.UTF8.GetBytes(data);
-        digest.BlockUpdate(dataBytes, 0, dataBytes.Length);
-        byte[] hash = new byte[digest.GetDigestSize()];
-        digest.DoFinal(hash, 0);
-
-        var sig = signer.GenerateSignature(hash);
-        byte[] r = sig[0].ToByteArrayUnsigned();
-        byte[] s = sig[1].ToByteArrayUnsigned();
-
-        byte[] result = new byte[64];
-        Buffer.BlockCopy(r, 0, result, 32 - r.Length, r.Length);
-        Buffer.BlockCopy(s, 0, result, 64 - s.Length, s.Length);
-
-        return Convert.ToBase64String(result);
-    }
-    catch (Exception)
-    {
-        return "";
-    }
-}
-

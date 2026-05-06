@@ -15,7 +15,7 @@ namespace Blockchain.Core
         {
             if (string.IsNullOrWhiteSpace(dbName))
             {
-                throw new ArgumentException("Имя базы данных не может быть пустым!", nameof(dbName));
+                throw new ArgumentException("Database name cannot be empty!", nameof(dbName));
             }
 
             DbFileName = dbName;
@@ -98,40 +98,42 @@ namespace Blockchain.Core
                 connection.Open();
                 using (var transaction = connection.BeginTransaction())
                 {
-                    string safeChannel = SanitizeChannelName(channelId);
-                    string tableName = safeChannel == "System" ? "Blocks" : $"Blocks_{safeChannel}";
-
-                    var cmdBlock = connection.CreateCommand();
-                    cmdBlock.Transaction = transaction;
-
-                    cmdBlock.CommandText = $"INSERT INTO {tableName} (IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce) VALUES ($idx, $time, $data, $prev, $hash, $val, $sig, $nonce)";
-                    cmdBlock.Parameters.AddWithValue("$idx", block.Index);
-                    cmdBlock.Parameters.AddWithValue("$time", block.Timestamp.ToString("O"));
-                    cmdBlock.Parameters.AddWithValue("$data", block.Data);
-                    cmdBlock.Parameters.AddWithValue("$prev", block.PreviousHash);
-                    cmdBlock.Parameters.AddWithValue("$hash", block.Hash);
-                    cmdBlock.Parameters.AddWithValue("$val", block.ValidatorPublicKey ?? "");
-                    cmdBlock.Parameters.AddWithValue("$sig", block.Signature ?? "");
-                    cmdBlock.Parameters.AddWithValue("$nonce", block.Nonce);
-                    cmdBlock.ExecuteNonQuery();
-
                     try
                     {
+                        string safeChannel = SanitizeChannelName(channelId);
+                        string tableName = safeChannel == "System" ? "Blocks" : $"Blocks_{safeChannel}";
+
+                        var cmdBlock = connection.CreateCommand();
+                        cmdBlock.Transaction = transaction;
+
+                        cmdBlock.CommandText = $"INSERT INTO {tableName} (IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce) VALUES ($idx, $time, $data, $prev, $hash, $val, $sig, $nonce)";
+                        cmdBlock.Parameters.AddWithValue("$idx", block.Index);
+                        cmdBlock.Parameters.AddWithValue("$time", block.Timestamp.ToString("O"));
+                        cmdBlock.Parameters.AddWithValue("$data", block.Data);
+                        cmdBlock.Parameters.AddWithValue("$prev", block.PreviousHash);
+                        cmdBlock.Parameters.AddWithValue("$hash", block.Hash);
+                        cmdBlock.Parameters.AddWithValue("$val", block.ValidatorPublicKey ?? "");
+                        cmdBlock.Parameters.AddWithValue("$sig", block.Signature ?? "");
+                        cmdBlock.Parameters.AddWithValue("$nonce", block.Nonce);
+                        cmdBlock.ExecuteNonQuery();
+
                         if (block.Data.Trim().StartsWith("{") || block.Data.Trim().StartsWith("["))
                         {
                             using var doc = JsonDocument.Parse(block.Data);
                             if (doc.RootElement.ValueKind == JsonValueKind.Object)
                             {
-                                UpdateStateIndex(connection, transaction, doc.RootElement);
+                                UpdateStateIndex(connection, transaction, doc.RootElement, block.ValidatorPublicKey);
                             }
                         }
+
+                        transaction.Commit();
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"\n[DB ERROR] Ошибка при обновлении SQL стейта: {ex.Message}\n");
+                        transaction.Rollback();
+                        Console.WriteLine($"\n[DB ERROR] Error saving block/state: {ex.Message}\n");
+                        throw;
                     }
-
-                    transaction.Commit();
                 }
             }
         }
@@ -160,16 +162,26 @@ namespace Blockchain.Core
             return def;
         }
 
-        private void UpdateStateIndex(SqliteConnection conn, SqliteTransaction tx, JsonElement root)
+        private void UpdateStateIndex(SqliteConnection conn, SqliteTransaction tx, JsonElement root, string validatorPubKey)
         {
             string type = GetStringSafe(root, "Type");
             if (string.IsNullOrEmpty(type)) return;
 
             string sender = GetStringSafe(root, "User", "Anon");
 
+            if (!string.IsNullOrEmpty(sender) && sender != "Anon" && !string.IsNullOrEmpty(validatorPubKey))
+            {
+                var cmdUser = conn.CreateCommand();
+                cmdUser.Transaction = tx;
+                cmdUser.CommandText = "INSERT OR IGNORE INTO Users (UserName, PublicKey) VALUES ($u, $pk)";
+                cmdUser.Parameters.AddWithValue("$u", sender);
+                cmdUser.Parameters.AddWithValue("$pk", validatorPubKey);
+                cmdUser.ExecuteNonQuery();
+            }
+
             if (type == "AssignRole" || type == "CreateProject")
             {
-                string projRole = GetStringSafe(root, "ProjectId", "Alpha");
+                string projRole = GetStringSafe(root, "ProjectId", "System");
 
                 if (type == "CreateProject")
                 {
@@ -206,7 +218,7 @@ namespace Blockchain.Core
             string tid = GetStringSafe(root, "TaskId");
             if ((type == "Create" || type == "Update" || type == "Move") && !string.IsNullOrEmpty(tid))
             {
-                string proj = GetStringSafe(root, "ProjectId", "Alpha");
+                string proj = GetStringSafe(root, "ProjectId", "System");
                 string title = GetStringSafe(root, "Title", "No Title");
                 int status = GetIntSafe(root, "Status", 0);
                 string desc = GetStringSafe(root, "Description");
@@ -354,14 +366,13 @@ namespace Blockchain.Core
                     }
                     catch (Exception rowEx)
                     {
-
-                        Console.WriteLine($"[CRITICAL] Ошибка чтения блока в БД (Channel: {safeChannel}): {rowEx.Message}");
+                        Console.WriteLine($"[CRITICAL] Error reading block from DB (Channel: {safeChannel}): {rowEx.Message}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[CRITICAL] Ошибка доступа к таблице {tableName}: {ex.Message}");
+                Console.WriteLine($"[CRITICAL] Error accessing table {tableName}: {ex.Message}");
             }
 
             return chain;
@@ -398,6 +409,7 @@ namespace Blockchain.Core
             while (reader.Read()) result.Add(reader.GetString(0));
             return result;
         }
+
         public List<string> GetUserProjects(string userName)
         {
             var list = new List<string>();
@@ -413,6 +425,16 @@ namespace Blockchain.Core
             }
             catch { }
             return list;
+        }
+
+        public string GetUserPublicKey(string userName)
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            connection.Open();
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT PublicKey FROM Users WHERE UserName = $user";
+            cmd.Parameters.AddWithValue("$user", userName);
+            return cmd.ExecuteScalar()?.ToString();
         }
 
         public void ClearMempool()

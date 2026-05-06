@@ -25,55 +25,51 @@ namespace Blockchain.Core
             Signature = string.Empty;
         }
 
-        public Block(int index, string data, string previousHash)
+        private string GetSignableData()
         {
-            Index = index;
-            Timestamp = DateTime.UtcNow;
-            Data = data;
-            PreviousHash = previousHash;
-            Hash = string.Empty;
-            ValidatorPublicKey = string.Empty;
-            Signature = string.Empty;
-            Nonce = 0;
+            return $"{Index}{Timestamp:O}{Data}{PreviousHash}";
         }
 
         public string CalculateHash()
         {
-            string rawData = $"{Index}{Timestamp:O}{Data}{PreviousHash}{ValidatorPublicKey}{Signature}{Nonce}";
+            string rawData = $"{Index}{Timestamp:s}{Data}{PreviousHash}{ValidatorPublicKey}{Signature}{Nonce}";
 
-            using (SHA256 sha256 = SHA256.Create())
+            using (var sha256 = System.Security.Cryptography.SHA256.Create())
             {
-                byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(rawData));
-                StringBuilder builder = new StringBuilder();
-                foreach (var b in bytes)
-                {
-                    builder.Append(b.ToString("x2"));
-                }
-                return builder.ToString();
+                byte[] bytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawData));
+                return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
             }
         }
 
         public bool VerifySignature()
         {
-            if (Index == 0 || ValidatorPublicKey == "GitHub-Oracle-Node" || ValidatorPublicKey == "System") return true;
+            if (Index == 0) return true;
 
             if (string.IsNullOrEmpty(ValidatorPublicKey) || string.IsNullOrEmpty(Signature))
                 return false;
 
             try
             {
+                byte[] signatureBytes = Convert.FromBase64String(Signature);
+
+                if (signatureBytes.Length != 64)
+                {
+                    Console.WriteLine($"[Cryptography] Rejected: Invalid raw ECDSA signature length ({signatureBytes.Length} bytes).");
+                    return false;
+                }
+
                 using (ECDsa ecdsa = ECDsa.Create())
                 {
                     ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(ValidatorPublicKey), out _);
 
-                    byte[] dataToVerify = Encoding.UTF8.GetBytes(Data);
-                    byte[] signatureBytes = Convert.FromBase64String(Signature);
+                    byte[] dataToVerify = Encoding.UTF8.GetBytes(GetSignableData());
 
                     return ecdsa.VerifyData(dataToVerify, signatureBytes, HashAlgorithmName.SHA256);
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Console.WriteLine($"[Cryptography] Critical signature verification error: {ex.Message}");
                 return false;
             }
         }

@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System;
+using System.Text.Json;
+using Blockchain.Core.Constants;
 
 namespace Blockchain.Core.Contracts
 {
@@ -10,27 +12,50 @@ namespace Blockchain.Core.Contracts
         {
             try
             {
-                if (data.Contains("\"Source\":\"GitHub"))
-                {
-                    using var doc = JsonDocument.Parse(data);
-                    if (!doc.RootElement.TryGetProperty("CommitHash", out var hash)) return false;
-                    return !string.IsNullOrEmpty(hash.GetString());
-                }
+                bool isOracleEvent = data.Contains("\"Type\":\"CodeCommit\"") ||
+                                     data.Contains("\"Source\":\"GitHub\"") ||
+                                     data.Contains("\"Source\":\"ArtifactRegistry\"");
 
-                if (data.Contains("\"Source\":\"ArtifactRegistry\""))
+                if (isOracleEvent)
                 {
-                    using var doc = JsonDocument.Parse(data);
-                    if (doc.RootElement.TryGetProperty("FileHash", out var hash))
+                    if (string.IsNullOrEmpty(NetworkParameters.TrustedOraclePublicKey))
                     {
-                        var h = hash.GetString();
-                        return h != null && h.Length == 64; 
+                        Console.WriteLine("[OracleContract] ❌ Critical Error: Oracle public key is not loaded into the network parameters!");
+                        return false;
                     }
-                    return false;
+
+                    if (senderPublicKey != NetworkParameters.TrustedOraclePublicKey)
+                    {
+                        Console.WriteLine($"[OracleContract] ❌ Rejected: Attempted to spoof oracle data from key: {senderPublicKey}");
+                        return false;
+                    }
+
+                    using var doc = JsonDocument.Parse(data);
+
+                    if (data.Contains("\"Type\":\"CodeCommit\"") || data.Contains("\"Source\":\"GitHub\""))
+                    {
+                        if (!doc.RootElement.TryGetProperty("CommitHash", out var hash)) return false;
+                        return !string.IsNullOrEmpty(hash.GetString());
+                    }
+
+                    if (data.Contains("\"Source\":\"ArtifactRegistry\""))
+                    {
+                        if (doc.RootElement.TryGetProperty("FileHash", out var hash))
+                        {
+                            var h = hash.GetString();
+                            return !string.IsNullOrEmpty(h) && h.Length >= 46;
+                        }
+                        return false;
+                    }
                 }
 
-                return true; 
+                return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[OracleContract] Parsing error: {ex.Message}");
+                return false;
+            }
         }
     }
 }

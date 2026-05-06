@@ -52,5 +52,20 @@ namespace Blockchain.UI.Models
         public string VerificationMethod { get; set; } = "Client-Side";
     }
 
+    public class KeystoreModel
+    {
+        public string Address { get; set; } = "";
+        public string Ciphertext { get; set; } = "";
+        public string Iv { get; set; } = "";
+        public string Salt { get; set; } = "";
+    }
 
+    public class GitCommitIntent
+    {
+        public string Repository { get; set; } = "";
+        public string CommitHash { get; set; } = "";
+        public string Message { get; set; } = "";
+        public string Author { get; set; } = "";
+        public string PatchCid { get; set; } = "";
+    }
 }
