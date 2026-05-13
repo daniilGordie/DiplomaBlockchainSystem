@@ -12,10 +12,15 @@ service BlockchainService {
 
   rpc AddPeer (PeerRequest) returns (StatusReply);
   rpc GetPeers (EmptyRequest) returns (PeerListResponse);
+  rpc GetKnownChannels (EmptyRequest) returns (KnownChannelsResponse);
 
   rpc GetProjectTasks (ProjectRequest) returns (TaskResponse);
-  rpc GetAnalytics (EmptyRequest) returns (AnalyticsResponse);
+  rpc GetAnalytics (ProjectRequest) returns (AnalyticsResponse);
   rpc GetTaskHistory (TaskHistoryRequest) returns (TaskHistoryResponse);
+  rpc GetGovernanceProposals (ProjectRequest) returns (GovernanceResponse);
+  rpc GetProjectDocuments (ProjectRequest) returns (DocumentResponse);
+  rpc GetDocumentVersions (DocumentHistoryRequest) returns (DocumentVersionResponse);
+  rpc GetSecurityAudit (ProjectRequest) returns (SecurityAuditResponse);
   rpc GetMyProjects (UserRequest) returns (ProjectListResponse);
 }
 
@@ -31,10 +36,20 @@ message BlockModel {
   string channel_id = 9; 
 }
 
-message PeerRequest { string url = 1; }
+message PeerRequest {
+  string url = 1;
+  string admin_token = 2;
+}
 message PeerListResponse { repeated string urls = 1; }
+message KnownChannelsResponse { repeated string channel_ids = 1; }
 
-message TaskHistoryRequest { string taskId = 1; }
+message TaskHistoryRequest {
+  string taskId = 1;
+  string project_id = 2;
+  string user_name = 3;
+  string user_public_key = 4;
+  string auth_signature = 5;
+}
 message TaskHistoryResponse { repeated TaskHistoryItem items = 1; }
 message TaskHistoryItem { 
   string timestamp = 1; 
@@ -44,13 +59,21 @@ message TaskHistoryItem {
   int32 blockIndex = 5; 
 }
 
-message ProjectRequest { string projectId = 1; string user_name = 2; }
+message ProjectRequest {
+  string projectId = 1;
+  string user_name = 2;
+  string user_public_key = 3;
+  string auth_signature = 4;
+}
 message EmptyRequest {}
 
 message ChainRequest {
   int32 count = 1;
   string channel_id = 2;
   string user_name = 3; 
+  string sync_token = 4;
+  string user_public_key = 5;
+  string auth_signature = 6;
 }
 
 message ArtifactRequest { 
@@ -88,12 +111,87 @@ message AnalyticsResponse {
   int32 tasksInProgress = 6; 
   int32 tasksDone = 7;
   map<string, int32> userReputation = 8; 
+  int32 totalDocuments = 9;
+  double averageBlockIntervalSeconds = 10;
+  double blocksPerMinute = 11;
+  int32 securityFindings = 12;
+}
+
+message GovernanceResponse {
+  repeated GovernanceProposalItem proposals = 1;
+}
+
+message GovernanceProposalItem {
+  string proposal_id = 1;
+  string project_id = 2;
+  string title = 3;
+  string description = 4;
+  string created_by = 5;
+  string created_at = 6;
+  string status = 7;
+  int32 yes_votes = 8;
+  int32 no_votes = 9;
+  string user_vote = 10;
 }
 
 message UserRequest {
   string user_name = 1;
+  string user_public_key = 2;
+  string auth_signature = 3;
 }
 
 message ProjectListResponse {
   repeated string project_ids = 1;
+}
+
+message DocumentResponse {
+  repeated DocumentSummary documents = 1;
+}
+
+message DocumentSummary {
+  string document_id = 1;
+  string title = 2;
+  int32 latest_version = 3;
+  string updated_by = 4;
+  string updated_at = 5;
+  string content_hash = 6;
+  string content = 7;
+}
+
+message DocumentHistoryRequest {
+  string project_id = 1;
+  string document_id = 2;
+  string user_name = 3;
+  string user_public_key = 4;
+  string auth_signature = 5;
+}
+
+message DocumentVersionResponse {
+  repeated DocumentVersionItem versions = 1;
+}
+
+message DocumentVersionItem {
+  string document_id = 1;
+  int32 version = 2;
+  string title = 3;
+  string content = 4;
+  string content_hash = 5;
+  string updated_by = 6;
+  string updated_at = 7;
+}
+
+message SecurityAuditResponse {
+  bool chain_valid = 1;
+  int32 checked_blocks = 2;
+  int32 invalid_hashes = 3;
+  int32 invalid_signatures = 4;
+  int32 invalid_proof_of_work = 5;
+  int32 broken_links = 6;
+  repeated SecurityAuditItem items = 7;
+}
+
+message SecurityAuditItem {
+  string severity = 1;
+  string check_name = 2;
+  string details = 3;
 }

@@ -16,12 +16,9 @@ namespace Blockchain.Node.Services
 
         public OracleIdentity(IConfiguration config)
         {
-            _keyPassword = config["OraclePublicKey"];
-
-            if (string.IsNullOrEmpty(_keyPassword))
-            {
-                throw new InvalidOperationException("❌ ERROR: 'OracleKeyPassword' was not found in appsettings.json!");
-            }
+            _keyPassword = config["OraclePrivateKeyPassword"]
+                ?? config["NodeDbPassword"]
+                ?? throw new InvalidOperationException("OraclePrivateKeyPassword (or NodeDbPassword fallback) is not configured.");
 
             _ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
 
@@ -51,7 +48,10 @@ namespace Blockchain.Node.Services
         public string SignData(string data)
         {
             byte[] dataBytes = Encoding.UTF8.GetBytes(data);
-            byte[] signature = _ecdsa.SignData(dataBytes, HashAlgorithmName.SHA256);
+            byte[] signature = _ecdsa.SignData(
+                dataBytes,
+                HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
             return Convert.ToBase64String(signature);
         }
     }

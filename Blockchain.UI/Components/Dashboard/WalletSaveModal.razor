@@ -1,0 +1,36 @@
+@if (IsOpen)
+{
+    <div class="modal-backdrop-custom" style="z-index: 3000;">
+        <div class="glass-card p-4 text-center animate-pop" style="max-width: 450px;">
+            <h4 class="text-warning mb-2">Save Your Wallet</h4>
+            <p class="text-white-50 small mb-4">
+                Create a strong password. It will encrypt your private key inside the <strong class="text-white">wallet.json</strong> file. You will need this file to sign any actions.
+            </p>
+            <label class="form-label text-muted small w-100 text-start">Wallet password</label>
+            <input type="password"
+                   value="@Password"
+                   @oninput="OnPasswordInput"
+                   class="form-control mb-3 shadow-none"
+                   aria-label="Wallet password"
+                   autocomplete="new-password"
+                   name="wallet-new-password" />
+            <button class="btn btn-primary w-100 fw-semibold" @onclick="OnDownloadWithPassword">Download File & Finish</button>
+            <button class="btn btn-outline-secondary w-100 fw-semibold mt-2" @onclick="OnDownloadWithPasskey">Use Passkey (Windows Hello / Touch ID / Google)</button>
+            @if (!string.IsNullOrWhiteSpace(Message))
+            {
+                <div class="alert alert-warning mt-3 mb-0 text-start small">@Message</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public string Password { get; set; } = "";
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public EventCallback<string> PasswordChanged { get; set; }
+    [Parameter] public EventCallback OnDownloadWithPassword { get; set; }
+    [Parameter] public EventCallback OnDownloadWithPasskey { get; set; }
+
+    private Task OnPasswordInput(ChangeEventArgs e) => PasswordChanged.InvokeAsync(e.Value?.ToString() ?? "");
+}

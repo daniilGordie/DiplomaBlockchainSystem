@@ -490,5 +490,6 @@ $RECYCLE.BIN/
 *.db
 *.db-shm
 *.db-wal
+appsettings.Local.json
 oracle_key.dat
 *.pem

@@ -5,41 +5,41 @@
 
 @if (IsOpen)
 {
-    <div class="modal-backdrop-custom" style="background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);">
-        <div class="glass-card p-0 modal-content-custom animate-pop" style="background: #1e1e24; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); max-width: 600px; margin: 50px auto;">
+    <div class="modal-backdrop-custom">
+        <div class="glass-card p-0 modal-content-custom animate-pop" style="max-width: 640px; margin: 50px auto;">
 
-            <div class="p-3 border-bottom d-flex justify-content-between align-items-center" style="border-color: rgba(255,255,255,0.1) !important; background: rgba(255,255,255,0.02);">
+            <div class="p-3 border-bottom d-flex justify-content-between align-items-center bg-dark">
                 <div class="d-flex align-items-center gap-3">
-                    <span class="badge bg-primary fs-6 px-3 py-2 rounded-pill shadow-sm">
-                        @(IsNewTask ? "New Issue" : TaskModel.Id)
+                    <span class="badge bg-primary px-3 py-2">
+                        @(IsNewTask ? "New work item" : TaskModel.Id)
                     </span>
                     @if (!IsNewTask)
                     {
                         <span style="color: #adb5bd; font-size: 0.9rem;">Created by <strong class="text-white">@TaskModel.Creator</strong></span>
                     }
                 </div>
-                <button class="btn-close btn-close-white" @onclick="Close"></button>
+                <button class="btn-close" @onclick="Close"></button>
             </div>
 
             <div class="p-4">
                 <div class="mb-3">
-                    <label class="form-label text-muted small fw-bold">Заголовок задачи</label>
-                    <input type="text" @bind="TaskModel.Title" class="form-control bg-dark text-white border-secondary" placeholder="Что нужно сделать?" />
+                    <label class="form-label text-muted small fw-bold">Title</label>
+                    <input type="text" @bind="TaskModel.Title" class="form-control" aria-label="Work item title" />
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label text-muted small fw-bold">Описание</label>
-                    <textarea @bind="TaskModel.Description" class="form-control bg-dark text-white border-secondary" rows="4" placeholder="Детали задачи..."></textarea>
+                    <label class="form-label text-muted small fw-bold">Description</label>
+                    <textarea @bind="TaskModel.Description" class="form-control" rows="4" aria-label="Work item description"></textarea>
                 </div>
 
                 <div class="row">
                     <div class="col-md-6 mb-3">
-                        <label class="form-label text-muted small fw-bold">Исполнитель</label>
-                        <input type="text" @bind="TaskModel.Assignee" class="form-control bg-dark text-white border-secondary" placeholder="username" />
+                        <label class="form-label text-muted small fw-bold">Assignee</label>
+                        <input type="text" @bind="TaskModel.Assignee" class="form-control" aria-label="Assignee" />
                     </div>
                     <div class="col-md-6 mb-3">
-                        <label class="form-label text-muted small fw-bold">Статус</label>
-                        <select @bind="TaskModel.Status" class="form-select bg-dark text-white border-secondary">
+                        <label class="form-label text-muted small fw-bold">State</label>
+                        <select @bind="TaskModel.Status" class="form-select" aria-label="Work item state">
                             <option value="@ProjectTaskStatus.Todo">To Do</option>
                             <option value="@ProjectTaskStatus.InProgress">In Progress</option>
                             <option value="@ProjectTaskStatus.Done">Done</option>
@@ -47,9 +47,9 @@
                     </div>
                 </div>
 
-                <div class="mt-4 p-3 rounded" style="background: rgba(13, 110, 253, 0.05); border: 1px dashed rgba(13, 110, 253, 0.3);">
+                <div class="mt-4 p-3 rounded border border-secondary bg-dark">
                     <h6 class="text-white mb-3 d-flex align-items-center gap-2">
-                        <span style="font-size: 1.2rem;">🔑</span> Transaction registration
+                        Transaction registration
                     </h6>
 
                     @if (!string.IsNullOrEmpty(errorMessage))
@@ -58,31 +58,40 @@
                     }
 
                     <div class="mb-3">
-                        <label class="form-label text-muted small">Файл кошелька (wallet.json)</label>
-                        <InputFile OnChange="LoadKeystoreFile" class="form-control form-control-sm bg-dark text-white border-secondary" />
+                        <label class="form-label text-muted small">Wallet file (wallet.json)</label>
+                        <InputFile OnChange="LoadKeystoreFile" class="form-control form-control-sm" />
                         @if (keystoreContent != null)
                         {
-                            <div class="text-success small mt-1">✔ Файл загружен</div>
+                            <div class="text-success small mt-1">Wallet file loaded</div>
                         }
                     </div>
 
                     <div class="mb-0">
-                        <label class="form-label text-muted small">Пароль кошелька</label>
-                        <input type="password" @bind="walletPassword" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="Пароль для расшифровки ключа..." />
+                        <label class="form-label text-muted small">Wallet password</label>
+                        <input type="password"
+                               @bind="walletPassword"
+                               class="form-control form-control-sm"
+                               disabled="@isPasskeyWallet"
+                               aria-label="Wallet password"
+                               autocomplete="current-password"
+                               name="wallet-password" />
+                        @if (isPasskeyWallet)
+                        {
+                            <div class="text-info small mt-2">Passkey wallet detected. Password is not required, system passkey dialog will be used.</div>
+                        }
                     </div>
                 </div>
             </div>
 
-            <div class="p-3 text-end d-flex justify-content-between align-items-center" style="background: rgba(0,0,0,0.2); border-top: 1px solid rgba(255,255,255,0.1); border-radius: 0 0 12px 12px;">
+            <div class="p-3 text-end d-flex justify-content-between align-items-center bg-dark border-top border-secondary">
                 <div class="text-muted font-monospace d-flex align-items-center gap-2" style="font-size: 0.85rem;">
-                    <span class="spinner-grow spinner-grow-sm text-success" style="width: 10px; height: 10px;"></span>
-                    Secured by Keystore
+                    Secured by keystore signature
                 </div>
                 <div>
-                    <button class="btn btn-outline-secondary me-2 fw-bold" @onclick="Close">Cancel</button>
-                    <button class="btn btn-primary fw-bold shadow"
+                    <button class="btn btn-outline-secondary me-2 fw-semibold" @onclick="Close">Cancel</button>
+                    <button class="btn btn-primary fw-semibold"
                             @onclick="HandleSaveAndMine"
-                            disabled="@(keystoreContent == null || string.IsNullOrEmpty(walletPassword) || string.IsNullOrEmpty(TaskModel.Title))">
+                            disabled="@(keystoreContent == null || (!isPasskeyWallet && string.IsNullOrEmpty(walletPassword)) || string.IsNullOrEmpty(TaskModel.Title))">
                         @(IsNewTask ? "Sign & Create" : "Sign & Save")
                     </button>
                 </div>
@@ -90,26 +99,6 @@
         </div>
     </div>
 }
-
-<style>
-    .animate-pop {
-        animation: pop 0.3s cubic-bezier(0.26, 0.53, 0.74, 1.48);
-    }
-    @System.Text.RegularExpressions.Regex.Unescape("@") keyframes pop {
-        0%
-
-    {
-        opacity: 0;
-        transform: scale(0.7);
-    }
-
-    100% {
-        opacity: 1;
-        transform: scale(1);
-    }
-
-    }
-</style>
 
 @code {
     [Parameter] public bool IsOpen { get; set; }
@@ -122,6 +111,7 @@
     private string? keystoreContent;
     private string? walletPassword;
     private string? errorMessage;
+    private bool isPasskeyWallet;
 
     private async Task Close() => await IsOpenChanged.InvokeAsync(false);
 
@@ -134,10 +124,17 @@
             using var stream = file.OpenReadStream();
             using var reader = new StreamReader(stream);
             keystoreContent = await reader.ReadToEndAsync();
+
+            // CHANGED: detect passkey wallet mode from keystore metadata.
+            isPasskeyWallet = keystoreContent.Contains("\"ProtectionMode\":\"passkey\"", StringComparison.OrdinalIgnoreCase);
+            if (isPasskeyWallet)
+            {
+                walletPassword = string.Empty;
+            }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            errorMessage = "Ошибка при чтении файла.";
+            errorMessage = "Error reading wallet file.";
         }
     }
 
@@ -145,9 +142,11 @@
     {
         errorMessage = null;
 
-        if (string.IsNullOrEmpty(keystoreContent) || string.IsNullOrEmpty(walletPassword))
+        if (string.IsNullOrEmpty(keystoreContent) || (!isPasskeyWallet && string.IsNullOrEmpty(walletPassword)))
         {
-            errorMessage = "Загрузите файл и введите пароль.";
+            errorMessage = isPasskeyWallet
+                ? "Load the wallet file."
+                : "Load the wallet file and enter the password.";
             return;
         }
 
@@ -165,18 +164,15 @@
                     User = MyKeyService.UserName 
                 };
 
-            string jsonData = System.Text.Json.JsonSerializer.Serialize(taskEvent);
-
-            string signature = MyKeyService.SignDataWithKeystore(keystoreContent, walletPassword, jsonData);
-
-            await OnSaveWithCredentials.InvokeAsync((taskEvent, keystoreContent, walletPassword));
+            // CHANGED: signing is performed in parent flow with mode-aware logic (password/passkey).
+            await OnSaveWithCredentials.InvokeAsync((taskEvent, keystoreContent, walletPassword ?? string.Empty));
 
             walletPassword = null;
             await Close();
         }
         catch (Exception ex)
         {
-            errorMessage = "Ошибка: " + ex.Message;
+            errorMessage = "Error: " + ex.Message;
         }
     }
 }

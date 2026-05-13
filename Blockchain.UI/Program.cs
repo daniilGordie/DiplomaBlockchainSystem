@@ -18,7 +18,7 @@ builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.
 
 builder.Services.AddScoped<IpfsService>();
 
-var nodeUrl = builder.Configuration["NodeUrl"] ?? "http://localhost:5041";
+var nodeUrl = builder.Configuration["NodeUrl"] ?? "https://localhost:7066";
 
 builder.Services.AddScoped(services =>
 {

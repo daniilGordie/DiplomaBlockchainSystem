@@ -43,7 +43,7 @@ namespace Blockchain.Core
 
         public bool VerifySignature()
         {
-            if (Index == 0) return true;
+            if (IsSystemGenesisBlock()) return true;
 
             if (string.IsNullOrEmpty(ValidatorPublicKey) || string.IsNullOrEmpty(Signature))
                 return false;
@@ -64,7 +64,11 @@ namespace Blockchain.Core
 
                     byte[] dataToVerify = Encoding.UTF8.GetBytes(GetSignableData());
 
-                    return ecdsa.VerifyData(dataToVerify, signatureBytes, HashAlgorithmName.SHA256);
+                    return ecdsa.VerifyData(
+                        dataToVerify,
+                        signatureBytes,
+                        HashAlgorithmName.SHA256,
+                        DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
                 }
             }
             catch (Exception ex)
@@ -72,6 +76,14 @@ namespace Blockchain.Core
                 Console.WriteLine($"[Cryptography] Critical signature verification error: {ex.Message}");
                 return false;
             }
+        }
+
+        public bool IsSystemGenesisBlock()
+        {
+            return ChannelId == "System"
+                && Index == 0
+                && PreviousHash == "0"
+                && Data == "{\"Source\":\"System\",\"Message\":\"Nexus Genesis Block\"}";
         }
     }
 }

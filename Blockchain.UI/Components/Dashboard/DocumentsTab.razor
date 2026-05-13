@@ -1,0 +1,129 @@
+@using Blockchain.Node
+
+<div class="row g-4 section-shell">
+    <div class="col-lg-5">
+        <div class="glass-card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h5 class="text-white mb-1">Project Documents</h5>
+                    <small class="text-white-50">Versioned project documents anchored as blockchain events.</small>
+                </div>
+                <button class="btn btn-sm btn-outline-info" @onclick="OnRefresh" disabled="@(!CanEdit)">Refresh</button>
+            </div>
+
+            @if (!Documents.Any())
+            {
+                <div class="text-muted text-center py-5">No documents yet.</div>
+            }
+            else
+            {
+                <div class="list-group list-group-flush bg-transparent document-list">
+                    @foreach (var doc in Documents)
+                    {
+                        <button type="button"
+                                class="list-group-item list-group-item-action bg-transparent border-secondary text-start @(SelectedDocumentId == doc.DocumentId ? "active-document" : "")"
+                                @onclick="() => OnSelectDocument.InvokeAsync(doc.DocumentId)">
+                            <div class="d-flex justify-content-between align-items-center gap-3">
+                                <div class="text-truncate">
+                                    <div class="text-white fw-semibold text-truncate">@doc.Title</div>
+                                    <div class="small text-white-50">v@doc.LatestVersion by @doc.UpdatedBy</div>
+                                </div>
+                                <span class="badge bg-dark border border-secondary font-monospace">@ShortHash(doc.ContentHash)</span>
+                            </div>
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="glass-card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h5 class="text-white mb-1">Editor</h5>
+                    <small class="text-white-50">@CurrentProjectId</small>
+                </div>
+                @if (SelectedDocument != null)
+                {
+                    <span class="badge bg-primary">v@SelectedDocument.LatestVersion</span>
+                }
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label text-muted small">Title</label>
+                <input class="form-control bg-dark text-white border-secondary"
+                       value="@DocumentTitle"
+                       @oninput="OnTitleInput"
+                       disabled="@(!CanEdit)" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label text-muted small">Content</label>
+                <textarea class="form-control bg-dark text-white border-secondary document-editor"
+                          value="@DocumentContent"
+                          @oninput="OnContentInput"
+                          disabled="@(!CanEdit)"></textarea>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center gap-3">
+                <button class="btn btn-primary fw-semibold"
+                        @onclick="OnSaveDocument"
+                        disabled="@(!CanEdit || IsMining || string.IsNullOrWhiteSpace(DocumentTitle))">
+                    @(string.IsNullOrWhiteSpace(SelectedDocumentId) ? "Create Document" : "Save New Version")
+                </button>
+                @if (SelectedDocument != null)
+                {
+                    <small class="text-info font-monospace text-truncate">Content hash: @SelectedDocument.ContentHash</small>
+                }
+            </div>
+
+            @if (Versions.Any())
+            {
+                <div class="mt-4 pt-3 border-top border-secondary">
+                    <h6 class="text-white mb-3">Version History</h6>
+                    <div class="document-version-stack">
+                        @foreach (var version in Versions)
+                        {
+                            <div class="p-3 rounded border border-secondary mb-2">
+                                <div class="d-flex justify-content-between gap-3 mb-2">
+                                    <span class="badge bg-secondary">v@version.Version</span>
+                                    <small class="text-white-50">@version.UpdatedAt</small>
+                                </div>
+                                <div class="small text-muted mb-1">Updated by @version.UpdatedBy</div>
+                                <div class="small text-info font-monospace text-truncate">@version.ContentHash</div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string CurrentProjectId { get; set; } = "System";
+    [Parameter] public bool CanEdit { get; set; }
+    [Parameter] public bool IsMining { get; set; }
+    [Parameter] public List<DocumentSummary> Documents { get; set; } = new();
+    [Parameter] public List<DocumentVersionItem> Versions { get; set; } = new();
+    [Parameter] public string SelectedDocumentId { get; set; } = "";
+    [Parameter] public string DocumentTitle { get; set; } = "";
+    [Parameter] public string DocumentContent { get; set; } = "";
+    [Parameter] public EventCallback<string> DocumentTitleChanged { get; set; }
+    [Parameter] public EventCallback<string> DocumentContentChanged { get; set; }
+    [Parameter] public EventCallback<string> OnSelectDocument { get; set; }
+    [Parameter] public EventCallback OnSaveDocument { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+
+    private DocumentSummary? SelectedDocument => Documents.FirstOrDefault(d => d.DocumentId == SelectedDocumentId);
+
+    private static string ShortHash(string hash)
+    {
+        if (string.IsNullOrWhiteSpace(hash)) return "no hash";
+        return hash.Length <= 10 ? hash : hash[..10];
+    }
+
+    private Task OnTitleInput(ChangeEventArgs e) => DocumentTitleChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    private Task OnContentInput(ChangeEventArgs e) => DocumentContentChanged.InvokeAsync(e.Value?.ToString() ?? "");
+}

@@ -3,24 +3,21 @@
 
 <PageTitle>Error</PageTitle>
 
-<h1 class="text-danger">Error.</h1>
-<h2 class="text-danger">An error occurred while processing your request.</h2>
+<div class="dashboard-container">
+    <div class="glass-card p-4">
+        <h1 class="section-shell__title text-danger mb-2">Application error</h1>
+        <p class="text-muted mb-3">The interface could not complete the current request.</p>
 
-@if (ShowRequestId)
-{
-    <p>
-        <strong>Request ID:</strong> <code>@RequestId</code>
-    </p>
-}
+        @if (ShowRequestId)
+        {
+            <div class="small text-muted">
+                Request ID: <code>@RequestId</code>
+            </div>
+        }
 
-<h3>Development Mode</h3>
-<p>
-    Swapping to <strong>Development</strong> environment will display more detailed information about the error that occurred.
-</p>
-<p>
-    <strong>The Development environment shouldn't be enabled for deployed applications.</strong>
-    It can result in displaying sensitive information from exceptions to end users.
-</p>
+        <a href="" class="btn btn-primary mt-4">Back to Dashboard</a>
+    </div>
+</div>
 
 @code {
     private string? RequestId { get; set; }

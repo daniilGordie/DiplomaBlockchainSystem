@@ -8,30 +8,39 @@
 @inject KeyService MyKeyService
 @inject NavigationManager Nav
 @inject HttpClient Http
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
 
 <div class="dashboard-container p-4">
-    <div class="d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom border-secondary">
+    <div class="glass-card p-4 mb-4">
         <div>
-            <button class="btn btn-sm btn-outline-secondary me-3" @onclick='() => Nav.NavigateTo("/")'>⬅ Back</button>
-            <h2 class="d-inline-block m-0 text-white">🐙 Repository: <span class="text-warning">@ProjectId</span></h2>
+            <button class="btn btn-sm btn-outline-secondary mb-3" @onclick='() => Nav.NavigateTo("/")'>Back to Dashboard</button>
+            <h1 class="section-shell__title mb-1">Project Repository</h1>
+            <div class="text-muted font-monospace small">@ProjectId</div>
         </div>
     </div>
 
     <div class="row g-4">
         <div class="col-md-4">
             <div class="glass-card p-3 h-100">
-                <h5 class="text-white mb-3">🕒 Commit History</h5>
+                <h5 class="text-white mb-3">Commit Records</h5>
                 <div class="chain-scroll-view" style="max-height: 700px; overflow-y: auto;">
-                    @foreach (var c in Commits)
+                    @if (!Commits.Any())
                     {
-                        <div class="p-3 mb-2 rounded border @(selectedCommitHash == c.CommitHash ? "border-warning bg-dark" : "border-secondary hover-bg")"
-                             style="cursor: pointer;" @onclick="() => LoadDiff(c)">
-                            <div class="d-flex justify-content-between mb-1">
-                                <span class="badge bg-primary">@c.CommitHash.Substring(0, 7)</span>
-                                <small class="text-muted">@c.Author</small>
+                        <div class="text-muted text-center py-4">No commit records anchored for this project.</div>
+                    }
+                    else
+                    {
+                        @foreach (var c in Commits)
+                        {
+                            <div class="p-3 mb-2 rounded border @(selectedCommitHash == c.CommitHash ? "border-warning bg-dark" : "border-secondary hover-bg")"
+                                 style="cursor: pointer;" @onclick="() => LoadDiff(c)">
+                                <div class="d-flex justify-content-between mb-1">
+                                    <span class="badge bg-primary">@ShortCommit(c.CommitHash)</span>
+                                    <small class="text-muted">@c.Author</small>
+                                </div>
+                                <div class="text-white small fw-bold">@c.Message</div>
                             </div>
-                            <div class="text-white small fw-bold">@c.Message</div>
-                        </div>
+                        }
                     }
                 </div>
             </div>
@@ -40,7 +49,7 @@
         <div class="col-md-8">
             <div class="glass-card p-0 h-100 d-flex flex-column overflow-hidden">
                 <div class="p-3 bg-dark border-bottom border-secondary d-flex justify-content-between">
-                    <h5 class="m-0 text-white">@(string.IsNullOrEmpty(selectedCommitHash) ? "📁 Project Artifacts" : "📝 Changes View")</h5>
+                    <h5 class="m-0 text-white">@(string.IsNullOrEmpty(selectedCommitHash) ? "Project Artifacts" : "Changes View")</h5>
                     @if (!string.IsNullOrEmpty(selectedCommitHash))
                     {
                         <button class="btn btn-sm btn-outline-light" @onclick="() => selectedCommitHash = null">Close Diff</button>
@@ -52,16 +61,25 @@
                     {
                         <table class="table table-dark">
                             <thead>
-                                <tr><th>File Name</th><th>CID (IPFS)</th><th>Actions</th></tr>
+                                <tr><th>Artifact</th><th>IPFS CID</th><th>Action</th></tr>
                             </thead>
                             <tbody>
-                                @foreach (var a in Artifacts)
+                                @if (!Artifacts.Any())
                                 {
                                     <tr>
-                                        <td>📄 @a.FileName</td>
-                                        <td class="font-monospace small text-info">@a.FileHash.Substring(0, 10)...</td>
-                                        <td><a href="http://127.0.0.1:8080/ipfs/@a.FileHash" target="_blank" class="btn btn-sm btn-outline-info">Open</a></td>
+                                        <td colspan="3" class="text-center text-muted py-4">No artifacts anchored for this project.</td>
                                     </tr>
+                                }
+                                else
+                                {
+                                    @foreach (var a in Artifacts)
+                                    {
+                                        <tr>
+                                            <td>@a.FileName</td>
+                                            <td class="font-monospace small text-info">@ShortHash(a.FileHash)</td>
+                                            <td><a href="@BuildIpfsGatewayUrl(a.FileHash)" target="_blank" class="btn btn-sm btn-outline-info">Open</a></td>
+                                        </tr>
+                                    }
                                 }
                             </tbody>
                         </table>
@@ -87,34 +105,102 @@
     private string? selectedCommitHash;
     private string currentDiffText = "";
     private bool isLoadingDiff = false;
+    private string IpfsGatewayUrl => (Config["IpfsGatewayUrl"] ?? "http://127.0.0.1:8080/ipfs").Trim().TrimEnd('/');
 
     protected override async Task OnInitializedAsync() => await LoadData();
 
+    private string BuildReadAuthSignature(string scope)
+    {
+        if (!MyKeyService.IsLoggedIn || string.IsNullOrWhiteSpace(MyKeyService.PublicKey))
+        {
+            return string.Empty;
+        }
+
+        string userName = MyKeyService.UserName ?? "Guest";
+        string publicKey = MyKeyService.PublicKey ?? string.Empty;
+        string signable = $"READ:{scope}:{userName}:{publicKey}";
+        return MyKeyService.SignData(signable);
+    }
+
     private async Task LoadData()
     {
-        var res = await BlockchainClient.GetChainAsync(new ChainRequest { ChannelId = ProjectId, Count = 100 });
+        var res = await BlockchainClient.GetChainAsync(new ChainRequest
+        {
+            ChannelId = ProjectId,
+            Count = 100,
+            UserName = MyKeyService.UserName ?? "Guest",
+            UserPublicKey = MyKeyService.PublicKey ?? "",
+            AuthSignature = BuildReadAuthSignature($"CHAIN:{ProjectId}")
+        });
         Commits.Clear(); Artifacts.Clear();
         foreach (var b in res.Blocks)
         {
-            using var doc = JsonDocument.Parse(b.Data);
-            var root = doc.RootElement;
-            if (root.TryGetProperty("Type", out var t) && t.GetString() == "CodeCommit")
+            if (string.IsNullOrWhiteSpace(b.Data))
             {
-                Commits.Add(new CommitPayloadUI
-                    {
-                        CommitHash = root.GetProperty("CommitHash").GetString()!,
-                        Message = root.GetProperty("Message").GetString()!,
-                        Author = root.GetProperty("User").GetString()!,
-                        PatchCid = root.TryGetProperty("PatchCid", out var p) ? p.GetString()! : ""
-                    });
+                continue;
             }
-            else if (b.Data.Contains("ArtifactRegistry"))
+
+            try
             {
-                var a = JsonSerializer.Deserialize<ArtifactPayloadUI>(b.Data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (a != null) Artifacts.Add(a);
+                using var doc = JsonDocument.Parse(b.Data);
+                var root = doc.RootElement;
+
+                string type = root.TryGetProperty("Type", out var t) ? t.GetString() ?? "" : "";
+                if (type == "CodeCommit")
+                {
+                    Commits.Add(new CommitPayloadUI
+                    {
+                        CommitHash = root.TryGetProperty("CommitHash", out var hash) ? hash.GetString() ?? "" : "",
+                        Message = root.TryGetProperty("Message", out var msg) ? msg.GetString() ?? "" : "",
+                        Author = root.TryGetProperty("User", out var user) ? user.GetString() ?? "Unknown" : "Unknown",
+                        PatchCid = root.TryGetProperty("PatchCid", out var p) ? p.GetString() ?? "" : "",
+                        Repository = root.TryGetProperty("Repository", out var repo) ? repo.GetString() ?? "" : ""
+                    });
+                }
+                else if (TryParseArtifact(root, out var artifact))
+                {
+                    Artifacts.Add(artifact);
+                }
+            }
+            catch
+            {
+                // Skip malformed payloads in historical chain to keep repository view available.
             }
         }
         Commits.Reverse();
+    }
+
+    private static bool TryParseArtifact(JsonElement root, out ArtifactPayloadUI artifact)
+    {
+        artifact = new ArtifactPayloadUI();
+
+        string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
+        string source = root.TryGetProperty("Source", out var sourceProp) ? sourceProp.GetString() ?? "" : "";
+
+        bool isArtifact = type.Equals("Register", StringComparison.OrdinalIgnoreCase)
+            && (source.Equals("ArtifactRegistry", StringComparison.OrdinalIgnoreCase)
+                || source.Equals("UserArtifact", StringComparison.OrdinalIgnoreCase)
+                || root.TryGetProperty("FileHash", out _));
+
+        if (!isArtifact)
+        {
+            return false;
+        }
+
+        artifact = new ArtifactPayloadUI
+        {
+            FileName = root.TryGetProperty("FileName", out var fn) ? fn.GetString() ?? "artifact.bin" : "artifact.bin",
+            FileHash = root.TryGetProperty("FileHash", out var fh) ? fh.GetString() ?? "" : "",
+            RegisteredBy = root.TryGetProperty("RegisteredBy", out var rb)
+                ? rb.GetString() ?? ""
+                : (root.TryGetProperty("User", out var u) ? u.GetString() ?? "" : ""),
+            VerificationMethod = root.TryGetProperty("VerificationMethod", out var vm) ? vm.GetString() ?? "IPFS" : "IPFS",
+            SizeBytes = root.TryGetProperty("SizeBytes", out var sizeProp) && sizeProp.TryGetInt64(out var size) ? size : 0,
+            ContentType = root.TryGetProperty("ContentType", out var contentTypeProp) ? contentTypeProp.GetString() ?? "" : "",
+            Timestamp = root.TryGetProperty("Timestamp", out var timestampProp) ? timestampProp.GetString() ?? "" : ""
+        };
+
+        return !string.IsNullOrWhiteSpace(artifact.FileHash);
     }
 
     private async Task LoadDiff(CommitPayloadUI commit)
@@ -124,9 +210,13 @@
         isLoadingDiff = true;
         try
         {
-            currentDiffText = await Http.GetStringAsync($"http://127.0.0.1:8080/ipfs/{commit.PatchCid}");
+            currentDiffText = await Http.GetStringAsync(BuildIpfsGatewayUrl(commit.PatchCid));
         }
         catch { currentDiffText = "Error loading data from IPFS."; }
         finally { isLoadingDiff = false; }
     }
+
+    private string BuildIpfsGatewayUrl(string cid) => $"{IpfsGatewayUrl}/{cid}";
+    private static string ShortCommit(string hash) => string.IsNullOrWhiteSpace(hash) ? "unknown" : (hash.Length <= 7 ? hash : hash[..7]);
+    private static string ShortHash(string hash) => string.IsNullOrWhiteSpace(hash) ? "no cid" : (hash.Length <= 14 ? hash : $"{hash[..14]}...");
 }

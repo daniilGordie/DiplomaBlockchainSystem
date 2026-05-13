@@ -1,4 +1,6 @@
-﻿namespace Blockchain.Core.Contracts
+﻿using Blockchain.Core;
+
+namespace Blockchain.Core.Contracts
 {
     public interface ISmartContract
     {

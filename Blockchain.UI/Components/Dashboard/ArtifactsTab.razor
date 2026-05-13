@@ -1,0 +1,116 @@
+@using Blockchain.UI.Models
+@using Microsoft.AspNetCore.Components.Forms
+
+<div class="glass-card p-4 section-shell">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h5 class="text-white mb-1">Project Artifacts</h5>
+            <small class="text-white-50">Upload files to IPFS and anchor their CIDs in the project chain.</small>
+        </div>
+
+        <a href="/repo/@CurrentProjectId" class="btn btn-outline-secondary fw-semibold d-flex align-items-center gap-2">
+            Open Project Repository
+        </a>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-12">
+            <div class="integration-status-grid">
+                <div class="integration-status-card">
+                    <div>
+                        <div class="text-white fw-semibold">Git webhook</div>
+                        <div class="small text-white-50 text-truncate">@GitStatus.Endpoint</div>
+                    </div>
+                    <span class="badge @(GitStatus.IsHealthy ? "bg-success" : "bg-secondary")">@GitStatus.Status</span>
+                </div>
+                <div class="integration-status-card">
+                    <div>
+                        <div class="text-white fw-semibold">IPFS node</div>
+                        <div class="small text-white-50 text-truncate">@IpfsStatus.Endpoint</div>
+                    </div>
+                    <span class="badge @(IpfsStatus.IsHealthy ? "bg-success" : "bg-danger")">@IpfsStatus.Status</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-5">
+            <div class="p-4 rounded border border-secondary h-100">
+                <h6 class="text-white mb-3">Upload Artifact</h6>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">Select a file (Max 50MB)</label>
+                    <InputFile OnChange="OnUploadFile" class="form-control" disabled="@(IsUploading || !IsLoggedIn)" />
+                </div>
+
+                @if (IsUploading)
+                {
+                    <div class="alert alert-warning py-2 d-flex align-items-center gap-2 border-warning bg-transparent text-warning">
+                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                        @StatusMessage
+                    </div>
+                }
+                else if (!string.IsNullOrEmpty(StatusMessage))
+                {
+                    <div class="alert alert-success py-2 bg-transparent border-success text-success">
+                        @StatusMessage
+                    </div>
+                }
+
+                <div class="small text-white-50 mt-3">Only the IPFS CID is written to the blockchain.</div>
+            </div>
+        </div>
+
+        <div class="col-md-7">
+            <div class="p-3 rounded border border-secondary h-100">
+                <h6 class="text-white mb-3">Anchored Artifacts</h6>
+                <div style="max-height: 250px; overflow-y: auto;">
+                    @if (!Artifacts.Any())
+                    {
+                        <div class="text-muted text-center py-4">No assets uploaded yet.</div>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush bg-transparent">
+                            @foreach (var a in Artifacts.Take(5))
+                            {
+                                <li class="list-group-item bg-transparent border-secondary px-0 d-flex justify-content-between align-items-center hover-bg">
+                                    <div class="text-truncate pe-3">
+                                        <div class="text-white fw-bold">@a.FileName</div>
+                                        <div class="small text-info font-monospace text-truncate" style="max-width: 250px;">@a.FileHash</div>
+                                        @if (a.SizeBytes > 0 || !string.IsNullOrWhiteSpace(a.ContentType))
+                                        {
+                                            <div class="small text-white-50">@FormatBytes(a.SizeBytes) @a.ContentType</div>
+                                        }
+                                    </div>
+                                    <a href="@BuildIpfsGatewayUrl(a.FileHash)" target="_blank" class="btn btn-sm btn-outline-info flex-shrink-0">Download</a>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string CurrentProjectId { get; set; } = "System";
+    [Parameter] public bool IsUploading { get; set; }
+    [Parameter] public bool IsLoggedIn { get; set; }
+    [Parameter] public string StatusMessage { get; set; } = "";
+    [Parameter] public string IpfsGatewayUrl { get; set; } = "http://127.0.0.1:8080/ipfs";
+    [Parameter] public List<ArtifactPayloadUI> Artifacts { get; set; } = new();
+    [Parameter] public IntegrationStatusUI GitStatus { get; set; } = new();
+    [Parameter] public IntegrationStatusUI IpfsStatus { get; set; } = new();
+    [Parameter] public EventCallback<InputFileChangeEventArgs> OnUploadFile { get; set; }
+
+    private string BuildIpfsGatewayUrl(string cid) => $"{IpfsGatewayUrl.Trim().TrimEnd('/')}/{cid}";
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes <= 0) return "";
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{Math.Round(bytes / 1024d, 1)} KB";
+        return $"{Math.Round(bytes / 1024d / 1024d, 1)} MB";
+    }
+}

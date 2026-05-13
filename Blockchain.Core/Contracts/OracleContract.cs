@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Text.Json;
 using Blockchain.Core.Constants;
+using Blockchain.Core;
 
 namespace Blockchain.Core.Contracts
 {
@@ -12,21 +13,21 @@ namespace Blockchain.Core.Contracts
         {
             try
             {
-                bool isOracleEvent = data.Contains("\"Type\":\"CodeCommit\"") ||
-                                     data.Contains("\"Source\":\"GitHub\"") ||
+                // Oracle signature is required only for trusted external feeds.
+                bool isOracleEvent = data.Contains("\"Source\":\"GitHub\"") ||
                                      data.Contains("\"Source\":\"ArtifactRegistry\"");
 
                 if (isOracleEvent)
                 {
                     if (string.IsNullOrEmpty(NetworkParameters.TrustedOraclePublicKey))
                     {
-                        Console.WriteLine("[OracleContract] ❌ Critical Error: Oracle public key is not loaded into the network parameters!");
+                        Console.WriteLine("[OracleContract] Critical Error: Oracle public key is not loaded into the network parameters!");
                         return false;
                     }
 
                     if (senderPublicKey != NetworkParameters.TrustedOraclePublicKey)
                     {
-                        Console.WriteLine($"[OracleContract] ❌ Rejected: Attempted to spoof oracle data from key: {senderPublicKey}");
+                        Console.WriteLine($"[OracleContract] Rejected: Attempted to spoof oracle data from key: {senderPublicKey}");
                         return false;
                     }
 

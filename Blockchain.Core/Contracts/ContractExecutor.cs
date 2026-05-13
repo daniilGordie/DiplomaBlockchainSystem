@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using Blockchain.Core; 
 
 namespace Blockchain.Core.Contracts
 {

@@ -14,12 +14,13 @@ using System;
 using System.Threading.Tasks;
 using Org.BouncyCastle.Crypto.Digests;
 using Org.BouncyCastle.Crypto.Signers;
+using System.Text.Json.Serialization;
 
 namespace Blockchain.UI.Services
 {
     public class KeyService
     {
-        private string? _privateKey;
+        private string _privateKey = "";
         private readonly IJSRuntime _jsRuntime;
         private readonly MnemonicService _mnemonicService;
 
@@ -99,7 +100,7 @@ namespace Blockchain.UI.Services
         public string SignData(string data)
         {
             if (string.IsNullOrEmpty(_privateKey))
-                throw new InvalidOperationException("Приватный ключ отсутствует в памяти. Требуется повторная авторизация.");
+                throw new InvalidOperationException("Private key is not loaded. Sign in again.");
 
             byte[] privateKeyBytes = Convert.FromBase64String(_privateKey);
             byte[] dataBytes = Encoding.UTF8.GetBytes(data);
@@ -141,6 +142,36 @@ namespace Blockchain.UI.Services
             using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, 10000, HashAlgorithmName.SHA256);
             byte[] aesKey = pbkdf2.GetBytes(32);
 
+            return ExportKeystoreWithRawAesKey(aesKey, salt, iv, "password", "", "");
+        }
+
+        // CHANGED: passkey-based keystore export (Windows Hello / TouchID / Google Password Manager via WebAuthn platform authenticator).
+        public async Task<string> ExportKeystoreWithPasskeyAsync()
+        {
+            if (string.IsNullOrEmpty(_privateKey)) throw new Exception("No key for export.");
+
+            byte[] salt = new byte[16];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(salt);
+
+            byte[] iv = new byte[16];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(iv);
+
+            byte[] aesKey = new byte[32];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(aesKey);
+
+            var wrapResult = await _jsRuntime.InvokeAsync<PasskeyWrapResult>("nexusPasskey.registerAndWrapKey", UserName, Convert.ToBase64String(aesKey));
+            if (wrapResult == null || string.IsNullOrWhiteSpace(wrapResult.CredentialId) || string.IsNullOrWhiteSpace(wrapResult.WrappedKey))
+            {
+                throw new Exception("Passkey enrollment failed.");
+            }
+
+            return ExportKeystoreWithRawAesKey(aesKey, salt, iv, "passkey", wrapResult.CredentialId, wrapResult.WrappedKey);
+        }
+
+        private string ExportKeystoreWithRawAesKey(byte[] aesKey, byte[] salt, byte[] iv, string protectionMode, string passkeyCredentialId, string passkeyWrappedKey)
+        {
+            if (string.IsNullOrEmpty(_privateKey)) throw new Exception("No key for export.");
+
             byte[] inputBytes = Encoding.UTF8.GetBytes(_privateKey);
 
             var engine = new AesEngine();
@@ -158,10 +189,14 @@ namespace Blockchain.UI.Services
 
             var keystore = new KeystoreModel
             {
-                Address = PublicKey,
+                Version = 2,
+                ProtectionMode = protectionMode,
+                Address = PublicKey ?? "",
                 Ciphertext = Convert.ToBase64String(ciphertext),
                 Iv = Convert.ToBase64String(iv),
-                Salt = Convert.ToBase64String(salt)
+                Salt = Convert.ToBase64String(salt),
+                PasskeyCredentialId = passkeyCredentialId,
+                PasskeyWrappedKey = passkeyWrappedKey
             };
 
             return JsonSerializer.Serialize(keystore);
@@ -172,9 +207,14 @@ namespace Blockchain.UI.Services
             var keystore = JsonSerializer.Deserialize<KeystoreModel>(keystoreJson);
             if (keystore == null) throw new Exception("Wrong format of keystore.");
 
-            byte[] salt = Convert.FromBase64String(keystore.Salt);
+            byte[] salt = string.IsNullOrEmpty(keystore.Salt) ? Array.Empty<byte>() : Convert.FromBase64String(keystore.Salt);
             byte[] iv = Convert.FromBase64String(keystore.Iv);
             byte[] ciphertext = Convert.FromBase64String(keystore.Ciphertext);
+
+            if (string.Equals(keystore.ProtectionMode, "passkey", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new Exception("This wallet is protected by passkey. Use SignDataWithPasskeyKeystoreAsync.");
+            }
 
             using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, 10000, HashAlgorithmName.SHA256);
             byte[] aesKey = pbkdf2.GetBytes(32);
@@ -215,9 +255,64 @@ namespace Blockchain.UI.Services
             }
         }
 
+        // CHANGED: signing using passkey-protected wallet.json without user-entered password.
+        public async Task<string> SignDataWithPasskeyKeystoreAsync(string keystoreJson, string dataToSign)
+        {
+            var keystore = JsonSerializer.Deserialize<KeystoreModel>(keystoreJson);
+            if (keystore == null) throw new Exception("Wrong format of keystore.");
+            if (!string.Equals(keystore.ProtectionMode, "passkey", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new Exception("This wallet is not passkey-protected.");
+            }
+
+            var unwrapResult = await _jsRuntime.InvokeAsync<PasskeyUnwrapResult>(
+                "nexusPasskey.verifyAndUnwrapKey",
+                keystore.PasskeyCredentialId,
+                keystore.PasskeyWrappedKey);
+
+            if (unwrapResult == null || !unwrapResult.Success || string.IsNullOrWhiteSpace(unwrapResult.UnwrappedKeyBase64))
+            {
+                throw new Exception("Passkey verification failed.");
+            }
+
+            byte[] aesKey = Convert.FromBase64String(unwrapResult.UnwrappedKeyBase64);
+            byte[] iv = Convert.FromBase64String(keystore.Iv);
+            byte[] ciphertext = Convert.FromBase64String(keystore.Ciphertext);
+
+            try
+            {
+                var engine = new AesEngine();
+                var blockCipher = new CbcBlockCipher(engine);
+                var cipher = new PaddedBufferedBlockCipher(blockCipher, new Pkcs7Padding());
+
+                var keyParam = new KeyParameter(aesKey);
+                var parameters = new ParametersWithIV(keyParam, iv);
+
+                cipher.Init(false, parameters);
+
+                byte[] decryptedBytes = new byte[cipher.GetOutputSize(ciphertext.Length)];
+                int len = cipher.ProcessBytes(ciphertext, 0, ciphertext.Length, decryptedBytes, 0);
+                int finalLen = cipher.DoFinal(decryptedBytes, len);
+
+                byte[] actualDecryptedBytes = new byte[len + finalLen];
+                Array.Copy(decryptedBytes, actualDecryptedBytes, len + finalLen);
+
+                string decryptedPrivateKey = Encoding.UTF8.GetString(actualDecryptedBytes);
+                string tempBackup = _privateKey;
+                _privateKey = decryptedPrivateKey;
+                string signature = SignData(dataToSign);
+                _privateKey = tempBackup;
+                return signature;
+            }
+            catch
+            {
+                throw new Exception("Passkey wallet decryption failed.");
+            }
+        }
+
         public async Task Logout()
         {
-            _privateKey = null;
+            _privateKey = "";
             PublicKey = null;
             UserName = "Guest";
             CurrentMnemonic = null;
@@ -225,6 +320,24 @@ namespace Blockchain.UI.Services
             await _jsRuntime.InvokeVoidAsync("localStorage.removeItem", "nexus_user");
             await _jsRuntime.InvokeVoidAsync("localStorage.removeItem", "nexus_pub");
             await _jsRuntime.InvokeVoidAsync("localStorage.removeItem", "nexus_priv");
+        }
+
+        private sealed class PasskeyWrapResult
+        {
+            [JsonPropertyName("credentialId")]
+            public string CredentialId { get; set; } = "";
+
+            [JsonPropertyName("wrappedKey")]
+            public string WrappedKey { get; set; } = "";
+        }
+
+        private sealed class PasskeyUnwrapResult
+        {
+            [JsonPropertyName("success")]
+            public bool Success { get; set; }
+
+            [JsonPropertyName("unwrappedKeyBase64")]
+            public string UnwrappedKeyBase64 { get; set; } = "";
         }
     }
 }

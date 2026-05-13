@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Text.Json;
+using Blockchain.Core;
 
 namespace Blockchain.Core.Contracts
 {
@@ -16,7 +17,7 @@ namespace Blockchain.Core.Contracts
                 var evt = JsonSerializer.Deserialize<ContractTaskEvent>(data);
                 if (evt == null) return false;
 
-                string expectedPublicKey = db.GetUserPublicKey(evt.User);
+                string? expectedPublicKey = db.GetUserPublicKey(evt.User);
                 if (!string.IsNullOrEmpty(expectedPublicKey) && expectedPublicKey != senderPublicKey)
                 {
                     Console.WriteLine($"[SmartContract] Identity spoofing detected! User: {evt.User}");

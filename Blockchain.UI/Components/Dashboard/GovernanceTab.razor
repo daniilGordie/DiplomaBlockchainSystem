@@ -1,0 +1,106 @@
+@using Blockchain.Node
+
+<div class="row g-4 section-shell">
+    <div class="col-md-5">
+        <div class="glass-card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="text-warning mb-0">Governance</h4>
+                <span class="badge bg-secondary">Project: @CurrentProjectId</span>
+            </div>
+
+            <p class="text-muted small mb-4">Create project proposals and record member votes as blockchain events.</p>
+
+            <div class="mb-3">
+                <label class="form-label text-muted small fw-bold">Proposal title</label>
+                <input value="@NewProposalTitle" @oninput="OnNewProposalTitleInput" class="form-control" aria-label="Proposal title" />
+            </div>
+
+            <div class="mb-4">
+                <label class="form-label text-muted small fw-bold">Description</label>
+                <textarea value="@NewProposalDescription" @oninput="OnNewProposalDescriptionInput" class="form-control" rows="4" aria-label="Proposal description"></textarea>
+            </div>
+
+            <button class="btn btn-primary fw-semibold w-100" @onclick="OnCreateProposal" disabled="@(!CanUseGovernance || IsMining)">Create Proposal</button>
+
+            @if (!CanUseGovernance)
+            {
+                <div class="alert alert-warning mt-3 mb-0 py-2 small">Create or select a project before using governance.</div>
+            }
+        </div>
+    </div>
+
+    <div class="col-md-7">
+        <div class="glass-card p-4 h-100">
+            <h5 class="text-white mb-3">Project Proposals</h5>
+
+            @if (!Proposals.Any())
+            {
+                <div class="text-muted py-4 text-center">No proposals yet.</div>
+            }
+            else
+            {
+                <div class="d-flex flex-column gap-3">
+                    @foreach (var proposal in Proposals)
+                    {
+                        <div class="border border-secondary rounded p-3 bg-dark governance-card">
+                            <div class="d-flex justify-content-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="fw-semibold text-white">@proposal.Title</div>
+                                    <div class="small text-muted">Created by @proposal.CreatedBy</div>
+                                </div>
+                                <span class="badge @GetStatusClass(proposal.Status) align-self-start">@proposal.Status</span>
+                            </div>
+
+                            @if (!string.IsNullOrWhiteSpace(proposal.Description))
+                            {
+                                <p class="text-muted small mt-3 mb-0">@proposal.Description</p>
+                            }
+
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mt-3 pt-3 border-top border-secondary">
+                                <div class="small text-muted">
+                                    Yes: <span class="fw-semibold text-success">@proposal.YesVotes</span>
+                                    <span class="mx-2">|</span>
+                                    No: <span class="fw-semibold text-danger">@proposal.NoVotes</span>
+                                    @if (!string.IsNullOrWhiteSpace(proposal.UserVote))
+                                    {
+                                        <span class="ms-2">Your vote: <span class="fw-semibold">@proposal.UserVote</span></span>
+                                    }
+                                </div>
+
+                                <div class="btn-group btn-group-sm">
+                                    <button class="btn btn-outline-secondary" disabled="@(!CanVote(proposal))" @onclick="() => OnVote.InvokeAsync((proposal.ProposalId, true))">Vote Yes</button>
+                                    <button class="btn btn-outline-danger" disabled="@(!CanVote(proposal))" @onclick="() => OnVote.InvokeAsync((proposal.ProposalId, false))">Vote No</button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string CurrentProjectId { get; set; } = "System";
+    [Parameter] public string NewProposalTitle { get; set; } = "";
+    [Parameter] public string NewProposalDescription { get; set; } = "";
+    [Parameter] public bool IsMining { get; set; }
+    [Parameter] public bool CanUseGovernance { get; set; }
+    [Parameter] public List<GovernanceProposalItem> Proposals { get; set; } = new();
+
+    [Parameter] public EventCallback<string> NewProposalTitleChanged { get; set; }
+    [Parameter] public EventCallback<string> NewProposalDescriptionChanged { get; set; }
+    [Parameter] public EventCallback OnCreateProposal { get; set; }
+    [Parameter] public EventCallback<(string ProposalId, bool VoteYes)> OnVote { get; set; }
+
+    private Task OnNewProposalTitleInput(ChangeEventArgs e) => NewProposalTitleChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    private Task OnNewProposalDescriptionInput(ChangeEventArgs e) => NewProposalDescriptionChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    private bool CanVote(GovernanceProposalItem proposal) => CanUseGovernance && proposal.Status == "Open" && string.IsNullOrWhiteSpace(proposal.UserVote);
+
+    private static string GetStatusClass(string status) => status switch
+    {
+        "Accepted" => "bg-success",
+        "Rejected" => "bg-danger",
+        _ => "bg-secondary"
+    };
+}

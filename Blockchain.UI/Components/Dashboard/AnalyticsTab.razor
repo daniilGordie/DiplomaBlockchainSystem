@@ -1,0 +1,141 @@
+@using Blockchain.Node
+@using Blockchain.UI.Models
+
+<div class="row g-4 section-shell">
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 border-light metric-card metric-card--wide"><h3 class="fw-semibold text-white m-0">@Data.TotalBlocks</h3><div class="text-white-50 small text-uppercase">Blocks Anchored</div></div></div>
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 border-info metric-card metric-card--wide"><h3 class="fw-semibold text-info m-0">@Data.TotalTasks</h3><div class="text-white-50 small text-uppercase">Work Items</div></div></div>
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 border-success metric-card metric-card--wide"><h3 class="fw-semibold text-success m-0">@Data.TasksDone</h3><div class="text-white-50 small text-uppercase">Completed</div></div></div>
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 border-warning metric-card metric-card--wide"><h3 class="fw-semibold text-warning m-0">@Data.TotalArtifacts</h3><div class="text-white-50 small text-uppercase">Files Secured</div></div></div>
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 border-primary metric-card metric-card--wide"><h3 class="fw-semibold text-primary m-0">@Data.TotalDocuments</h3><div class="text-white-50 small text-uppercase">Documents</div></div></div>
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 border-secondary metric-card metric-card--wide"><h3 class="fw-semibold text-white m-0">@Data.BlocksPerMinute</h3><div class="text-white-50 small text-uppercase">Blocks / Minute</div></div></div>
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 border-info metric-card metric-card--wide"><h3 class="fw-semibold text-info m-0">@Math.Round(Data.AverageBlockIntervalSeconds, 1)s</h3><div class="text-white-50 small text-uppercase">Avg Block Interval</div></div></div>
+    <div class="col-md-3"><div class="glass-card p-3 border-start border-4 @(Audit.ChainValid ? "border-success" : "border-danger") metric-card metric-card--wide"><h3 class="fw-semibold @(Audit.ChainValid ? "text-success" : "text-danger") m-0">@Data.SecurityFindings</h3><div class="text-white-50 small text-uppercase">Security Findings</div></div></div>
+
+    <div class="col-md-8">
+        <div class="glass-card p-4 h-100">
+            <div class="d-flex justify-content-between mb-4"><h5 class="text-white m-0">Team Balances (NXP)</h5><span class="badge bg-secondary">+5 Create | +20 Done</span></div>
+            <table class="table table-hover mb-0" style="background:transparent;">
+                <thead><tr><th class="text-muted">Rank</th><th class="text-muted">User</th><th class="text-end text-muted">Wallet Balance</th><th class="text-end text-muted">Share</th></tr></thead>
+                <tbody>
+                    @{
+                        int r = 1;
+                        int tot = Data.UserReputation.Values.Sum();
+                    }
+                    @foreach (var u in Data.UserReputation.OrderByDescending(x => x.Value))
+                    {
+                        <tr>
+                            <td>
+                                <span class="text-muted">#@r</span>
+                            </td>
+                            <td class="fw-bold @(u.Key==CurrentUserName?"text-warning":"text-white")">@u.Key @(u.Key == CurrentUserName ? "(You)" : "")</td>
+                            <td class="text-end text-info font-monospace">@u.Value NXP</td>
+                            <td class="text-end"><div class="progress bg-dark border border-secondary" style="height:6px;width:100px;display:inline-flex;"><div class="progress-bar bg-info" style="width:@(tot>0?(u.Value*100/tot):0)%"></div></div></td>
+                        </tr>
+                        r++;
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="glass-card p-4 h-100">
+            <h5 class="text-white mb-4">Work Distribution</h5>
+            <div class="d-flex flex-column gap-3 justify-content-center h-75">
+                <div>
+                    <div class="d-flex justify-content-between small text-muted mb-1"><span>To Do (@Data.TasksTodo)</span><span class="text-white-50">@GetPercent(Data.TasksTodo)%</span></div>
+                    <div class="progress" style="height: 10px; background: rgba(255,255,255,0.1);"><div class="progress-bar bg-secondary" style="width: @(GetPercent(Data.TasksTodo))%"></div></div>
+                </div>
+                <div>
+                    <div class="d-flex justify-content-between small text-muted mb-1"><span>In Progress (@Data.TasksInProgress)</span><span class="text-warning">@GetPercent(Data.TasksInProgress)%</span></div>
+                    <div class="progress" style="height: 10px; background: rgba(255,255,255,0.1);"><div class="progress-bar bg-warning" style="width: @(GetPercent(Data.TasksInProgress))%"></div></div>
+                </div>
+                <div>
+                    <div class="d-flex justify-content-between small text-muted mb-1"><span>Done (@Data.TasksDone)</span><span class="text-success">@GetPercent(Data.TasksDone)%</span></div>
+                    <div class="progress" style="height: 10px; background: rgba(255,255,255,0.1);"><div class="progress-bar bg-success" style="width: @(GetPercent(Data.TasksDone))%"></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="text-white m-0">Automated Security Audit</h5>
+                <span class="badge @(Audit.ChainValid ? "bg-success" : "bg-danger")">
+                    @(Audit.ChainValid ? "Chain valid" : "Issues found")
+                </span>
+            </div>
+            <div class="row g-3 mb-3">
+                <div class="col-md-2"><div class="small text-muted">Blocks</div><div class="text-white fw-semibold">@Audit.CheckedBlocks</div></div>
+                <div class="col-md-2"><div class="small text-muted">Hashes</div><div class="text-white fw-semibold">@Audit.InvalidHashes</div></div>
+                <div class="col-md-2"><div class="small text-muted">Signatures</div><div class="text-white fw-semibold">@Audit.InvalidSignatures</div></div>
+                <div class="col-md-2"><div class="small text-muted">Hash Target</div><div class="text-white fw-semibold">@Audit.InvalidProofOfWork</div></div>
+                <div class="col-md-2"><div class="small text-muted">Links</div><div class="text-white fw-semibold">@Audit.BrokenLinks</div></div>
+            </div>
+            <div class="audit-list">
+                @foreach (var item in Audit.Items.Take(6))
+                {
+                    <div class="p-3 rounded border border-secondary mb-2">
+                        <div class="d-flex justify-content-between gap-3">
+                            <span class="fw-semibold text-white">@item.CheckName</span>
+                            <span class="badge bg-dark border border-secondary">@item.Severity</span>
+                        </div>
+                        <div class="small text-white-50 mt-1">@item.Details</div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="text-white m-0">Blockchain Audit Trail</h5>
+                <span class="badge bg-dark border border-secondary">@AuditTrail.Count recent events</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-dark table-hover align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Event</th>
+                            <th>User</th>
+                            <th>Entity</th>
+                            <th>Block</th>
+                            <th>Hash</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in AuditTrail.Take(25))
+                        {
+                            <tr>
+                                <td class="small text-white-50">@row.Timestamp</td>
+                                <td><span class="badge bg-secondary">@row.EventType</span></td>
+                                <td class="text-warning">@row.Actor</td>
+                                <td class="small text-info font-monospace">@row.EntityId</td>
+                                <td class="font-monospace">#@row.BlockIndex</td>
+                                <td class="small font-monospace text-white-50">@ShortHash(row.BlockHash)</td>
+                            </tr>
+                        }
+                        @if (AuditTrail.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="6" class="text-center text-white-50 py-4">No blockchain events available for the selected project.</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public AnalyticsResponse Data { get; set; } = new();
+    [Parameter] public SecurityAuditResponse Audit { get; set; } = new();
+    [Parameter] public string CurrentUserName { get; set; } = "Guest";
+    [Parameter] public List<AuditTrailEntry> AuditTrail { get; set; } = new();
+
+    private double GetPercent(int count) => Data.TotalTasks > 0 ? Math.Round((double)count / Data.TotalTasks * 100, 1) : 0;
+    private static string ShortHash(string hash) => string.IsNullOrWhiteSpace(hash) ? "" : (hash.Length <= 14 ? hash : $"{hash[..14]}...");
+}

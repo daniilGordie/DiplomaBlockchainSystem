@@ -1,0 +1,106 @@
+@using Blockchain.UI.Services
+
+<div class="dashboard-header glass-panel">
+    <div class="dashboard-header__brand">
+        <div class="brand-mark">N</div>
+        <div>
+            <h2 class="m-0 fw-semibold text-white fs-4">
+                Nexus Ledger
+                @if (IsGenesisModeActive)
+                {
+                    <span class="badge bg-success ms-2" style="font-size: 0.5em; vertical-align: middle;">Genesis Mode Active</span>
+                }
+            </h2>
+            <small class="text-muted">Project work, artifacts, audit trail, and governance in one workspace.</small>
+        </div>
+    </div>
+
+    @if (IsLoggedIn)
+    {
+        <div class="dashboard-header__project-tools">
+            @if (Projects.Count > 0)
+            {
+                <select class="form-select form-select-sm dashboard-header__project-select" @onchange="OnProjectChanged" value="@CurrentProjectId" aria-label="Project">
+                    @foreach (var p in Projects)
+                    {
+                        <option value="@p">@p</option>
+                    }
+                </select>
+            }
+            else
+            {
+                <span class="badge bg-danger">No Projects</span>
+            }
+
+            <div class="input-group input-group-sm dashboard-header__project-create">
+                <span class="input-group-text">New project</span>
+                <input value="@NewProjectName" @oninput="OnNewProjectNameInput" class="form-control" aria-label="New project name" />
+                <button class="btn btn-primary fw-semibold" @onclick="OnCreateProject" disabled="@IsMining">Create</button>
+            </div>
+        </div>
+    }
+
+    <div class="dashboard-header__identity">
+        @if (!IsLoggedIn)
+        {
+            <div class="input-group input-group-sm dashboard-header__auth-group">
+                <span class="input-group-text">User</span>
+                <input value="@UserNameInput" @oninput="OnUserNameInput" class="form-control" aria-label="User name" />
+                <button @onclick="OnCreateWallet" class="btn btn-primary fw-semibold">Create Wallet</button>
+                <button @onclick="OnToggleRestore" class="btn btn-outline-secondary">Restore</button>
+            </div>
+            @if (IsRestoreMode)
+            {
+                <div class="dashboard-header__restore-panel mt-2">
+                    <label class="form-label small text-muted">Secret phrase or private key</label>
+                    <textarea value="@RestoreMnemonic" @oninput="OnRestoreMnemonicInput" class="form-control mb-2" aria-label="Secret phrase or private key"></textarea>
+                    <button @onclick="OnRestoreWallet" class="btn btn-primary w-100 mb-2">Recover</button>
+                    <button @onclick="OnCancelRestore" class="btn btn-sm btn-outline-secondary w-100">Cancel</button>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="dashboard-header__user">
+                <div class="text-end">
+                    <div class="fw-semibold text-warning">@UserName</div>
+                    <div class="small text-white-50 font-monospace" style="font-size: 0.7rem;">@ShortPublicKey</div>
+                </div>
+                <button @onclick="OnLogout" class="btn btn-outline-danger btn-sm">Sign Out</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool IsLoggedIn { get; set; }
+    [Parameter] public List<string> Projects { get; set; } = new();
+    [Parameter] public string CurrentProjectId { get; set; } = "System";
+    [Parameter] public string NewProjectName { get; set; } = "";
+    [Parameter] public string UserNameInput { get; set; } = "";
+    [Parameter] public bool IsRestoreMode { get; set; }
+    [Parameter] public string RestoreMnemonic { get; set; } = "";
+    [Parameter] public bool IsMining { get; set; }
+    [Parameter] public bool IsGenesisModeActive { get; set; }
+    [Parameter] public string UserName { get; set; } = "Guest";
+    [Parameter] public string? PublicKey { get; set; }
+
+    [Parameter] public EventCallback<ChangeEventArgs> OnProjectChanged { get; set; }
+    [Parameter] public EventCallback<string> NewProjectNameChanged { get; set; }
+    [Parameter] public EventCallback<string> UserNameInputChanged { get; set; }
+    [Parameter] public EventCallback<string> RestoreMnemonicChanged { get; set; }
+    [Parameter] public EventCallback OnCreateProject { get; set; }
+    [Parameter] public EventCallback OnCreateWallet { get; set; }
+    [Parameter] public EventCallback OnToggleRestore { get; set; }
+    [Parameter] public EventCallback OnRestoreWallet { get; set; }
+    [Parameter] public EventCallback OnCancelRestore { get; set; }
+    [Parameter] public EventCallback OnLogout { get; set; }
+
+    private string ShortPublicKey => string.IsNullOrWhiteSpace(PublicKey)
+        ? "No key"
+        : $"{PublicKey[..Math.Min(12, PublicKey.Length)]}...";
+
+    private Task OnNewProjectNameInput(ChangeEventArgs e) => NewProjectNameChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    private Task OnUserNameInput(ChangeEventArgs e) => UserNameInputChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    private Task OnRestoreMnemonicInput(ChangeEventArgs e) => RestoreMnemonicChanged.InvokeAsync(e.Value?.ToString() ?? "");
+}

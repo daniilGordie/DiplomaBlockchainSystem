@@ -1,10 +1,13 @@
-﻿@using Blockchain.UI.Models
+@using Blockchain.UI.Models
 
 <div class="row g-4">
     <div class="col-md-4">
-        <div class="glass-card h-100 p-3" style="background: rgba(30,30,35,0.6);">
-            <div class="d-flex justify-content-between align-items-center border-bottom border-secondary pb-2 mb-3">
-                <h5 class="text-white m-0">To Do</h5>
+        <div class="glass-card h-100 p-3 board-column">
+            <div class="board-column__header border-bottom border-secondary pb-2 mb-3">
+                <div>
+                    <h5 class="text-white m-0">To Do</h5>
+                    <p class="board-column__subtitle">Queued tasks waiting for execution.</p>
+                </div>
                 <span class="badge bg-secondary rounded-pill">@Tasks.Count(x => x.Status == ProjectTaskStatus.Todo)</span>
             </div>
 
@@ -15,72 +18,90 @@
                         <div class="d-flex justify-content-between align-items-start">
                             <div class="fw-bold text-white pe-4">@t.Title</div>
                             <div>
-                                <button class="btn btn-sm btn-link text-white-50 p-0 text-decoration-none me-2" style="font-size: 1.1rem; z-index: 10;" title="History" @onclick:stopPropagation="true" @onclick="() => OnShowHistory.InvokeAsync(t.Id)">🕒</button>
+                                <button class="btn btn-sm btn-link text-white-50 p-0 text-decoration-none me-2" title="History" @onclick:stopPropagation="true" @onclick="() => OnShowHistory.InvokeAsync(t.Id)">History</button>
                                 <span class="badge bg-dark border border-secondary text-white-50">@t.Id</span>
                             </div>
                         </div>
                         <div class="d-flex align-items-center gap-2 mt-2">
                             @if (!string.IsNullOrEmpty(t.BranchInfo))
                             {
-                                <span class="badge bg-info bg-opacity-25 text-info">🐙 @t.BranchInfo</span>
+                                <span class="badge bg-info bg-opacity-25 text-info">@t.BranchInfo</span>
                             }
                             <div class="small text-muted">Assignee: @(string.IsNullOrEmpty(t.Assignee) ? "None" : t.Assignee)</div>
                         </div>
                     </div>
                 }
-            </div>
-        </div>
-    </div>
-
-    <div class="col-md-4">
-        <div class="glass-card h-100 p-3" style="background: rgba(30,30,35,0.6);">
-            <div class="d-flex justify-content-between align-items-center border-bottom border-warning pb-2 mb-3">
-                <h5 class="text-white m-0">In Progress</h5>
-                <span class="badge bg-warning text-dark rounded-pill">@Tasks.Count(x => x.Status == ProjectTaskStatus.InProgress)</span>
-            </div>
-            <div class="task-list">
-                @foreach (var t in Tasks.Where(x => x.Status == ProjectTaskStatus.InProgress))
+                @if (!Tasks.Any(x => x.Status == ProjectTaskStatus.Todo))
                 {
-                    <div class="task-card p-3 rounded mb-3 position-relative border-warning" style="border-left: 3px solid #ffc107;" @onclick="() => OnTaskClick.InvokeAsync(t)">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <div class="fw-bold text-white pe-4">@t.Title</div>
-                            <div>
-                                <button class="btn btn-sm btn-link text-white-50 p-0 text-decoration-none me-2" style="font-size: 1.1rem; z-index: 10;" title="History" @onclick:stopPropagation="true" @onclick="() => OnShowHistory.InvokeAsync(t.Id)">🕒</button>
-                                <span class="badge bg-dark border border-secondary text-white-50">@t.Id</span>
-                            </div>
-                        </div>
-                        <div class="d-flex align-items-center gap-2 mt-2">
-                            @if (!string.IsNullOrEmpty(t.BranchInfo))
-                            {
-                                <span class="badge bg-info bg-opacity-25 text-info">🐙 @t.BranchInfo</span>
-                            }
-                            <div class="small text-warning">⚡ @t.Assignee</div>
-                        </div>
-                    </div>
+                    <div class="board-column__empty">No queued tasks. Create the next work item.</div>
                 }
             </div>
         </div>
     </div>
 
     <div class="col-md-4">
-        <div class="glass-card h-100 p-3" style="background: rgba(30,30,35,0.6);">
-            <div class="d-flex justify-content-between align-items-center border-bottom border-success pb-2 mb-3">
-                <h5 class="text-white m-0">Done</h5>
+        <div class="glass-card h-100 p-3 board-column">
+            <div class="board-column__header border-bottom border-warning pb-2 mb-3">
+                <div>
+                    <h5 class="text-white m-0">In Progress</h5>
+                    <p class="board-column__subtitle">Active blockchain-anchored delivery.</p>
+                </div>
+                <span class="badge bg-warning text-dark rounded-pill">@Tasks.Count(x => x.Status == ProjectTaskStatus.InProgress)</span>
+            </div>
+            <div class="task-list">
+                @foreach (var t in Tasks.Where(x => x.Status == ProjectTaskStatus.InProgress))
+                {
+                    <div class="task-card p-3 rounded mb-3 position-relative border-warning" @onclick="() => OnTaskClick.InvokeAsync(t)">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="fw-bold text-white pe-4">@t.Title</div>
+                            <div>
+                                <button class="btn btn-sm btn-link text-white-50 p-0 text-decoration-none me-2" title="History" @onclick:stopPropagation="true" @onclick="() => OnShowHistory.InvokeAsync(t.Id)">History</button>
+                                <span class="badge bg-dark border border-secondary text-white-50">@t.Id</span>
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 mt-2">
+                            @if (!string.IsNullOrEmpty(t.BranchInfo))
+                            {
+                                <span class="badge bg-info bg-opacity-25 text-info">@t.BranchInfo</span>
+                            }
+                            <div class="small text-warning">Assignee: @(string.IsNullOrEmpty(t.Assignee) ? "Unassigned" : t.Assignee)</div>
+                        </div>
+                    </div>
+                }
+                @if (!Tasks.Any(x => x.Status == ProjectTaskStatus.InProgress))
+                {
+                    <div class="board-column__empty">Nothing is in progress yet.</div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="glass-card h-100 p-3 board-column">
+            <div class="board-column__header border-bottom border-success pb-2 mb-3">
+                <div>
+                    <h5 class="text-white m-0">Done</h5>
+                    <p class="board-column__subtitle">Verified and completed work items.</p>
+                </div>
                 <span class="badge bg-success rounded-pill">@Tasks.Count(x => x.Status == ProjectTaskStatus.Done)</span>
             </div>
             <div class="task-list">
                 @foreach (var t in Tasks.Where(x => x.Status == ProjectTaskStatus.Done))
                 {
-                    <div class="task-card p-3 rounded mb-3 opacity-75 position-relative border-success" style="border-left: 3px solid #198754;" @onclick="() => OnTaskClick.InvokeAsync(t)">
+                    <div class="task-card p-3 rounded mb-3 opacity-75 position-relative border-success" @onclick="() => OnTaskClick.InvokeAsync(t)">
                         <div class="d-flex justify-content-between align-items-start">
                             <div class="fw-bold text-decoration-line-through text-white-50 pe-4">@t.Title</div>
                             <div>
-                                <button class="btn btn-sm btn-link text-white-50 p-0 text-decoration-none me-2" style="font-size: 1.1rem; z-index: 10;" title="History" @onclick:stopPropagation="true" @onclick="() => OnShowHistory.InvokeAsync(t.Id)">🕒</button>
+                                <button class="btn btn-sm btn-link text-white-50 p-0 text-decoration-none me-2" title="History" @onclick:stopPropagation="true" @onclick="() => OnShowHistory.InvokeAsync(t.Id)">History</button>
                                 <span class="badge bg-dark border border-secondary text-white-50">@t.Id</span>
                             </div>
                         </div>
-                        <div class="small text-success mt-2">✔ Completed by @t.Assignee</div>
+                        <div class="small text-success mt-2">Completed by @(string.IsNullOrEmpty(t.Assignee) ? "Unknown" : t.Assignee)</div>
                     </div>
+                }
+                @if (!Tasks.Any(x => x.Status == ProjectTaskStatus.Done))
+                {
+                    <div class="board-column__empty">Completed items will appear here.</div>
                 }
             </div>
         </div>
