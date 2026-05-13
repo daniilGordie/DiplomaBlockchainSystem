@@ -147,6 +147,12 @@ namespace Blockchain.Core.Contracts
                         Console.WriteLine("[SmartContract] Governance denied: proposal id is required.");
                         return false;
                     }
+
+                    if (evt.Type == "CastVote" && string.IsNullOrWhiteSpace(db.GetProposalCreator(evt.ProposalId)))
+                    {
+                        Console.WriteLine("[SmartContract] Governance denied: proposal not found.");
+                        return false;
+                    }
                 }
 
                 Console.WriteLine("[SmartContract Debug] Contract successfully verified.");
@@ -195,7 +201,7 @@ namespace Blockchain.Core.Contracts
                 string source = root.TryGetProperty("Source", out var sourceProp) ? sourceProp.GetString() ?? "" : "";
 
                 return (type == "CodeCommit" || type == "Register") &&
-                       (source == "GitHub" || source == "ArtifactRegistry");
+                       (source == "GitEvent" || source == "GitHub" || source == "ArtifactRegistry");
             }
             catch
             {

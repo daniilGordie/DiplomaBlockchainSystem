@@ -1,5 +1,3 @@
-@using Blockchain.UI.Services
-
 <div class="dashboard-header glass-panel">
     <div class="dashboard-header__brand">
         <div class="brand-mark">N</div>
@@ -21,9 +19,32 @@
             @if (Projects.Count > 0)
             {
                 <select class="form-select form-select-sm dashboard-header__project-select" @onchange="OnProjectChanged" value="@CurrentProjectId" aria-label="Project">
-                    @foreach (var p in Projects)
+                    @if (OwnedProjects.Count > 0)
                     {
-                        <option value="@p">@p</option>
+                        <optgroup label="Created by you">
+                            @foreach (var p in OwnedProjects)
+                            {
+                                <option value="@p">@GetProjectOptionLabel(p)</option>
+                            }
+                        </optgroup>
+                    }
+
+                    @if (SharedProjects.Count > 0)
+                    {
+                        <optgroup label="Shared with you">
+                            @foreach (var p in SharedProjects)
+                            {
+                                <option value="@p">@GetProjectOptionLabel(p)</option>
+                            }
+                        </optgroup>
+                    }
+
+                    @if (OwnedProjects.Count == 0 && SharedProjects.Count == 0)
+                    {
+                        @foreach (var p in Projects)
+                        {
+                            <option value="@p">@GetProjectOptionLabel(p)</option>
+                        }
                     }
                 </select>
             }
@@ -34,7 +55,7 @@
 
             <div class="input-group input-group-sm dashboard-header__project-create">
                 <span class="input-group-text">New project</span>
-                <input value="@NewProjectName" @oninput="OnNewProjectNameInput" class="form-control" aria-label="New project name" />
+                <input value="@NewProjectName" @oninput="OnNewProjectNameInput" class="form-control" placeholder="Enter project name" aria-label="New project name" />
                 <button class="btn btn-primary fw-semibold" @onclick="OnCreateProject" disabled="@IsMining">Create</button>
             </div>
         </div>
@@ -45,7 +66,7 @@
         {
             <div class="input-group input-group-sm dashboard-header__auth-group">
                 <span class="input-group-text">User</span>
-                <input value="@UserNameInput" @oninput="OnUserNameInput" class="form-control" aria-label="User name" />
+                <input value="@UserNameInput" @oninput="OnUserNameInput" class="form-control" placeholder="Enter user name" aria-label="User name" />
                 <button @onclick="OnCreateWallet" class="btn btn-primary fw-semibold">Create Wallet</button>
                 <button @onclick="OnToggleRestore" class="btn btn-outline-secondary">Restore</button>
             </div>
@@ -53,7 +74,11 @@
             {
                 <div class="dashboard-header__restore-panel mt-2">
                     <label class="form-label small text-muted">Secret phrase or private key</label>
-                    <textarea value="@RestoreMnemonic" @oninput="OnRestoreMnemonicInput" class="form-control mb-2" aria-label="Secret phrase or private key"></textarea>
+                    <textarea value="@RestoreMnemonic"
+                              @oninput="OnRestoreMnemonicInput"
+                              class="form-control mb-2"
+                              placeholder="Enter your recovery phrase or private key"
+                              aria-label="Secret phrase or private key"></textarea>
                     <button @onclick="OnRestoreWallet" class="btn btn-primary w-100 mb-2">Recover</button>
                     <button @onclick="OnCancelRestore" class="btn btn-sm btn-outline-secondary w-100">Cancel</button>
                 </div>
@@ -63,9 +88,10 @@
         {
             <div class="dashboard-header__user">
                 <div class="text-end">
-                    <div class="fw-semibold text-warning">@UserName</div>
-                    <div class="small text-white-50 font-monospace" style="font-size: 0.7rem;">@ShortPublicKey</div>
+                    <div class="fw-semibold text-warning" title="@DisplayUserName">@DisplayUserName</div>
+                    <div class="small text-white-50 font-monospace" style="font-size: 0.72rem;" title="@DisplayPublicKey">@ShortPublicKey</div>
                 </div>
+                <button class="btn btn-outline-secondary btn-sm" @onclick="OnCopyPublicKey" disabled="@string.IsNullOrWhiteSpace(PublicKey)">Copy Key</button>
                 <button @onclick="OnLogout" class="btn btn-outline-danger btn-sm">Sign Out</button>
             </div>
         }
@@ -75,6 +101,9 @@
 @code {
     [Parameter] public bool IsLoggedIn { get; set; }
     [Parameter] public List<string> Projects { get; set; } = new();
+    [Parameter] public List<string> OwnedProjects { get; set; } = new();
+    [Parameter] public List<string> SharedProjects { get; set; } = new();
+    [Parameter] public Dictionary<string, string> ProjectRoles { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [Parameter] public string CurrentProjectId { get; set; } = "System";
     [Parameter] public string NewProjectName { get; set; } = "";
     [Parameter] public string UserNameInput { get; set; } = "";
@@ -94,11 +123,26 @@
     [Parameter] public EventCallback OnToggleRestore { get; set; }
     [Parameter] public EventCallback OnRestoreWallet { get; set; }
     [Parameter] public EventCallback OnCancelRestore { get; set; }
+    [Parameter] public EventCallback OnCopyPublicKey { get; set; }
     [Parameter] public EventCallback OnLogout { get; set; }
 
+    private string DisplayUserName => string.IsNullOrWhiteSpace(UserName) ? "Unknown user" : UserName;
+    private string DisplayPublicKey => string.IsNullOrWhiteSpace(PublicKey) ? "Public key unavailable" : PublicKey;
     private string ShortPublicKey => string.IsNullOrWhiteSpace(PublicKey)
-        ? "No key"
-        : $"{PublicKey[..Math.Min(12, PublicKey.Length)]}...";
+        ? "Public key unavailable"
+        : PublicKey.Length <= 26
+            ? PublicKey
+            : $"{PublicKey[..14]}...{PublicKey[^10..]}";
+
+    private string GetProjectOptionLabel(string projectId)
+    {
+        if (!ProjectRoles.TryGetValue(projectId, out var role) || string.IsNullOrWhiteSpace(role))
+        {
+            return projectId;
+        }
+
+        return $"{projectId} ({role})";
+    }
 
     private Task OnNewProjectNameInput(ChangeEventArgs e) => NewProjectNameChanged.InvokeAsync(e.Value?.ToString() ?? "");
     private Task OnUserNameInput(ChangeEventArgs e) => UserNameInputChanged.InvokeAsync(e.Value?.ToString() ?? "");

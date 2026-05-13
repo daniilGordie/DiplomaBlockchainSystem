@@ -3,20 +3,20 @@
         <div>
             <div class="d-flex align-items-center gap-2 mb-1">
                 <h5 class="mb-0 text-white fw-semibold">P2P Network</h5>
-                <span class="badge bg-info">Current node: @CurrentNodeUrl</span>
+                <span class="badge bg-info">Current node: @CurrentNodeLabel</span>
             </div>
-            <div class="text-muted small">@ConnectionStatus</div>
+            <div class="text-muted small">@ConnectionStatusLabel</div>
         </div>
 
         <button class="btn btn-outline-secondary btn-sm" @onclick="OnRefreshPeers" disabled="@IsBusy">Refresh Peers</button>
     </div>
 
-    <div class="row g-3 mt-2">
+    <div class="row g-4 mt-2">
         <div class="col-lg-6">
             <label class="form-label text-white-50">Connect UI to node</label>
-            <div class="input-group">
+            <div class="input-group network-panel__group">
                 <span class="input-group-text">Node URL</span>
-                <input value="@NodeUrlInput" @oninput="OnNodeUrlInput" class="form-control" aria-label="Node URL" />
+                <input value="@NodeUrlInput" @oninput="OnNodeUrlInput" class="form-control" placeholder="Enter node URL" aria-label="Node URL" />
                 <button class="btn btn-primary fw-semibold" @onclick="OnConnectNode" disabled="@IsBusy">Connect</button>
             </div>
             <div class="form-text text-muted">Use this to switch the browser client between local nodes.</div>
@@ -24,9 +24,9 @@
 
         <div class="col-lg-6">
             <label class="form-label text-white-50">Add peer to current node</label>
-            <div class="input-group">
+            <div class="input-group network-panel__group">
                 <span class="input-group-text">Peer URL</span>
-                <input value="@PeerUrlInput" @oninput="OnPeerUrlInput" class="form-control" aria-label="Peer URL" />
+                <input value="@PeerUrlInput" @oninput="OnPeerUrlInput" class="form-control" placeholder="Enter peer URL" aria-label="Peer URL" />
                 <button class="btn btn-primary fw-semibold" @onclick="OnAddPeer" disabled="@IsBusy">Add Peer</button>
             </div>
             <div class="form-text text-muted">Add the other node here, then repeat from the other node for two-way sync.</div>
@@ -64,6 +64,9 @@
     [Parameter] public EventCallback OnConnectNode { get; set; }
     [Parameter] public EventCallback OnAddPeer { get; set; }
     [Parameter] public EventCallback OnRefreshPeers { get; set; }
+
+    private string CurrentNodeLabel => string.IsNullOrWhiteSpace(CurrentNodeUrl) ? "Not connected" : CurrentNodeUrl;
+    private string ConnectionStatusLabel => string.IsNullOrWhiteSpace(ConnectionStatus) ? "Connection status unavailable." : ConnectionStatus;
 
     private Task OnNodeUrlInput(ChangeEventArgs e) => NodeUrlInputChanged.InvokeAsync(e.Value?.ToString() ?? "");
     private Task OnPeerUrlInput(ChangeEventArgs e) => PeerUrlInputChanged.InvokeAsync(e.Value?.ToString() ?? "");

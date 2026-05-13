@@ -45,6 +45,8 @@ namespace Blockchain.UI.Models
         public string Author { get; set; } = "";
         public string Message { get; set; } = "";
         public string PatchCid { get; set; } = "";
+        public string Provider { get; set; } = "";
+        public string Branch { get; set; } = "";
     }
 
     public class ArtifactPayloadUI
@@ -66,6 +68,15 @@ namespace Blockchain.UI.Models
         public string Status { get; set; } = "Not checked";
         public string Endpoint { get; set; } = "";
         public string Details { get; set; } = "";
+        public string Source { get; set; } = "";
+        public List<string> Providers { get; set; } = new();
+        public List<GitRepositoryBindingUI> RepositoryBindings { get; set; } = new();
+    }
+
+    public class GitRepositoryBindingUI
+    {
+        public string Repository { get; set; } = "";
+        public string ProjectId { get; set; } = "";
     }
 
     public class AuditTrailEntry

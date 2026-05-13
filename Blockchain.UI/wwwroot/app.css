@@ -187,6 +187,20 @@ a {
     color: var(--azdo-text) !important;
 }
 
+.form-control::placeholder,
+textarea::placeholder,
+input::placeholder {
+    color: #8a95a3 !important;
+    opacity: 1;
+    transition: color 0.12s ease;
+}
+
+input:focus::placeholder,
+textarea:focus::placeholder,
+.form-control:focus::placeholder {
+    color: transparent !important;
+}
+
 .form-control:focus,
 .form-select:focus {
     border-color: var(--azdo-blue) !important;
@@ -260,7 +274,8 @@ a {
 
 .dashboard-header__project-tools {
     flex-wrap: wrap;
-    justify-content: center;
+    justify-content: flex-start;
+    gap: 0.85rem;
 }
 
 .dashboard-header__project-select {
@@ -271,9 +286,32 @@ a {
     min-width: 280px;
 }
 
+.dashboard-header__project-create,
+.dashboard-header__auth-group {
+    gap: 0.55rem;
+}
+
+.dashboard-header__project-create > :not(:first-child),
+.dashboard-header__auth-group > :not(:first-child) {
+    margin-left: 0 !important;
+}
+
+.dashboard-header__project-create .form-control {
+    min-width: 210px;
+}
+
+.dashboard-header__auth-group .form-control {
+    min-width: 160px;
+}
+
 .dashboard-header__identity {
     justify-content: flex-end;
     position: relative;
+}
+
+.dashboard-header__user {
+    gap: 0.6rem;
+    flex-wrap: wrap;
 }
 
 .dashboard-header__auth-group {
@@ -291,6 +329,17 @@ a {
     top: 100%;
     width: 320px;
     z-index: 50;
+}
+
+.network-panel__group {
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.network-panel__group .input-group-text,
+.network-panel__group .form-control,
+.network-panel__group .btn {
+    border-radius: 8px !important;
 }
 
 .workspace-overview {
@@ -706,11 +755,20 @@ code,
         justify-content: stretch;
     }
 
+    .dashboard-header__user {
+        justify-content: flex-start;
+    }
+
     .dashboard-header__auth-group,
     .dashboard-header__project-create,
     .dashboard-header__project-select {
         min-width: 0;
         width: 100%;
+    }
+
+    .dashboard-header__project-create .form-control,
+    .dashboard-header__auth-group .form-control {
+        min-width: 0;
     }
 
     .workspace-overview__stats {

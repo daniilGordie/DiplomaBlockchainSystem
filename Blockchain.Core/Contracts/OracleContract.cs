@@ -14,7 +14,8 @@ namespace Blockchain.Core.Contracts
             try
             {
                 // Oracle signature is required only for trusted external feeds.
-                bool isOracleEvent = data.Contains("\"Source\":\"GitHub\"") ||
+                bool isOracleEvent = data.Contains("\"Source\":\"GitEvent\"") ||
+                                     data.Contains("\"Source\":\"GitHub\"") ||
                                      data.Contains("\"Source\":\"ArtifactRegistry\"");
 
                 if (isOracleEvent)
@@ -33,7 +34,9 @@ namespace Blockchain.Core.Contracts
 
                     using var doc = JsonDocument.Parse(data);
 
-                    if (data.Contains("\"Type\":\"CodeCommit\"") || data.Contains("\"Source\":\"GitHub\""))
+                    if (data.Contains("\"Type\":\"CodeCommit\"") ||
+                        data.Contains("\"Source\":\"GitEvent\"") ||
+                        data.Contains("\"Source\":\"GitHub\""))
                     {
                         if (!doc.RootElement.TryGetProperty("CommitHash", out var hash)) return false;
                         return !string.IsNullOrEmpty(hash.GetString());

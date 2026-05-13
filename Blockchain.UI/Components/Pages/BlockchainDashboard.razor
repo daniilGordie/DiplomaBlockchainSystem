@@ -22,15 +22,18 @@
 <div class="dashboard-container">
     <DashboardHeader IsLoggedIn="MyKeyService.IsLoggedIn"
                      Projects="myProjects"
-                     CurrentProjectId="CurrentProjectId"
-                     NewProjectName="newProjectName"
-                     UserNameInput="userNameInput"
+                     OwnedProjects="ownedProjects"
+                     SharedProjects="sharedProjects"
+                     ProjectRoles="projectRoles"
+                     CurrentProjectId="@CurrentProjectId"
+                     NewProjectName="@newProjectName"
+                     UserNameInput="@userNameInput"
                      IsRestoreMode="isRestoreMode"
-                     RestoreMnemonic="restoreMnemonic"
+                     RestoreMnemonic="@restoreMnemonic"
                      IsMining="isMining"
                      IsGenesisModeActive="isGenesisModeActive"
-                     UserName="MyKeyService.UserName"
-                     PublicKey="MyKeyService.PublicKey"
+                     UserName="@MyKeyService.UserName"
+                     PublicKey="@MyKeyService.PublicKey"
                      OnProjectChanged="OnProjectChanged"
                      NewProjectNameChanged="OnNewProjectNameChanged"
                      UserNameInputChanged="OnUserNameInputChanged"
@@ -40,19 +43,20 @@
                      OnToggleRestore="RestoreMode"
                      OnRestoreWallet="RestoreWallet"
                      OnCancelRestore="CancelRestoreMode"
+                     OnCopyPublicKey="CopyMyPublicKey"
                      OnLogout="Logout" />
 
     @if (MyKeyService.IsLoggedIn && !string.IsNullOrEmpty(MyKeyService.CurrentMnemonic))
     {
         <div class="alert alert-danger mb-4 d-flex justify-content-between align-items-center gap-3">
             <div><strong>Secret phrase:</strong> <span class="font-monospace ms-2 px-2 rounded">@MyKeyService.CurrentMnemonic</span></div>
-            <button class="btn btn-sm btn-outline-secondary" @onclick="DismissMnemonic">I Saved It</button>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="CopySecretPhraseToClipboard">@MnemonicCopyButtonText</button>
         </div>
     }
 
     <WalletSaveModal IsOpen="showPasswordEntry"
-                     Password="newUserPassword ?? string.Empty"
-                     Message="passkeyModalMessage"
+                     Password="@(newUserPassword ?? string.Empty)"
+                     Message="@passkeyModalMessage"
                      PasswordChanged="OnNewUserPasswordChanged"
                      OnDownloadWithPassword="DownloadAndFinishRegistration"
                      OnDownloadWithPasskey="DownloadWithPasskeyAndFinishRegistration" />
@@ -70,7 +74,10 @@
                     <span class="workspace-pill @(CanCreateTask ? "workspace-pill--ready" : "workspace-pill--warn")">
                         @(CanCreateTask ? $"Project {CurrentProjectId}" : "Project not selected")
                     </span>
-                    <span class="workspace-pill">User @MyKeyService.UserName</span>
+                    <span class="workspace-pill">User @(string.IsNullOrWhiteSpace(MyKeyService.UserName) ? "Unknown user" : MyKeyService.UserName)</span>
+                    <span class="workspace-pill">Role @CurrentUserRoleLabel</span>
+                    <span class="workspace-pill">Created @ownedProjects.Count</span>
+                    <span class="workspace-pill">Shared @sharedProjects.Count</span>
                     @if (!string.IsNullOrWhiteSpace(MyKeyService.PublicKey))
                     {
                         <span class="workspace-pill">Key @ComputePublicKeyFingerprint(MyKeyService.PublicKey).Substring(0, 12)</span>
@@ -151,49 +158,49 @@
 
             @if (activeTab == ActiveTab.Team)
             {
-                <TeamTab CurrentProjectId="CurrentProjectId"
-                         NewMemberName="newMemberName"
-                         NewMemberRole="newMemberRole"
-                         NewMemberPublicKey="newMemberPublicKey"
-                         NewMemberPublicKeyFingerprint="newMemberPublicKeyFingerprint"
-                         TargetTransferUser="targetTransferUser"
-                         TransferAmount="transferAmount"
+                <TeamTab CurrentProjectId="@CurrentProjectId"
+                         NewMemberName="@newMemberName"
+                         NewMemberRole="@newMemberRole"
+                         NewMemberPublicKey="@newMemberPublicKey"
+                         NewMemberPublicKeyFingerprint="@newMemberPublicKeyFingerprint"
                          IsMining="isMining"
-                         IsLoggedIn="MyKeyService.IsLoggedIn"
+                         CurrentUserRole="@CurrentUserRoleLabel"
+                         CanManageMembers="CanManageMembers"
                          NewMemberNameChanged="OnNewMemberNameChanged"
                          NewMemberRoleChanged="OnNewMemberRoleChanged"
                          NewMemberPublicKeyChanged="OnNewMemberPublicKeyChanged"
                          NewMemberPublicKeyFingerprintChanged="OnNewMemberPublicKeyFingerprintChanged"
-                         TargetTransferUserChanged="OnTargetTransferUserChanged"
-                         TransferAmountChanged="OnTransferAmountChanged"
-                         OnInviteMember="InviteMember"
-                         OnTransferTokens="TransferTokens" />
+                         OnInviteMember="InviteMember" />
             }
 
             @if (activeTab == ActiveTab.Governance)
             {
-                <GovernanceTab CurrentProjectId="CurrentProjectId"
-                               NewProposalTitle="newProposalTitle"
-                               NewProposalDescription="newProposalDescription"
+                <GovernanceTab CurrentProjectId="@CurrentProjectId"
+                               CurrentUserName="@(MyKeyService.UserName ?? string.Empty)"
+                               NewProposalTitle="@newProposalTitle"
+                               NewProposalDescription="@newProposalDescription"
                                IsMining="isMining"
                                CanUseGovernance="CanCreateTask"
+                               CanCreateTaskFromAccepted="IsCurrentUserOwner"
+                               ImplementedProposalIds="implementedProposalIds"
                                Proposals="governanceProposals"
                                NewProposalTitleChanged="OnNewProposalTitleChanged"
                                NewProposalDescriptionChanged="OnNewProposalDescriptionChanged"
                                OnCreateProposal="CreateProposal"
-                               OnVote="CastVote" />
+                               OnVote="CastVote"
+                               OnCreateTaskFromProposal="CreateTaskFromProposal" />
             }
 
             @if (activeTab == ActiveTab.Documents)
             {
-                <DocumentsTab CurrentProjectId="CurrentProjectId"
+                <DocumentsTab CurrentProjectId="@CurrentProjectId"
                               CanEdit="CanCreateTask"
                               IsMining="isMining"
                               Documents="documents"
                               Versions="documentVersions"
-                              SelectedDocumentId="selectedDocumentId"
-                              DocumentTitle="documentTitle"
-                              DocumentContent="documentContent"
+                              SelectedDocumentId="@selectedDocumentId"
+                              DocumentTitle="@documentTitle"
+                              DocumentContent="@documentContent"
                               DocumentTitleChanged="OnDocumentTitleChanged"
                               DocumentContentChanged="OnDocumentContentChanged"
                               OnSelectDocument="SelectDocument"
@@ -203,12 +210,13 @@
 
             @if (activeTab == ActiveTab.Artifacts)
             {
-                <ArtifactsTab CurrentProjectId="CurrentProjectId"
+                <ArtifactsTab CurrentProjectId="@CurrentProjectId"
                               IsUploading="isUploading"
                               IsLoggedIn="MyKeyService.IsLoggedIn"
-                              StatusMessage="statusMessage"
-                              IpfsGatewayUrl="IpfsGatewayUrl"
+                              StatusMessage="@statusMessage"
+                              IpfsGatewayUrl="@IpfsGatewayUrl"
                               Artifacts="Artifacts"
+                              Commits="Commits"
                               GitStatus="gitIntegrationStatus"
                               IpfsStatus="ipfsIntegrationStatus"
                               OnUploadFile="HandleFileUpload" />
@@ -217,16 +225,16 @@
             {
                 <AnalyticsTab Data="analyticsData"
                               Audit="securityAudit"
-                              CurrentUserName="MyKeyService.UserName"
+                              CurrentUserName="@MyKeyService.UserName"
                               AuditTrail="auditTrail" />
             }
             @if (activeTab == ActiveTab.Network)
             {
-                <PeerNetworkPanel CurrentNodeUrl="currentNodeUrl"
-                                  NodeUrlInput="nodeUrlInput"
-                                  PeerUrlInput="peerUrlInput"
+                <PeerNetworkPanel CurrentNodeUrl="@currentNodeUrl"
+                                  NodeUrlInput="@nodeUrlInput"
+                                  PeerUrlInput="@peerUrlInput"
                                   Peers="peerUrls"
-                                  ConnectionStatus="nodeConnectionStatus"
+                                  ConnectionStatus="@nodeConnectionStatus"
                                   IsBusy="isPeerPanelBusy"
                                   NodeUrlInputChanged="OnNodeUrlInputChanged"
                                   PeerUrlInputChanged="OnPeerUrlInputChanged"
@@ -262,6 +270,7 @@
     <IssueModal @bind-IsOpen="isIssueModalOpen"
                 IsNewTask="isNewTask"
                 TaskModel="editingTask"
+                ProjectMembers="projectMembers"
                 OnSaveWithCredentials="HandleTaskSigningAndMining" />
 
     @if (viewingHistory != null)

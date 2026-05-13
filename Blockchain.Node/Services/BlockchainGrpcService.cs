@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -435,6 +435,8 @@ namespace Blockchain.Node.Services
 
             try
             {
+                db.RefreshGovernanceStates(projectId);
+
                 using var conn = new SqliteConnection(DbConnectionString);
                 conn.Open();
                 using var cmd = conn.CreateCommand();

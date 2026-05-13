@@ -2,9 +2,11 @@
 
 This project uses a one-way trusted oracle flow for source-code anchoring:
 
-`git commit -> local post-commit hook -> signed Node webhook -> oracle-signed CodeCommit block -> P2P broadcast -> UI repository and audit trail`
+`git commit or provider push event -> signed Node webhook -> normalized GitEvent -> oracle-signed CodeCommit block -> P2P broadcast -> UI repository and audit trail`
 
-The UI does not sign Git commits automatically. The Node webhook validates the HMAC signature, rejects replayed commits, creates a `CodeCommit` payload, signs it with the configured oracle identity, and anchors it into the project blockchain channel.
+The UI does not sign Git commits automatically. The Node webhook validates the HMAC signature, rejects replayed commits, normalizes provider-specific payloads into a `Source = GitEvent` / `Type = CodeCommit` payload, signs it with the configured oracle identity, and anchors it into the project blockchain channel.
+
+GitHub is treated as an event provider only. Blockchain contracts validate the normalized `GitEvent` shape and oracle signature, not a hard dependency on GitHub.
 
 ## Prerequisites
 
@@ -45,6 +47,24 @@ Run this from the repository root. Use an existing project id from the UI.
 
 The script writes `.git/hooks/post-commit`. The hook runs `BlockChain.GitHook` after each local commit, computes a signed webhook request, and sends the commit metadata to the selected node.
 
+## GitHub Push Provider
+
+The same endpoint can receive GitHub `push` webhooks when they are signed with the configured `WebhookSecret`.
+
+Use:
+- Payload URL: `https://<node-public-url>/api/webhooks/git?projectId=<ProjectId>`
+- Content type: `application/json`
+- Secret: same value as `Blockchain.Node:WebhookSecret`
+- Event: `push`
+
+Node reads `repository.full_name`, `head_commit.id`, `head_commit.message`, and the commit author, then stores the blockchain payload as `Source = GitEvent` and `Provider = GitHubPush`.
+
+Repository binding policy:
+- Node enforces `1 repository <-> 1 project`.
+- First valid commit creates the binding automatically.
+- If the same repository sends another project id later, Node rejects the webhook.
+- If one project id is already bound to another repository, Node rejects the webhook.
+
 ## Verify
 
 1. Create or select a project in the UI.
@@ -58,6 +78,7 @@ The script writes `.git/hooks/post-commit`. The hook runs `BlockChain.GitHook` a
    - block hash;
    - channel id;
    - verification status.
+6. Check `GET /api/integrations/git/status` for `bindings` and `defaultProjectId` to confirm mapping.
 
 ## Health Endpoints
 

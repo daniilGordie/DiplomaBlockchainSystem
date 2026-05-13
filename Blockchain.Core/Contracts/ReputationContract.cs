@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Text.Json;
 using Blockchain.Core;
+using Blockchain.Core.Constants;
 
 namespace Blockchain.Core.Contracts
 {
@@ -17,8 +18,11 @@ namespace Blockchain.Core.Contracts
                 var evt = JsonSerializer.Deserialize<ContractTaskEvent>(data);
                 if (evt == null) return false;
 
+                bool isTrustedOracleFeed = IsTrustedOracleFeed(data, senderPublicKey);
                 string? expectedPublicKey = db.GetUserPublicKey(evt.User);
-                if (!string.IsNullOrEmpty(expectedPublicKey) && expectedPublicKey != senderPublicKey)
+                if (!isTrustedOracleFeed &&
+                    !string.IsNullOrEmpty(expectedPublicKey) &&
+                    expectedPublicKey != senderPublicKey)
                 {
                     Console.WriteLine($"[SmartContract] Identity spoofing detected! User: {evt.User}");
                     return false;
@@ -47,6 +51,30 @@ namespace Blockchain.Core.Contracts
                 return true;
             }
             catch { return false; }
+        }
+
+        private static bool IsTrustedOracleFeed(string data, string senderPublicKey)
+        {
+            if (string.IsNullOrWhiteSpace(NetworkParameters.TrustedOraclePublicKey) ||
+                senderPublicKey != NetworkParameters.TrustedOraclePublicKey)
+            {
+                return false;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(data);
+                var root = doc.RootElement;
+                string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
+                string source = root.TryGetProperty("Source", out var sourceProp) ? sourceProp.GetString() ?? "" : "";
+
+                return (type == "CodeCommit" || type == "Register") &&
+                       (source == "GitEvent" || source == "GitHub" || source == "ArtifactRegistry");
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }

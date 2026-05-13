@@ -1,6 +1,7 @@
-﻿using Microsoft.Data.Sqlite;
+using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -472,7 +473,10 @@ using System.Text.Json;
                     string projectId = GetStringSafe(root, "ProjectId", "System");
                     string title = GetStringSafe(root, "Title", "Untitled proposal");
                     string description = GetStringSafe(root, "Description");
-                    string createdAt = GetStringSafe(root, "Timestamp", DateTime.UtcNow.ToString("O"));
+                    string createdAtRaw = GetStringSafe(root, "Timestamp", DateTime.UtcNow.ToString("O"));
+                    string createdAt = DateTime.TryParse(createdAtRaw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsedCreatedAt)
+                        ? parsedCreatedAt.ToUniversalTime().ToString("O")
+                        : DateTime.UtcNow.ToString("O");
 
                     if (!string.IsNullOrWhiteSpace(proposalId) && projectId != "System")
                     {
@@ -500,6 +504,19 @@ using System.Text.Json;
 
                     if (!string.IsNullOrWhiteSpace(proposalId) && !string.IsNullOrWhiteSpace(sender))
                     {
+                        var proposalMeta = GetProposalMetaInternal(conn, tx, proposalId);
+                        if (proposalMeta == null)
+                        {
+                            return;
+                        }
+
+                        if (!string.Equals(proposalMeta.Value.Status, "Open", StringComparison.OrdinalIgnoreCase) ||
+                            IsVotingClosed(proposalMeta.Value.CreatedAt))
+                        {
+                            RecalculateProposalVoteState(conn, tx, proposalId);
+                            return;
+                        }
+
                         var cmdVote = conn.CreateCommand();
                         cmdVote.Transaction = tx;
                         cmdVote.CommandText = @"
@@ -517,19 +534,17 @@ using System.Text.Json;
 
             private void RecalculateProposalVoteState(SqliteConnection conn, SqliteTransaction tx, string proposalId)
             {
-                var cmdProject = conn.CreateCommand();
-                cmdProject.Transaction = tx;
-                cmdProject.CommandText = "SELECT ProjectId FROM GovernanceProposals WHERE ProposalId = $proposal";
-                cmdProject.Parameters.AddWithValue("$proposal", proposalId);
-                string? projectId = cmdProject.ExecuteScalar()?.ToString();
-                if (string.IsNullOrWhiteSpace(projectId)) return;
+                var proposalMeta = GetProposalMetaInternal(conn, tx, proposalId);
+                if (proposalMeta == null) return;
+
+                string projectId = proposalMeta.Value.ProjectId;
+                bool votingClosed = IsVotingClosed(proposalMeta.Value.CreatedAt);
 
                 var cmdMembers = conn.CreateCommand();
                 cmdMembers.Transaction = tx;
                 cmdMembers.CommandText = "SELECT COUNT(1) FROM ProjectMembers WHERE ProjectId = $project";
                 cmdMembers.Parameters.AddWithValue("$project", projectId);
-                int memberCount = Convert.ToInt32(cmdMembers.ExecuteScalar());
-                int quorum = Math.Max(1, (memberCount / 2) + (memberCount % 2));
+                int eligibleVoterCount = Convert.ToInt32(cmdMembers.ExecuteScalar());
 
                 var cmdCounts = conn.CreateCommand();
                 cmdCounts.Transaction = tx;
@@ -552,7 +567,14 @@ using System.Text.Json;
                     }
                 }
 
-                string status = yesVotes >= quorum ? "Accepted" : (noVotes >= quorum ? "Rejected" : "Open");
+                string status = "Open";
+                int totalVotes = yesVotes + noVotes;
+                bool allMembersVoted = eligibleVoterCount > 0 && totalVotes >= eligibleVoterCount;
+                if (votingClosed || allMembersVoted)
+                {
+                    bool approved = yesVotes >= noVotes;
+                    status = approved ? "Approved" : "Rejected";
+                }
 
                 var cmdUpdate = conn.CreateCommand();
                 cmdUpdate.Transaction = tx;
@@ -565,6 +587,89 @@ using System.Text.Json;
                 cmdUpdate.Parameters.AddWithValue("$status", status);
                 cmdUpdate.Parameters.AddWithValue("$proposal", proposalId);
                 cmdUpdate.ExecuteNonQuery();
+            }
+
+            public void RefreshGovernanceStates(string projectId)
+            {
+                if (string.IsNullOrWhiteSpace(projectId) || projectId == "System")
+                {
+                    return;
+                }
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var tx = connection.BeginTransaction();
+
+                var proposalIds = new List<string>();
+                var cmdOpen = connection.CreateCommand();
+                cmdOpen.Transaction = tx;
+                cmdOpen.CommandText = @"
+                SELECT ProposalId
+                FROM GovernanceProposals
+                WHERE ProjectId = $project AND Status = 'Open'";
+                cmdOpen.Parameters.AddWithValue("$project", projectId);
+
+                using (var reader = cmdOpen.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        proposalIds.Add(reader.GetString(0));
+                    }
+                }
+
+                foreach (string openProposalId in proposalIds)
+                {
+                    RecalculateProposalVoteState(connection, tx, openProposalId);
+                }
+
+                tx.Commit();
+            }
+
+            public string GetProposalCreator(string proposalId)
+            {
+                if (string.IsNullOrWhiteSpace(proposalId)) return string.Empty;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = "SELECT CreatedBy FROM GovernanceProposals WHERE ProposalId = $proposal LIMIT 1";
+                cmd.Parameters.AddWithValue("$proposal", proposalId);
+                return DecryptString(cmd.ExecuteScalar()?.ToString());
+            }
+
+            private (string ProjectId, string CreatedBy, string CreatedAt, string Status)? GetProposalMetaInternal(SqliteConnection conn, SqliteTransaction tx, string proposalId)
+            {
+                var cmdProposal = conn.CreateCommand();
+                cmdProposal.Transaction = tx;
+                cmdProposal.CommandText = @"
+                SELECT ProjectId, CreatedBy, CreatedAt, Status
+                FROM GovernanceProposals
+                WHERE ProposalId = $proposal
+                LIMIT 1";
+                cmdProposal.Parameters.AddWithValue("$proposal", proposalId);
+
+                using var reader = cmdProposal.ExecuteReader();
+                if (!reader.Read())
+                {
+                    return null;
+                }
+
+                string projectId = reader.IsDBNull(0) ? "" : reader.GetString(0);
+                string createdBy = reader.IsDBNull(1) ? "" : DecryptString(reader.GetString(1));
+                string createdAt = reader.IsDBNull(2) ? DateTime.UtcNow.ToString("O") : reader.GetString(2);
+                string status = reader.IsDBNull(3) ? "Open" : reader.GetString(3);
+                return (projectId, createdBy, createdAt, status);
+            }
+
+            private static bool IsVotingClosed(string createdAtRaw)
+            {
+                if (!DateTime.TryParse(createdAtRaw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdAt))
+                {
+                    return false;
+                }
+
+                DateTime votingEndsAt = createdAt.ToUniversalTime().AddHours(1);
+                return DateTime.UtcNow >= votingEndsAt;
             }
 
             private void AddBalanceInternal(SqliteConnection conn, SqliteTransaction tx, string user, int amount)
@@ -1031,3 +1136,4 @@ using System.Text.Json;
             }
         }
     }
+

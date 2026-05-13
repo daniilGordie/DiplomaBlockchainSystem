@@ -8,16 +8,17 @@
                 <span class="badge bg-secondary">Project: @CurrentProjectId</span>
             </div>
 
-            <p class="text-muted small mb-4">Create project proposals and record member votes as blockchain events.</p>
+            <p class="text-muted small mb-2">Create project proposals and collect member votes on-chain.</p>
+            <p class="text-muted small mb-4">Voting window: <span class="fw-semibold">1 hour</span>. All project members can vote.</p>
 
             <div class="mb-3">
                 <label class="form-label text-muted small fw-bold">Proposal title</label>
-                <input value="@NewProposalTitle" @oninput="OnNewProposalTitleInput" class="form-control" aria-label="Proposal title" />
+                <input value="@NewProposalTitle" @oninput="OnNewProposalTitleInput" class="form-control" placeholder="Enter proposal title" aria-label="Proposal title" />
             </div>
 
             <div class="mb-4">
                 <label class="form-label text-muted small fw-bold">Description</label>
-                <textarea value="@NewProposalDescription" @oninput="OnNewProposalDescriptionInput" class="form-control" rows="4" aria-label="Proposal description"></textarea>
+                <textarea value="@NewProposalDescription" @oninput="OnNewProposalDescriptionInput" class="form-control" rows="4" placeholder="Describe the proposal and expected outcome" aria-label="Proposal description"></textarea>
             </div>
 
             <button class="btn btn-primary fw-semibold w-100" @onclick="OnCreateProposal" disabled="@(!CanUseGovernance || IsMining)">Create Proposal</button>
@@ -42,13 +43,22 @@
                 <div class="d-flex flex-column gap-3">
                     @foreach (var proposal in Proposals)
                     {
+                        bool isImplemented = ImplementedProposalIds.Contains(proposal.ProposalId);
+                        DateTimeOffset? votingEndsAt = GetVotingEndsAt(proposal);
+
                         <div class="border border-secondary rounded p-3 bg-dark governance-card">
                             <div class="d-flex justify-content-between gap-3">
                                 <div class="min-w-0">
                                     <div class="fw-semibold text-white">@proposal.Title</div>
                                     <div class="small text-muted">Created by @proposal.CreatedBy</div>
+                                    @if (votingEndsAt.HasValue)
+                                    {
+                                        <div class="small text-muted mt-1" title="@GetVotingTooltip(votingEndsAt.Value)">
+                                            Voting closes: @votingEndsAt.Value.ToLocalTime().ToString("g")
+                                        </div>
+                                    }
                                 </div>
-                                <span class="badge @GetStatusClass(proposal.Status) align-self-start">@proposal.Status</span>
+                                <span class="badge @GetStatusClass(proposal.Status) align-self-start">@GetStatusLabel(proposal)</span>
                             </div>
 
                             @if (!string.IsNullOrWhiteSpace(proposal.Description))
@@ -67,9 +77,26 @@
                                     }
                                 </div>
 
-                                <div class="btn-group btn-group-sm">
-                                    <button class="btn btn-outline-secondary" disabled="@(!CanVote(proposal))" @onclick="() => OnVote.InvokeAsync((proposal.ProposalId, true))">Vote Yes</button>
-                                    <button class="btn btn-outline-danger" disabled="@(!CanVote(proposal))" @onclick="() => OnVote.InvokeAsync((proposal.ProposalId, false))">Vote No</button>
+                                <div class="d-flex gap-2 flex-wrap justify-content-end">
+                                    @if (proposal.Status == "Approved")
+                                    {
+                                        if (CanCreateTaskFromAccepted)
+                                        {
+                                            if (isImplemented)
+                                            {
+                                                <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Task already created</span>
+                                            }
+                                            else
+                                            {
+                                                <button class="btn btn-sm btn-primary" @onclick="() => OnCreateTaskFromProposal.InvokeAsync(proposal.ProposalId)">Create Task From Proposal</button>
+                                            }
+                                        }
+                                    }
+
+                                    <div class="btn-group btn-group-sm">
+                                        <button class="btn btn-outline-secondary" disabled="@(!CanVote(proposal))" @onclick="() => OnVote.InvokeAsync((proposal.ProposalId, true))">Vote Yes</button>
+                                        <button class="btn btn-outline-danger" disabled="@(!CanVote(proposal))" @onclick="() => OnVote.InvokeAsync((proposal.ProposalId, false))">Vote No</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -82,25 +109,64 @@
 
 @code {
     [Parameter] public string CurrentProjectId { get; set; } = "System";
+    [Parameter] public string CurrentUserName { get; set; } = "";
     [Parameter] public string NewProposalTitle { get; set; } = "";
     [Parameter] public string NewProposalDescription { get; set; } = "";
     [Parameter] public bool IsMining { get; set; }
     [Parameter] public bool CanUseGovernance { get; set; }
+    [Parameter] public bool CanCreateTaskFromAccepted { get; set; }
     [Parameter] public List<GovernanceProposalItem> Proposals { get; set; } = new();
+    [Parameter] public HashSet<string> ImplementedProposalIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     [Parameter] public EventCallback<string> NewProposalTitleChanged { get; set; }
     [Parameter] public EventCallback<string> NewProposalDescriptionChanged { get; set; }
     [Parameter] public EventCallback OnCreateProposal { get; set; }
     [Parameter] public EventCallback<(string ProposalId, bool VoteYes)> OnVote { get; set; }
+    [Parameter] public EventCallback<string> OnCreateTaskFromProposal { get; set; }
 
     private Task OnNewProposalTitleInput(ChangeEventArgs e) => NewProposalTitleChanged.InvokeAsync(e.Value?.ToString() ?? "");
     private Task OnNewProposalDescriptionInput(ChangeEventArgs e) => NewProposalDescriptionChanged.InvokeAsync(e.Value?.ToString() ?? "");
-    private bool CanVote(GovernanceProposalItem proposal) => CanUseGovernance && proposal.Status == "Open" && string.IsNullOrWhiteSpace(proposal.UserVote);
+
+    private bool CanVote(GovernanceProposalItem proposal)
+    {
+        if (!CanUseGovernance || proposal.Status != "Open" || !string.IsNullOrWhiteSpace(proposal.UserVote))
+        {
+            return false;
+        }
+
+        DateTimeOffset? votingEndsAt = GetVotingEndsAt(proposal);
+        return !votingEndsAt.HasValue || DateTimeOffset.UtcNow < votingEndsAt.Value;
+    }
+
+    private static DateTimeOffset? GetVotingEndsAt(GovernanceProposalItem proposal)
+    {
+        if (!DateTimeOffset.TryParse(proposal.CreatedAt, out var createdAt))
+        {
+            return null;
+        }
+
+        return createdAt.ToUniversalTime().AddHours(1);
+    }
+
+    private static string GetVotingTooltip(DateTimeOffset votingEndsAt)
+    {
+        return $"Voting closes at {votingEndsAt.UtcDateTime:u} UTC";
+    }
 
     private static string GetStatusClass(string status) => status switch
     {
-        "Accepted" => "bg-success",
+        "Approved" => "bg-success",
         "Rejected" => "bg-danger",
         _ => "bg-secondary"
     };
+
+    private static string GetStatusLabel(GovernanceProposalItem proposal)
+    {
+        if (proposal.Status == "Approved" && proposal.YesVotes == proposal.NoVotes)
+        {
+            return "Approved (Tie accepted)";
+        }
+
+        return proposal.Status;
+    }
 }

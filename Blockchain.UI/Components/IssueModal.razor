@@ -24,18 +24,28 @@
             <div class="p-4">
                 <div class="mb-3">
                     <label class="form-label text-muted small fw-bold">Title</label>
-                    <input type="text" @bind="TaskModel.Title" class="form-control" aria-label="Work item title" />
+                    <input type="text" @bind="TaskModel.Title" class="form-control" placeholder="Enter work item title" aria-label="Work item title" />
                 </div>
 
                 <div class="mb-3">
                     <label class="form-label text-muted small fw-bold">Description</label>
-                    <textarea @bind="TaskModel.Description" class="form-control" rows="4" aria-label="Work item description"></textarea>
+                    <textarea @bind="TaskModel.Description" class="form-control" rows="4" placeholder="Describe the work item" aria-label="Work item description"></textarea>
                 </div>
 
                 <div class="row">
                     <div class="col-md-6 mb-3">
                         <label class="form-label text-muted small fw-bold">Assignee</label>
-                        <input type="text" @bind="TaskModel.Assignee" class="form-control" aria-label="Assignee" />
+                        <select @bind="TaskModel.Assignee" class="form-select" aria-label="Assignee">
+                            <option value="">Unassigned</option>
+                            @foreach (var member in ProjectMembers)
+                            {
+                                <option value="@member">@member</option>
+                            }
+                        </select>
+                        @if (!ProjectMembers.Any())
+                        {
+                            <div class="small text-warning mt-1">No project members are available for assignment.</div>
+                        }
                     </div>
                     <div class="col-md-6 mb-3">
                         <label class="form-label text-muted small fw-bold">State</label>
@@ -72,6 +82,7 @@
                                @bind="walletPassword"
                                class="form-control form-control-sm"
                                disabled="@isPasskeyWallet"
+                               placeholder="Enter wallet password"
                                aria-label="Wallet password"
                                autocomplete="current-password"
                                name="wallet-password" />
@@ -91,7 +102,7 @@
                     <button class="btn btn-outline-secondary me-2 fw-semibold" @onclick="Close">Cancel</button>
                     <button class="btn btn-primary fw-semibold"
                             @onclick="HandleSaveAndMine"
-                            disabled="@(keystoreContent == null || (!isPasskeyWallet && string.IsNullOrEmpty(walletPassword)) || string.IsNullOrEmpty(TaskModel.Title))">
+                            disabled="@(!CanSubmitTask())">
                         @(IsNewTask ? "Sign & Create" : "Sign & Save")
                     </button>
                 </div>
@@ -104,6 +115,7 @@
     [Parameter] public bool IsOpen { get; set; }
     [Parameter] public bool IsNewTask { get; set; }
     [Parameter] public ProjectTask TaskModel { get; set; } = new();
+    [Parameter] public List<string> ProjectMembers { get; set; } = new();
     [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
 
     [Parameter] public EventCallback<(TaskEvent Event, string Keystore, string Password)> OnSaveWithCredentials { get; set; }
@@ -150,6 +162,18 @@
             return;
         }
 
+        if (RequiresAssigneeForStatus() && !HasValidAssignee())
+        {
+            errorMessage = "Assign a project member before setting state to In Progress or Done.";
+            return;
+        }
+
+        if (HasAssigneeValue() && !IsProjectMember(TaskModel.Assignee))
+        {
+            errorMessage = "Assignee must be an existing project member.";
+            return;
+        }
+
         try
         {
             var taskEvent = new TaskEvent
@@ -158,7 +182,7 @@
                     TaskId = TaskModel.Id,
                     Title = TaskModel.Title,
                     Description = TaskModel.Description,
-                    Assignee = TaskModel.Assignee,
+                    Assignee = NormalizeAssignee(TaskModel.Assignee),
                     Status = (int)TaskModel.Status,
                     ProjectId = TaskModel.ProjectId,
                     User = MyKeyService.UserName 
@@ -175,4 +199,43 @@
             errorMessage = "Error: " + ex.Message;
         }
     }
+
+    private bool CanSubmitTask()
+    {
+        if (keystoreContent == null || (!isPasskeyWallet && string.IsNullOrEmpty(walletPassword)))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(TaskModel.Title))
+        {
+            return false;
+        }
+
+        if (RequiresAssigneeForStatus() && !HasValidAssignee())
+        {
+            return false;
+        }
+
+        return !HasAssigneeValue() || IsProjectMember(TaskModel.Assignee);
+    }
+
+    private bool RequiresAssigneeForStatus() =>
+        TaskModel.Status is ProjectTaskStatus.InProgress or ProjectTaskStatus.Done;
+
+    private bool HasAssigneeValue() =>
+        !string.IsNullOrWhiteSpace(TaskModel.Assignee) &&
+        !string.Equals(TaskModel.Assignee.Trim(), "None", StringComparison.OrdinalIgnoreCase);
+
+    private bool HasValidAssignee() => HasAssigneeValue() && IsProjectMember(TaskModel.Assignee);
+
+    private bool IsProjectMember(string? userName) =>
+        !string.IsNullOrWhiteSpace(userName) &&
+        ProjectMembers.Any(member => string.Equals(member, userName.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static string NormalizeAssignee(string? assignee) =>
+        string.IsNullOrWhiteSpace(assignee) ||
+        string.Equals(assignee.Trim(), "None", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : assignee.Trim();
 }

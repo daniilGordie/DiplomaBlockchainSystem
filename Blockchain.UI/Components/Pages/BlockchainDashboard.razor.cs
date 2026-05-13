@@ -49,6 +49,12 @@ public partial class BlockchainDashboard : ComponentBase
     private List<DocumentSummary> documents = new();
     private List<DocumentVersionItem> documentVersions = new();
     private List<string> myProjects = new();
+    private List<string> ownedProjects = new();
+    private List<string> sharedProjects = new();
+    private List<string> projectMembers = new();
+    private Dictionary<string, string> projectRoles = new(StringComparer.OrdinalIgnoreCase);
+    private string currentUserRole = "None";
+    private HashSet<string> implementedProposalIds = new(StringComparer.OrdinalIgnoreCase);
     private IntegrationStatusUI gitIntegrationStatus = new() { Name = "Git webhook" };
     private IntegrationStatusUI ipfsIntegrationStatus = new() { Name = "IPFS node" };
 
@@ -74,15 +80,17 @@ public partial class BlockchainDashboard : ComponentBase
     private bool isRestoreMode = false;
     private bool isUploading = false;
     private bool isMining = false;
-
-    private string targetTransferUser = "";
-    private int transferAmount = 5;
+    private string mnemonicCopyButtonText = "Copy to Clipboard";
 
     private bool isIssueModalOpen = false;
     private bool isNewTask = true;
     private ProjectTask editingTask = new();
     private bool isGenesisModeActive = false;
     private bool CanCreateTask => MyKeyService.IsLoggedIn && myProjects.Count > 0 && !string.IsNullOrWhiteSpace(CurrentProjectId) && CurrentProjectId != "System";
+    private bool CanManageMembers => string.Equals(CurrentUserRoleLabel, "Owner", StringComparison.OrdinalIgnoreCase) ||
+                                     string.Equals(CurrentUserRoleLabel, "Manager", StringComparison.OrdinalIgnoreCase);
+    private string CurrentUserRoleLabel => string.IsNullOrWhiteSpace(currentUserRole) ? "None" : currentUserRole;
+    private bool IsCurrentUserOwner => string.Equals(CurrentUserRoleLabel, "Owner", StringComparison.OrdinalIgnoreCase);
     private string IpfsGatewayUrl => (Config["IpfsGatewayUrl"] ?? "http://127.0.0.1:8080/ipfs").Trim().TrimEnd('/');
     private int TodoTaskCount => Tasks.Count(x => x.Status == ProjectTaskStatus.Todo);
     private int InProgressTaskCount => Tasks.Count(x => x.Status == ProjectTaskStatus.InProgress);
@@ -101,11 +109,10 @@ public partial class BlockchainDashboard : ComponentBase
     private Task OnNewProposalDescriptionChanged(string value) { newProposalDescription = value; return Task.CompletedTask; }
     private Task OnDocumentTitleChanged(string value) { documentTitle = value; return Task.CompletedTask; }
     private Task OnDocumentContentChanged(string value) { documentContent = value; return Task.CompletedTask; }
-    private Task OnTargetTransferUserChanged(string value) { targetTransferUser = value; return Task.CompletedTask; }
-    private Task OnTransferAmountChanged(int value) { transferAmount = value; return Task.CompletedTask; }
     private Task OnNodeUrlInputChanged(string value) { nodeUrlInput = value; return Task.CompletedTask; }
     private Task OnPeerUrlInputChanged(string value) { peerUrlInput = value; return Task.CompletedTask; }
     private Task CancelRestoreMode() { isRestoreMode = false; return Task.CompletedTask; }
+    private string MnemonicCopyButtonText => mnemonicCopyButtonText;
 
 
     protected override async Task OnInitializedAsync()
@@ -212,12 +219,20 @@ public partial class BlockchainDashboard : ComponentBase
             .WithAutomaticReconnect()
             .Build();
 
-        hubConnection.On<BlockModel>("NewBlockBroadcast", (block) =>
+        hubConnection.On<BlockModel>("NewBlockBroadcast", async (block) =>
         {
             if (block.ChannelId == CurrentProjectId || block.ChannelId == "System")
             {
-                ApplyBlockToUI(block);
-                InvokeAsync(StateHasChanged);
+                var refreshHints = ApplyBlockToUI(block);
+                if (refreshHints.RefreshMembership)
+                {
+                    await SyncChain();
+                }
+                else if (refreshHints.RefreshGovernance && activeTab == ActiveTab.Governance)
+                {
+                    await RefreshGovernance();
+                }
+                await InvokeAsync(StateHasChanged);
             }
         });
 
@@ -360,7 +375,50 @@ public partial class BlockchainDashboard : ComponentBase
             var root = doc?.RootElement;
             string webhookUrl = root?.TryGetProperty("webhookUrl", out var webhookProp) == true ? webhookProp.GetString() ?? "" : "";
             string mode = root?.TryGetProperty("mode", out var modeProp) == true ? modeProp.GetString() ?? "" : "";
+            string source = root?.TryGetProperty("source", out var sourceProp) == true ? sourceProp.GetString() ?? "" : "";
+            string defaultProjectId = root?.TryGetProperty("defaultProjectId", out var defaultProjectProp) == true ? defaultProjectProp.GetString() ?? "" : "";
+            string bindingPolicy = root?.TryGetProperty("bindingPolicy", out var bindingPolicyProp) == true ? bindingPolicyProp.GetString() ?? "" : "";
+            int bindingsCount = root?.TryGetProperty("bindingsCount", out var bindingsCountProp) == true ? bindingsCountProp.GetInt32() : 0;
             bool secretConfigured = root?.TryGetProperty("webhookSecretConfigured", out var secretProp) == true && secretProp.GetBoolean();
+            var providers = new List<string>();
+            var bindings = new List<GitRepositoryBindingUI>();
+            if (root?.TryGetProperty("providers", out var providersProp) == true && providersProp.ValueKind == JsonValueKind.Array)
+            {
+                providers = providersProp.EnumerateArray()
+                    .Select(x => x.GetString() ?? "")
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+            }
+            if (root?.TryGetProperty("bindings", out var bindingsProp) == true && bindingsProp.ValueKind == JsonValueKind.Array)
+            {
+                bindings = bindingsProp.EnumerateArray()
+                    .Select(x => new GitRepositoryBindingUI
+                    {
+                        Repository = x.TryGetProperty("repository", out var repoProp) ? repoProp.GetString() ?? "" : "",
+                        ProjectId = x.TryGetProperty("projectId", out var projectProp) ? projectProp.GetString() ?? "" : ""
+                    })
+                    .Where(x => !string.IsNullOrWhiteSpace(x.Repository) || !string.IsNullOrWhiteSpace(x.ProjectId))
+                    .ToList();
+            }
+
+            string details = mode;
+            if (!string.IsNullOrWhiteSpace(source))
+            {
+                details += $" | source: {source}";
+            }
+            if (providers.Any())
+            {
+                details += $" | providers: {string.Join(", ", providers)}";
+            }
+            if (!string.IsNullOrWhiteSpace(bindingPolicy))
+            {
+                details += $" | {bindingPolicy}";
+            }
+            if (!string.IsNullOrWhiteSpace(defaultProjectId))
+            {
+                details += $" | default project: {defaultProjectId}";
+            }
+            details += $" | bindings: {bindingsCount}";
 
             gitIntegrationStatus = new IntegrationStatusUI
             {
@@ -369,7 +427,10 @@ public partial class BlockchainDashboard : ComponentBase
                 Name = "Git webhook",
                 Status = secretConfigured ? "Ready" : "Secret missing",
                 Endpoint = webhookUrl,
-                Details = mode
+                Details = details,
+                Source = source,
+                Providers = providers,
+                RepositoryBindings = bindings
             };
         }
         catch (Exception ex)
@@ -506,14 +567,20 @@ public partial class BlockchainDashboard : ComponentBase
         }
     }
 
-    private void ApplyBlockToUI(BlockModel block)
+    private (bool RefreshMembership, bool RefreshGovernance) ApplyBlockToUI(BlockModel block)
     {
-        if (string.IsNullOrWhiteSpace(block.Data)) return;
+        if (string.IsNullOrWhiteSpace(block.Data)) return (false, false);
+        bool shouldRefreshMembership = false;
+        bool shouldRefreshGovernance = false;
         try
         {
             using var doc = JsonDocument.Parse(block.Data);
             var root = doc.RootElement;
             string type = root.TryGetProperty("Type", out var t) ? t.GetString() ?? "" : "";
+            if (type == "CreateProposal" || type == "CastVote")
+            {
+                shouldRefreshGovernance = true;
+            }
 
             if (type == "CodeCommit")
             {
@@ -522,7 +589,9 @@ public partial class BlockchainDashboard : ComponentBase
                         Repository = root.TryGetProperty("Repository", out var r) || root.TryGetProperty("repository", out r) ? r.GetString() ?? "Unknown" : "Unknown",
                         CommitHash = root.TryGetProperty("CommitHash", out var h) || root.TryGetProperty("commitHash", out h) ? h.GetString() ?? "" : "",
                         Message = root.TryGetProperty("Message", out var m) || root.TryGetProperty("message", out m) ? m.GetString() ?? "" : "",
-                        Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() ?? "Anon" : "Anon"
+                        Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() ?? "Anon" : "Anon",
+                        Provider = root.TryGetProperty("Provider", out var provider) ? provider.GetString() ?? "" : "",
+                        Branch = root.TryGetProperty("Branch", out var branch) ? branch.GetString() ?? "" : ""
                     });
             }
             else if (type == "Create")
@@ -556,6 +625,30 @@ public partial class BlockchainDashboard : ComponentBase
                     Artifacts.Insert(0, artifact);
                 }
             }
+
+            if (type == "AssignRole")
+            {
+                string targetUser = root.TryGetProperty("TargetUser", out var tu) ? tu.GetString() ?? "" : "";
+                string projectId = root.TryGetProperty("ProjectId", out var p) ? p.GetString() ?? "" : "";
+                if (string.Equals(projectId, CurrentProjectId, StringComparison.OrdinalIgnoreCase))
+                {
+                    string normalizedTarget = NormalizeTaskAssignee(targetUser);
+                    if (!string.IsNullOrWhiteSpace(normalizedTarget) &&
+                        !projectMembers.Contains(normalizedTarget, StringComparer.OrdinalIgnoreCase))
+                    {
+                        projectMembers.Add(normalizedTarget);
+                        projectMembers = projectMembers.OrderBy(member => member, StringComparer.OrdinalIgnoreCase).ToList();
+                    }
+                }
+
+                string currentUser = MyKeyService.UserName ?? "";
+                if (!string.IsNullOrWhiteSpace(currentUser) &&
+                    string.Equals(targetUser, currentUser, StringComparison.OrdinalIgnoreCase))
+                {
+                    shouldRefreshMembership = true;
+                }
+            }
+
             chain.Add(block);
             if (TryBuildAuditTrailEntry(block, out var entry))
             {
@@ -570,6 +663,7 @@ public partial class BlockchainDashboard : ComponentBase
         {
             Console.WriteLine($"[ApplyBlockToUI] JSON parsing error: {ex.Message}");
         }
+        return (shouldRefreshMembership, shouldRefreshGovernance);
     }
 
     private async Task OnProjectChanged(ChangeEventArgs e)
@@ -585,6 +679,12 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task InviteMember()
     {
+        if (!CanManageMembers)
+        {
+            statusMessage = "Only Owner or Manager can grant access in this project.";
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(newMemberName) || string.IsNullOrWhiteSpace(newMemberPublicKey)) return;
         if (!IsValidPublicKey(newMemberPublicKey))
         {
@@ -646,7 +746,29 @@ public partial class BlockchainDashboard : ComponentBase
         }
     }
 
-    private async Task DismissMnemonic() { if (MyKeyService.CurrentMnemonic != null) await MyKeyService.RestoreWallet(MyKeyService.CurrentMnemonic, MyKeyService.UserName); }
+    private async Task CopySecretPhraseToClipboard()
+    {
+        if (string.IsNullOrWhiteSpace(MyKeyService.CurrentMnemonic))
+        {
+            statusMessage = "Secret phrase is unavailable.";
+            return;
+        }
+
+        bool copied = await TryCopyTextToClipboardAsync(MyKeyService.CurrentMnemonic);
+        if (copied)
+        {
+            mnemonicCopyButtonText = "Copied!";
+            statusMessage = "Secret phrase copied to clipboard.";
+            StateHasChanged();
+            await Task.Delay(1800);
+            mnemonicCopyButtonText = "Copy to Clipboard";
+            StateHasChanged();
+        }
+        else
+        {
+            statusMessage = "Copy failed. Please copy the secret phrase manually.";
+        }
+    }
     private async Task Logout() => await MyKeyService.Logout();
 
     private void OpenTaskModal(ProjectTask? task)
@@ -675,7 +797,7 @@ public partial class BlockchainDashboard : ComponentBase
                     Id = task.Id,
                     Title = task.Title,
                     Description = task.Description,
-                    Assignee = task.Assignee,
+                    Assignee = NormalizeTaskAssignee(task.Assignee),
                     Status = task.Status,
                     ProjectId = task.ProjectId
                 };
@@ -683,7 +805,51 @@ public partial class BlockchainDashboard : ComponentBase
         isIssueModalOpen = true;
     }
 
-    private async Task TransferTokens() { if (string.IsNullOrWhiteSpace(targetTransferUser) || transferAmount <= 0 || !CanCreateTask) return; await SendJsonBlock(new TaskEvent { Type = "Transfer", TargetUser = targetTransferUser, Amount = transferAmount, User = MyKeyService.UserName, ProjectId = CurrentProjectId }); targetTransferUser = ""; }
+    private void UpdateImplementedProposalIds()
+    {
+        implementedProposalIds = Tasks
+            .Select(task => task.ParentTaskId)
+            .Where(parentId => !string.IsNullOrWhiteSpace(parentId) && parentId.StartsWith("GOV-", StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private Task CreateTaskFromProposal(string proposalId)
+    {
+        if (!CanCreateTask || !IsCurrentUserOwner || string.IsNullOrWhiteSpace(proposalId))
+        {
+            return Task.CompletedTask;
+        }
+
+        GovernanceProposalItem? proposal = governanceProposals.FirstOrDefault(item =>
+            string.Equals(item.ProposalId, proposalId, StringComparison.OrdinalIgnoreCase));
+
+        if (proposal == null || !string.Equals(proposal.Status, "Approved", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.CompletedTask;
+        }
+
+        if (implementedProposalIds.Contains(proposal.ProposalId))
+        {
+            statusMessage = "A task has already been created from this proposal.";
+            return Task.CompletedTask;
+        }
+
+        isNewTask = true;
+        editingTask = new ProjectTask
+        {
+            Id = "TSK-" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpperInvariant(),
+            ProjectId = CurrentProjectId ?? "System",
+            Title = proposal.Title,
+            Description = string.IsNullOrWhiteSpace(proposal.Description)
+                ? $"Created from accepted proposal {proposal.ProposalId}."
+                : proposal.Description,
+            Status = ProjectTaskStatus.Todo,
+            ParentTaskId = proposal.ProposalId
+        };
+
+        isIssueModalOpen = true;
+        return Task.CompletedTask;
+    }
 
     private async Task ShowHistory(string taskId)
     {
@@ -987,6 +1153,7 @@ public partial class BlockchainDashboard : ComponentBase
                     AuthSignature = BuildReadAuthSignature($"USER:{MyKeyService.UserName}:PROJECTS")
                 });
                 myProjects = projRes.ProjectIds.ToList();
+                await RefreshProjectRoleBucketsAsync();
 
                 if ((!myProjects.Contains(CurrentProjectId) || CurrentProjectId == "System") && myProjects.Count > 0)
                 {
@@ -1003,7 +1170,10 @@ public partial class BlockchainDashboard : ComponentBase
                     AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:TASKS")
                 });
 
+            currentUserRole = string.IsNullOrWhiteSpace(tR.UserRole) ? "None" : tR.UserRole;
             Tasks = tR.Tasks.Select(t => new ProjectTask { Id = t.Id, Title = t.Title, Creator = t.Creator, Assignee = t.Assignee, Status = (ProjectTaskStatus)t.Status, ProjectId = t.ProjectId, Description = t.Description, ParentTaskId = t.ParentTaskId, BranchInfo = t.BranchInfo }).ToList();
+            UpdateImplementedProposalIds();
+            await RefreshProjectMembersAsync();
 
             if (Tasks.Count > 0 || MyKeyService.IsLoggedIn)
             {
@@ -1025,6 +1195,7 @@ public partial class BlockchainDashboard : ComponentBase
                 Commits.Clear();
                 Artifacts.Clear();
                 auditTrail.Clear();
+                projectMembers.Clear();
             }
 
             if (activeTab == ActiveTab.Governance)
@@ -1044,6 +1215,144 @@ public partial class BlockchainDashboard : ComponentBase
             Console.WriteLine($"Sync Error: {ex.Message}");
         }
     }
+
+    private async Task RefreshProjectRoleBucketsAsync()
+    {
+        var nextRoles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var projectId in myProjects.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string role = "None";
+            try
+            {
+                var response = await BlockchainClient.GetProjectTasksAsync(new ProjectRequest
+                {
+                    ProjectId = projectId,
+                    UserName = MyKeyService.UserName ?? "Guest",
+                    UserPublicKey = MyKeyService.PublicKey ?? "",
+                    AuthSignature = BuildReadAuthSignature($"PROJECT:{projectId}:TASKS")
+                });
+
+                role = string.IsNullOrWhiteSpace(response.UserRole) ? "None" : response.UserRole;
+            }
+            catch
+            {
+                role = "None";
+            }
+
+            nextRoles[projectId] = role;
+        }
+
+        projectRoles = nextRoles;
+        ownedProjects = myProjects
+            .Where(projectId => projectRoles.TryGetValue(projectId, out var role) &&
+                                string.Equals(role, "Owner", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(projectId => projectId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        sharedProjects = myProjects
+            .Where(projectId => !projectRoles.TryGetValue(projectId, out var role) ||
+                                !string.Equals(role, "Owner", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(projectId => projectId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (projectRoles.TryGetValue(CurrentProjectId, out var currentRole))
+        {
+            currentUserRole = currentRole;
+        }
+        else if (!myProjects.Contains(CurrentProjectId, StringComparer.OrdinalIgnoreCase))
+        {
+            currentUserRole = "None";
+        }
+    }
+
+    private async Task RefreshProjectMembersAsync()
+    {
+        var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(MyKeyService.UserName) && currentUserRole != "None")
+        {
+            members.Add(MyKeyService.UserName);
+        }
+
+        try
+        {
+            var systemChain = await BlockchainClient.GetChainAsync(new ChainRequest
+            {
+                Count = 500,
+                ChannelId = "System",
+                UserName = MyKeyService.UserName ?? "Guest",
+                UserPublicKey = MyKeyService.PublicKey ?? "",
+                AuthSignature = BuildReadAuthSignature("CHAIN:System")
+            });
+
+            foreach (var block in systemChain.Blocks)
+            {
+                AddProjectMemberFromBlock(block, members);
+            }
+        }
+        catch
+        {
+            // Fallback below still preserves current user and known task participants.
+        }
+
+        foreach (var task in Tasks)
+        {
+            AddKnownMember(task.Creator, members);
+            AddKnownMember(task.Assignee, members);
+        }
+
+        projectMembers = members
+            .Where(member => !string.Equals(member, "None", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(member => member, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void AddProjectMemberFromBlock(BlockModel block, HashSet<string> members)
+    {
+        if (string.IsNullOrWhiteSpace(block.Data))
+        {
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(block.Data);
+            var root = doc.RootElement;
+            string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
+            string projectId = root.TryGetProperty("ProjectId", out var projectProp) ? projectProp.GetString() ?? "" : "";
+            if (!string.Equals(projectId, CurrentProjectId, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (type == "CreateProject")
+            {
+                AddKnownMember(root.TryGetProperty("User", out var userProp) ? userProp.GetString() ?? "" : "", members);
+            }
+            else if (type == "AssignRole")
+            {
+                AddKnownMember(root.TryGetProperty("TargetUser", out var targetProp) ? targetProp.GetString() ?? "" : "", members);
+            }
+        }
+        catch
+        {
+            // Ignore malformed historical blocks.
+        }
+    }
+
+    private static void AddKnownMember(string? userName, HashSet<string> members)
+    {
+        string normalized = NormalizeTaskAssignee(userName);
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            members.Add(normalized);
+        }
+    }
+
+    private static string NormalizeTaskAssignee(string? assignee) =>
+        string.IsNullOrWhiteSpace(assignee) ||
+        string.Equals(assignee.Trim(), "None", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : assignee.Trim();
 
     private void RebuildLocalArtifactsAndCommits(List<BlockModel> blocks)
     {
@@ -1070,7 +1379,9 @@ public partial class BlockchainDashboard : ComponentBase
                             Repository = root.TryGetProperty("Repository", out var r) || root.TryGetProperty("repository", out r) ? r.GetString() ?? "Unknown" : "Unknown",
                             CommitHash = root.TryGetProperty("CommitHash", out var h) || root.TryGetProperty("commitHash", out h) ? h.GetString() ?? "" : "",
                             Message = root.TryGetProperty("Message", out var m) || root.TryGetProperty("message", out m) ? m.GetString() ?? "" : "",
-                            Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() ?? "Anon" : "Anon"
+                            Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() ?? "Anon" : "Anon",
+                            Provider = root.TryGetProperty("Provider", out var provider) ? provider.GetString() ?? "" : "",
+                            Branch = root.TryGetProperty("Branch", out var branch) ? branch.GetString() ?? "" : ""
                         });
                 }
                 else if (TryParseArtifactFromJson(root, out var artifact))
@@ -1300,6 +1611,25 @@ public partial class BlockchainDashboard : ComponentBase
                 return;
             }
 
+            bool requiresAssignee =
+                args.Event.Status == (int)ProjectTaskStatus.InProgress ||
+                args.Event.Status == (int)ProjectTaskStatus.Done;
+            string normalizedAssignee = NormalizeTaskAssignee(args.Event.Assignee);
+            if (requiresAssignee && string.IsNullOrWhiteSpace(normalizedAssignee))
+            {
+                statusMessage = "Assign a project member before moving a work item to In Progress or Done.";
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(normalizedAssignee) &&
+                !projectMembers.Contains(normalizedAssignee, StringComparer.OrdinalIgnoreCase))
+            {
+                statusMessage = $"Cannot assign '{normalizedAssignee}': user is not a member of this project.";
+                return;
+            }
+
+            args.Event.Assignee = normalizedAssignee;
+
             isMining = true;
             statusMessage = "Finalizing block (PoC)...";
             StateHasChanged();
@@ -1387,23 +1717,11 @@ public partial class BlockchainDashboard : ComponentBase
 
             statusMessage = "Anchoring file CID to blockchain...";
             StateHasChanged();
-
-            var payload = new
+            bool anchored = await AnchorArtifactViaNodeAsync(file, cid);
+            if (!anchored)
             {
-                Source = "ArtifactRegistry",
-                Type = "Register",
-                FileName = file.Name,
-                FileHash = cid,
-                SizeBytes = file.Size,
-                ContentType = file.ContentType ?? "application/octet-stream",
-                User = MyKeyService.UserName,
-                ProjectId = CurrentProjectId,
-                RegisteredBy = MyKeyService.UserName,
-                VerificationMethod = "IPFS CID",
-                Timestamp = DateTime.UtcNow.ToString("O")
-            };
-
-            await SendJsonBlock(payload);
+                return;
+            }
 
             statusMessage = $"File successfully saved! CID: {cid.Substring(0, 8)}...";
         }
@@ -1417,4 +1735,77 @@ public partial class BlockchainDashboard : ComponentBase
             StateHasChanged();
         }
     }
+
+    private async Task<bool> AnchorArtifactViaNodeAsync(IBrowserFile file, string cid)
+    {
+        string actor = MyKeyService.UserName ?? "";
+        string timestamp = DateTime.UtcNow.ToString("O");
+        string signable = $"ARTIFACT_REGISTER:{CurrentProjectId}:{cid}:{actor}:{timestamp}";
+        string signature = MyKeyService.SignData(signable);
+
+        var request = new ArtifactAnchorRequest
+        {
+            ProjectId = CurrentProjectId,
+            FileHash = cid,
+            FileName = file.Name,
+            SizeBytes = file.Size,
+            ContentType = file.ContentType ?? "application/octet-stream",
+            User = actor,
+            RegisteredBy = actor,
+            VerificationMethod = "IPFS CID",
+            Timestamp = timestamp,
+            UserPublicKey = MyKeyService.PublicKey ?? "",
+            UserSignature = signature
+        };
+
+        using var response = await Http.PostAsJsonAsync($"{currentNodeUrl}/api/integrations/artifacts/register", request);
+        if (response.IsSuccessStatusCode)
+        {
+            await SyncChain();
+            return true;
+        }
+
+        string details = await response.Content.ReadAsStringAsync();
+        statusMessage = $"Artifact anchor failed ({(int)response.StatusCode}): {details}";
+        return false;
+    }
+
+    private async Task<bool> TryCopyTextToClipboardAsync(string text)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            return true;
+        }
+        catch
+        {
+            try
+            {
+                return await JS.InvokeAsync<bool>("copyTextFallback", text);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    private sealed class ArtifactAnchorRequest
+    {
+        public string ProjectId { get; set; } = "";
+        public string FileHash { get; set; } = "";
+        public string FileName { get; set; } = "";
+        public long SizeBytes { get; set; }
+        public string ContentType { get; set; } = "";
+        public string User { get; set; } = "";
+        public string RegisteredBy { get; set; } = "";
+        public string VerificationMethod { get; set; } = "IPFS CID";
+        public string Timestamp { get; set; } = "";
+        public string UserPublicKey { get; set; } = "";
+        public string UserSignature { get; set; } = "";
+    }
 }
+
+
+
+

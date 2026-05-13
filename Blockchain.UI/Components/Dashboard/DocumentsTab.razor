@@ -55,6 +55,7 @@
                 <input class="form-control bg-dark text-white border-secondary"
                        value="@DocumentTitle"
                        @oninput="OnTitleInput"
+                       placeholder="Enter document title"
                        disabled="@(!CanEdit)" />
             </div>
 
@@ -63,6 +64,7 @@
                 <textarea class="form-control bg-dark text-white border-secondary document-editor"
                           value="@DocumentContent"
                           @oninput="OnContentInput"
+                          placeholder="Write document content"
                           disabled="@(!CanEdit)"></textarea>
             </div>
 

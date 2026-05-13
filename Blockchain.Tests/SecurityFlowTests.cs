@@ -32,6 +32,63 @@ public sealed class SecurityFlowTests
     }
 
     [Fact]
+    public void TaskContract_ShouldRequireRealProjectMemberAssigneeForActiveStatuses()
+    {
+        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_task_assignee_{Guid.NewGuid():N}.db");
+        try
+        {
+            var db = new DatabaseManager(dbPath, "");
+            string projectId = "AssigneeProj";
+            db.SaveBlock(new Block
+            {
+                Index = 0,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"CreateProject\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\"}}",
+                PreviousHash = "0",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = "System"
+            }, "System");
+
+            var contract = new TaskContract();
+
+            Assert.False(contract.Validate(
+                $"{{\"Type\":\"Move\",\"TaskId\":\"T1\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"Status\":1,\"Assignee\":\"None\"}}",
+                "alice-pk",
+                db));
+
+            Assert.False(contract.Validate(
+                $"{{\"Type\":\"Move\",\"TaskId\":\"T1\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"Status\":2,\"Assignee\":\"Bob\"}}",
+                "alice-pk",
+                db));
+
+            db.SaveBlock(new Block
+            {
+                Index = 1,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"AssignRole\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"TargetUser\":\"Bob\",\"TargetPublicKey\":\"bob-pk\",\"Role\":\"Developer\"}}",
+                PreviousHash = "prev",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = "System"
+            }, "System");
+
+            Assert.True(contract.Validate(
+                $"{{\"Type\":\"Move\",\"TaskId\":\"T1\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"Status\":1,\"Assignee\":\"Bob\"}}",
+                "alice-pk",
+                db));
+        }
+        finally
+        {
+            TryDelete(dbPath);
+            TryDelete(dbPath + "-wal");
+            TryDelete(dbPath + "-shm");
+        }
+    }
+
+    [Fact]
     public void VerifySignature_ShouldRejectInvalidSignatureLength()
     {
         var block = new Block
@@ -347,7 +404,7 @@ public sealed class SecurityFlowTests
     }
 
     [Fact]
-    public void GovernanceVotes_ShouldAcceptProposalWhenQuorumIsReached()
+    public void GovernanceVotes_ShouldRemainOpenDuringVotingWindowAndCountAuthorVote()
     {
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_governance_state_{Guid.NewGuid():N}.db");
         try
@@ -384,6 +441,18 @@ public sealed class SecurityFlowTests
             {
                 Index = 1,
                 Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"AssignRole\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"TargetUser\":\"Bob\",\"TargetPublicKey\":\"MIIBSzCB8QYHKoZIzj0CATCB5QIBATAsBgcqhkjOPQEBAiEA/////wAAAAEAAAAAAAAAAAAAAAD///////////////8wRQIhAP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVRAiEA/////wAAAAEAAAAAAAAAAAAAAAD///////////////8EIFrGNdiqOpPns+u9VXaYhrxlHQawzFOw9jvOPD4n0mBLBEEEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9QIhAP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVRAgEBA0IABDL6VFLjFS4CFf8H6Jw0KVD82g5M3M4f3IPQkTyM07gXx5vHl13QnUi4MHEaWmZ2ehZ0x2g7Ak+rqFiX7u9OQfc=\"}}",
+                PreviousHash = "prev-role",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = projectId
+            }, projectId);
+
+            db.SaveBlock(new Block
+            {
+                Index = 2,
+                Timestamp = DateTime.UtcNow,
                 Data = $"{{\"Type\":\"CastVote\",\"ProposalId\":\"{proposalId}\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"Vote\":true}}",
                 PreviousHash = "prev",
                 Hash = Guid.NewGuid().ToString("N"),
@@ -400,9 +469,181 @@ public sealed class SecurityFlowTests
             using var reader = cmd.ExecuteReader();
 
             Assert.True(reader.Read());
-            Assert.Equal("Accepted", reader.GetString(0));
+            Assert.Equal("Open", reader.GetString(0));
             Assert.Equal(1, reader.GetInt32(1));
             Assert.Equal(0, reader.GetInt32(2));
+        }
+        finally
+        {
+            TryDelete(dbPath);
+            TryDelete(dbPath + "-wal");
+            TryDelete(dbPath + "-shm");
+        }
+    }
+
+    [Fact]
+    public void GovernanceVotes_ShouldFinalizeApprovedAfterDeadlineWhenMajoritySupports()
+    {
+        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_governance_finalize_{Guid.NewGuid():N}.db");
+        try
+        {
+            var db = new DatabaseManager(dbPath, "");
+            string projectId = "FinalizeProj";
+            string proposalId = "GOV-FINALIZE";
+            string oldTimestamp = DateTime.UtcNow.AddHours(-2).ToString("O");
+
+            db.SaveBlock(new Block
+            {
+                Index = 0,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"CreateProject\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\"}}",
+                PreviousHash = "0",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = "System"
+            }, "System");
+
+            db.SaveBlock(new Block
+            {
+                Index = 1,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"AssignRole\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"TargetUser\":\"Bob\",\"TargetPublicKey\":\"MIIBSzCB8QYHKoZIzj0CATCB5QIBATAsBgcqhkjOPQEBAiEA/////wAAAAEAAAAAAAAAAAAAAAD///////////////8wRQIhAP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVRAiEA/////wAAAAEAAAAAAAAAAAAAAAD///////////////8EIFrGNdiqOpPns+u9VXaYhrxlHQawzFOw9jvOPD4n0mBLBEEEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9QIhAP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVRAgEBA0IABDL6VFLjFS4CFf8H6Jw0KVD82g5M3M4f3IPQkTyM07gXx5vHl13QnUi4MHEaWmZ2ehZ0x2g7Ak+rqFiX7u9OQfc=\"}}",
+                PreviousHash = "prev",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = projectId
+            }, projectId);
+
+            db.SaveBlock(new Block
+            {
+                Index = 2,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"CreateProposal\",\"ProposalId\":\"{proposalId}\",\"ProjectId\":\"{projectId}\",\"Title\":\"Adopt release\",\"User\":\"Alice\",\"Timestamp\":\"{oldTimestamp}\"}}",
+                PreviousHash = "prev2",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = projectId
+            }, projectId);
+
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
+                    INSERT INTO GovernanceVotes (ProposalId, UserName, Vote) VALUES ($proposal, $user1, 1);
+                    INSERT INTO GovernanceVotes (ProposalId, UserName, Vote) VALUES ($proposal, $user2, 1);";
+                cmd.Parameters.AddWithValue("$proposal", proposalId);
+                cmd.Parameters.AddWithValue("$user1", "Bob");
+                cmd.Parameters.AddWithValue("$user2", "Alice");
+                cmd.ExecuteNonQuery();
+            }
+
+            db.RefreshGovernanceStates(projectId);
+
+            using var verifyConn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            verifyConn.Open();
+            using var verifyCmd = verifyConn.CreateCommand();
+            verifyCmd.CommandText = "SELECT Status, YesVotes, NoVotes FROM GovernanceProposals WHERE ProposalId = $id";
+            verifyCmd.Parameters.AddWithValue("$id", proposalId);
+            using var reader = verifyCmd.ExecuteReader();
+
+            Assert.True(reader.Read());
+            Assert.Equal("Approved", reader.GetString(0));
+            Assert.Equal(2, reader.GetInt32(1));
+            Assert.Equal(0, reader.GetInt32(2));
+        }
+        finally
+        {
+            TryDelete(dbPath);
+            TryDelete(dbPath + "-wal");
+            TryDelete(dbPath + "-shm");
+        }
+    }
+
+    [Fact]
+    public void GovernanceVotes_ShouldCloseEarlyWhenAllMembersVoted_AndApproveOnTie()
+    {
+        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_governance_early_close_{Guid.NewGuid():N}.db");
+        try
+        {
+            var db = new DatabaseManager(dbPath, "");
+            string projectId = "EarlyCloseProj";
+            string proposalId = "GOV-EARLY";
+
+            db.SaveBlock(new Block
+            {
+                Index = 0,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"CreateProject\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\"}}",
+                PreviousHash = "0",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = "System"
+            }, "System");
+
+            db.SaveBlock(new Block
+            {
+                Index = 1,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"AssignRole\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"TargetUser\":\"Bob\",\"TargetPublicKey\":\"MIIBSzCB8QYHKoZIzj0CATCB5QIBATAsBgcqhkjOPQEBAiEA/////wAAAAEAAAAAAAAAAAAAAAD///////////////8wRQIhAP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVRAiEA/////wAAAAEAAAAAAAAAAAAAAAD///////////////8EIFrGNdiqOpPns+u9VXaYhrxlHQawzFOw9jvOPD4n0mBLBEEEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9QIhAP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVRAgEBA0IABDL6VFLjFS4CFf8H6Jw0KVD82g5M3M4f3IPQkTyM07gXx5vHl13QnUi4MHEaWmZ2ehZ0x2g7Ak+rqFiX7u9OQfc=\"}}",
+                PreviousHash = "prev",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = projectId
+            }, projectId);
+
+            db.SaveBlock(new Block
+            {
+                Index = 2,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"CreateProposal\",\"ProposalId\":\"{proposalId}\",\"ProjectId\":\"{projectId}\",\"Title\":\"Split vote\",\"User\":\"Alice\",\"Timestamp\":\"{DateTime.UtcNow:O}\"}}",
+                PreviousHash = "prev2",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = projectId
+            }, projectId);
+
+            db.SaveBlock(new Block
+            {
+                Index = 3,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"CastVote\",\"ProposalId\":\"{proposalId}\",\"ProjectId\":\"{projectId}\",\"User\":\"Alice\",\"Vote\":true}}",
+                PreviousHash = "prev3",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "alice-pk",
+                Signature = "sig",
+                ChannelId = projectId
+            }, projectId);
+
+            db.SaveBlock(new Block
+            {
+                Index = 4,
+                Timestamp = DateTime.UtcNow,
+                Data = $"{{\"Type\":\"CastVote\",\"ProposalId\":\"{proposalId}\",\"ProjectId\":\"{projectId}\",\"User\":\"Bob\",\"Vote\":false}}",
+                PreviousHash = "prev4",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = "bob-pk",
+                Signature = "sig",
+                ChannelId = projectId
+            }, projectId);
+
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT Status, YesVotes, NoVotes FROM GovernanceProposals WHERE ProposalId = $id";
+            cmd.Parameters.AddWithValue("$id", proposalId);
+            using var reader = cmd.ExecuteReader();
+
+            Assert.True(reader.Read());
+            Assert.Equal("Approved", reader.GetString(0));
+            Assert.Equal(1, reader.GetInt32(1));
+            Assert.Equal(1, reader.GetInt32(2));
         }
         finally
         {
@@ -899,7 +1140,7 @@ public sealed class SecurityFlowTests
 
             var contract = new AccessControlContract();
             bool accepted = contract.Validate(
-                $"{{\"Type\":\"CodeCommit\",\"Source\":\"GitHub\",\"ProjectId\":\"{projectId}\",\"User\":\"Bob\",\"CommitHash\":\"abcdef1\",\"Repository\":\"repo\"}}",
+                $"{{\"Type\":\"CodeCommit\",\"Source\":\"GitEvent\",\"Provider\":\"GitHubPush\",\"ProjectId\":\"{projectId}\",\"User\":\"Bob\",\"CommitHash\":\"abcdef1\",\"Repository\":\"repo\"}}",
                 oraclePublicKey,
                 db);
 

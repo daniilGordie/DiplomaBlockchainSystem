@@ -1,52 +1,43 @@
 <div class="row g-4 section-shell">
-    <div class="col-md-7">
+    <div class="col-12">
         <div class="glass-card p-4 h-100">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h4 class="text-warning mb-0">Team Management</h4>
                 <span class="badge bg-secondary">Project: @CurrentProjectId</span>
             </div>
-            <p class="text-muted" style="font-size: 0.9rem;">Blockchain Access Control. Only the <strong>Owner</strong> can grant access to this project workspace.</p>
+            <p class="text-muted mb-2" style="font-size: 0.9rem;">Blockchain Access Control. Only <strong>Owner</strong> or <strong>Manager</strong> can grant access to this project workspace.</p>
+            <div class="small mb-3">Your role: <span class="fw-semibold text-warning">@CurrentUserRole</span></div>
             <div class="input-group mt-3 shadow-sm">
                 <span class="input-group-text">Member</span>
-                <input value="@NewMemberName" @oninput="OnNewMemberNameInput" class="form-control" aria-label="Member name" />
-                <select value="@NewMemberRole" @onchange="OnNewMemberRoleChanged" class="form-select" style="max-width: 130px;" aria-label="Member role">
+                <input value="@NewMemberName" @oninput="OnNewMemberNameInput" class="form-control" placeholder="Enter member name" aria-label="Member name" disabled="@(!CanManageMembers)" />
+                <select value="@NewMemberRole" @onchange="OnNewMemberRoleChanged" class="form-select" style="max-width: 130px;" aria-label="Member role" disabled="@(!CanManageMembers)">
                     <option value="Developer">Developer</option>
                     <option value="QA">QA</option>
                     <option value="Observer">Observer</option>
                 </select>
-                <button class="btn btn-primary fw-semibold" @onclick="OnInviteMember" disabled="@IsMining">Grant Access</button>
+                <button class="btn btn-primary fw-semibold" @onclick="OnInviteMember" disabled="@(!CanManageMembers || IsMining)">Grant Access</button>
             </div>
             <div class="mt-2">
                 <input value="@NewMemberPublicKey"
                        @oninput="OnNewMemberPublicKeyInput"
                        class="form-control"
                        placeholder="Member public key (base64 SPKI)"
-                       aria-label="Member public key" />
+                       aria-label="Member public key"
+                       disabled="@(!CanManageMembers)" />
             </div>
             <div class="mt-2">
                 <input value="@NewMemberPublicKeyFingerprint"
                        @oninput="OnNewMemberPublicKeyFingerprintInput"
                        class="form-control"
                        placeholder="Expected key fingerprint (optional)"
-                       aria-label="Member key fingerprint" />
+                       aria-label="Member key fingerprint"
+                       disabled="@(!CanManageMembers)" />
             </div>
             <small class="text-white-50 d-block mt-2">The invited member must share the public key from their wallet profile.</small>
-        </div>
-    </div>
-
-    <div class="col-md-5">
-        <div class="glass-card p-4 h-100">
-            <h4 class="text-warning mb-3">Token Transfer</h4>
-            <p class="text-muted small mb-4">Send NXP tokens to team members. Checked by <span class="text-warning font-monospace">ReputationContract</span>.</p>
-            <div class="mb-3">
-                <label class="form-label text-white-50">Recipient Name</label>
-                <input value="@TargetTransferUser" @oninput="OnTargetTransferUserInput" class="form-control" aria-label="Recipient name" />
-            </div>
-            <div class="mb-4">
-                <label class="form-label text-white-50">Amount (NXP)</label>
-                <input type="number" value="@TransferAmount" @oninput="OnTransferAmountInput" class="form-control" min="1" aria-label="Transfer amount" />
-            </div>
-            <button class="btn btn-primary w-100 fw-semibold" @onclick="OnTransferTokens" disabled="@(!IsLoggedIn)">Send Funds</button>
+            @if (!CanManageMembers)
+            {
+                <small class="text-muted d-block mt-2">You do not have permission to grant access in this project.</small>
+            }
         </div>
     </div>
 </div>
@@ -57,28 +48,19 @@
     [Parameter] public string NewMemberRole { get; set; } = "Developer";
     [Parameter] public string NewMemberPublicKey { get; set; } = "";
     [Parameter] public string NewMemberPublicKeyFingerprint { get; set; } = "";
-    [Parameter] public string TargetTransferUser { get; set; } = "";
-    [Parameter] public int TransferAmount { get; set; } = 1;
     [Parameter] public bool IsMining { get; set; }
     [Parameter] public bool IsLoggedIn { get; set; }
+    [Parameter] public string CurrentUserRole { get; set; } = "None";
+    [Parameter] public bool CanManageMembers { get; set; }
 
     [Parameter] public EventCallback<string> NewMemberNameChanged { get; set; }
     [Parameter] public EventCallback<string> NewMemberRoleChanged { get; set; }
     [Parameter] public EventCallback<string> NewMemberPublicKeyChanged { get; set; }
     [Parameter] public EventCallback<string> NewMemberPublicKeyFingerprintChanged { get; set; }
-    [Parameter] public EventCallback<string> TargetTransferUserChanged { get; set; }
-    [Parameter] public EventCallback<int> TransferAmountChanged { get; set; }
     [Parameter] public EventCallback OnInviteMember { get; set; }
-    [Parameter] public EventCallback OnTransferTokens { get; set; }
 
     private Task OnNewMemberNameInput(ChangeEventArgs e) => NewMemberNameChanged.InvokeAsync(e.Value?.ToString() ?? "");
     private Task OnNewMemberRoleChanged(ChangeEventArgs e) => NewMemberRoleChanged.InvokeAsync(e.Value?.ToString() ?? "Developer");
     private Task OnNewMemberPublicKeyInput(ChangeEventArgs e) => NewMemberPublicKeyChanged.InvokeAsync(e.Value?.ToString() ?? "");
     private Task OnNewMemberPublicKeyFingerprintInput(ChangeEventArgs e) => NewMemberPublicKeyFingerprintChanged.InvokeAsync(e.Value?.ToString() ?? "");
-    private Task OnTargetTransferUserInput(ChangeEventArgs e) => TargetTransferUserChanged.InvokeAsync(e.Value?.ToString() ?? "");
-    private Task OnTransferAmountInput(ChangeEventArgs e)
-    {
-        int value = int.TryParse(e.Value?.ToString(), out var parsed) ? parsed : 1;
-        return TransferAmountChanged.InvokeAsync(value);
-    }
 }

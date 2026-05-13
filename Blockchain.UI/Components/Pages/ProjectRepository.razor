@@ -39,6 +39,14 @@
                                     <small class="text-muted">@c.Author</small>
                                 </div>
                                 <div class="text-white small fw-bold">@c.Message</div>
+                                @if (!string.IsNullOrWhiteSpace(c.Provider))
+                                {
+                                    <div class="small text-white-50">@c.Provider</div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(c.Branch))
+                                {
+                                    <div class="small text-white-50">branch: @c.Branch</div>
+                                }
                             </div>
                         }
                     }
@@ -154,7 +162,9 @@
                         Message = root.TryGetProperty("Message", out var msg) ? msg.GetString() ?? "" : "",
                         Author = root.TryGetProperty("User", out var user) ? user.GetString() ?? "Unknown" : "Unknown",
                         PatchCid = root.TryGetProperty("PatchCid", out var p) ? p.GetString() ?? "" : "",
-                        Repository = root.TryGetProperty("Repository", out var repo) ? repo.GetString() ?? "" : ""
+                        Repository = root.TryGetProperty("Repository", out var repo) ? repo.GetString() ?? "" : "",
+                        Provider = root.TryGetProperty("Provider", out var provider) ? provider.GetString() ?? "" : "",
+                        Branch = root.TryGetProperty("Branch", out var branch) ? branch.GetString() ?? "" : ""
                     });
                 }
                 else if (TryParseArtifact(root, out var artifact))

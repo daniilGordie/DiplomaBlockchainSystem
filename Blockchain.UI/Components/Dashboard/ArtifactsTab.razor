@@ -20,6 +20,10 @@
                     <div>
                         <div class="text-white fw-semibold">Git webhook</div>
                         <div class="small text-white-50 text-truncate">@GitStatus.Endpoint</div>
+                        @if (!string.IsNullOrWhiteSpace(GitStatus.Details))
+                        {
+                            <div class="small text-white-50 text-truncate">@GitStatus.Details</div>
+                        }
                     </div>
                     <span class="badge @(GitStatus.IsHealthy ? "bg-success" : "bg-secondary")">@GitStatus.Status</span>
                 </div>
@@ -29,6 +33,70 @@
                         <div class="small text-white-50 text-truncate">@IpfsStatus.Endpoint</div>
                     </div>
                     <span class="badge @(IpfsStatus.IsHealthy ? "bg-success" : "bg-danger")">@IpfsStatus.Status</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12">
+            <div class="alert alert-secondary py-2 mb-0">
+                <div class="small">
+                    <strong>How commits appear here:</strong> local commit -> installed Nexus post-commit hook -> `/api/webhooks/git` -> blockchain `CodeCommit` event.
+                    GitHub push webhooks use the same endpoint, but are normalized as `GitEvent` before anchoring.
+                    If commit list is empty, check hook installation, project id, webhook secret, and webhook URL.
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12">
+            <div class="p-3 rounded border border-secondary">
+                <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+                    <div>
+                        <h6 class="text-white mb-1">Connect Repository</h6>
+                        <div class="small text-white-50">Bind one Git repository to this project and anchor commits as GitEvent records.</div>
+                    </div>
+                    <span class="badge @(GitStatus.IsHealthy ? "bg-success" : "bg-secondary")">@GitStatus.Status</span>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-lg-6">
+                        <label class="form-label small text-muted">Current project</label>
+                        <div class="form-control bg-dark text-white border-secondary font-monospace">@CurrentProjectId</div>
+                    </div>
+                    <div class="col-lg-6">
+                        <label class="form-label small text-muted">Webhook URL</label>
+                        <div class="form-control bg-dark text-white border-secondary font-monospace text-truncate" title="@GitStatus.Endpoint">@GitStatus.Endpoint</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small text-muted">Local repository hook command</label>
+                        <div class="form-control bg-dark text-warning border-secondary font-monospace text-break">@BuildLocalHookCommand()</div>
+                        <div class="small text-white-50 mt-1">Run it from the target repository root. Use the same WebhookSecret as the node.</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small text-muted">GitHub webhook setup</label>
+                        <div class="small text-white-50">
+                            Payload URL: <span class="font-monospace text-info">@BuildGitHubWebhookUrl()</span> · Content type: <span class="font-monospace">application/json</span> · Event: <span class="font-monospace">push</span>
+                        </div>
+                    </div>
+
+                    <div class="col-12">
+                        <div class="small text-muted mb-2">Repository bindings</div>
+                        @if (!GitStatus.RepositoryBindings.Any())
+                        {
+                            <div class="text-muted small">No repository is connected yet. The first valid commit event creates the binding.</div>
+                        }
+                        else
+                        {
+                            <div class="d-flex flex-column gap-2">
+                                @foreach (var binding in GitStatus.RepositoryBindings)
+                                {
+                                    <div class="d-flex justify-content-between gap-3 rounded border border-secondary px-3 py-2">
+                                        <span class="text-white font-monospace text-truncate">@binding.Repository</span>
+                                        <span class="@(IsCurrentProjectBinding(binding) ? "text-warning" : "text-white-50") font-monospace">@binding.ProjectId</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
                 </div>
             </div>
         </div>
@@ -90,6 +158,49 @@
                 </div>
             </div>
         </div>
+
+        <div class="col-12">
+            <div class="p-3 rounded border border-secondary">
+                <h6 class="text-white mb-3">Anchored Git Commits</h6>
+                <div style="max-height: 260px; overflow-y: auto;">
+                    @if (!Commits.Any())
+                    {
+                        <div class="text-muted text-center py-4">No commit events were anchored for this project yet.</div>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush bg-transparent">
+                            @foreach (var c in Commits.Take(10))
+                            {
+                                <li class="list-group-item bg-transparent border-secondary px-0">
+                                    <div class="d-flex justify-content-between gap-3 align-items-start">
+                                        <div class="min-w-0">
+                                            <div class="text-white fw-semibold text-truncate">@c.Message</div>
+                                            <div class="small text-white-50">
+                                                <span class="text-info">@c.Author</span> · <span class="text-white-50">@c.Repository</span>
+                                                @if (!string.IsNullOrWhiteSpace(c.Provider))
+                                                {
+                                                    <span> · @c.Provider</span>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(c.Branch))
+                                                {
+                                                    <span> · branch: @c.Branch</span>
+                                                }
+                                            </div>
+                                            <div class="small font-monospace text-warning">@ShortHash(c.CommitHash)</div>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(c.PatchCid))
+                                        {
+                                            <a href="@BuildIpfsGatewayUrl(c.PatchCid)" target="_blank" class="btn btn-sm btn-outline-info flex-shrink-0">Patch</a>
+                                        }
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -100,11 +211,16 @@
     [Parameter] public string StatusMessage { get; set; } = "";
     [Parameter] public string IpfsGatewayUrl { get; set; } = "http://127.0.0.1:8080/ipfs";
     [Parameter] public List<ArtifactPayloadUI> Artifacts { get; set; } = new();
+    [Parameter] public List<CommitPayloadUI> Commits { get; set; } = new();
     [Parameter] public IntegrationStatusUI GitStatus { get; set; } = new();
     [Parameter] public IntegrationStatusUI IpfsStatus { get; set; } = new();
     [Parameter] public EventCallback<InputFileChangeEventArgs> OnUploadFile { get; set; }
 
     private string BuildIpfsGatewayUrl(string cid) => $"{IpfsGatewayUrl.Trim().TrimEnd('/')}/{cid}";
+    private string BuildLocalHookCommand() => $".\\install-githook.ps1 -NodeWebhookUrl \"{GitStatus.Endpoint}\" -ProjectId \"{CurrentProjectId}\" -WebhookSecret \"<node-webhook-secret>\"";
+    private string BuildGitHubWebhookUrl() => $"{GitStatus.Endpoint}?projectId={Uri.EscapeDataString(CurrentProjectId ?? string.Empty)}";
+    private bool IsCurrentProjectBinding(GitRepositoryBindingUI binding) =>
+        string.Equals(binding.ProjectId, CurrentProjectId, StringComparison.OrdinalIgnoreCase);
 
     private static string FormatBytes(long bytes)
     {
@@ -112,5 +228,15 @@
         if (bytes < 1024) return $"{bytes} B";
         if (bytes < 1024 * 1024) return $"{Math.Round(bytes / 1024d, 1)} KB";
         return $"{Math.Round(bytes / 1024d / 1024d, 1)} MB";
+    }
+
+    private static string ShortHash(string hash)
+    {
+        if (string.IsNullOrWhiteSpace(hash))
+        {
+            return "";
+        }
+
+        return hash.Length <= 14 ? hash : $"{hash[..14]}...";
     }
 }

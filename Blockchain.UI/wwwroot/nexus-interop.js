@@ -10,6 +10,24 @@ window.downloadFileFromStream = async (fileName, contentStreamReference) => {
     URL.revokeObjectURL(url);
 };
 
+window.copyTextFallback = (text) => {
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text ?? '';
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        ta.style.pointerEvents = 'none';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch {
+        return false;
+    }
+};
+
 window.nexusPasskey = {
     _b64ToBytes: (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0)),
     _bytesToB64: (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))),
