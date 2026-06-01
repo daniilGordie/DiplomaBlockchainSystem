@@ -1,8 +1,9 @@
 using System.Text.Json;
+using Blockchain.Application.Git;
 
 namespace Blockchain.Node.Services
 {
-    public sealed class GitProjectBindingStore
+    public sealed class GitProjectBindingStore : IGitRepositoryBindingStore
     {
         private readonly string _filePath;
         private readonly object _sync = new();

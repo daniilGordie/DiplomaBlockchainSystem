@@ -9,7 +9,7 @@ namespace Blockchain.Node.Services
     public class OracleIdentity
     {
         private readonly ECDsa _ecdsa;
-        private const string KeyFileName = "oracle_key.dat";
+        private readonly string _keyFileName;
         private readonly string _keyPassword;
 
         public string PublicKey { get; private set; }
@@ -19,12 +19,19 @@ namespace Blockchain.Node.Services
             _keyPassword = config["OraclePrivateKeyPassword"]
                 ?? config["NodeDbPassword"]
                 ?? throw new InvalidOperationException("OraclePrivateKeyPassword (or NodeDbPassword fallback) is not configured.");
+            _keyFileName = config["OracleKeyPath"] ?? "oracle_key.dat";
 
             _ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
 
-            if (File.Exists(KeyFileName))
+            string? keyDirectory = Path.GetDirectoryName(_keyFileName);
+            if (!string.IsNullOrWhiteSpace(keyDirectory))
             {
-                byte[] encryptedBytes = File.ReadAllBytes(KeyFileName);
+                Directory.CreateDirectory(keyDirectory);
+            }
+
+            if (File.Exists(_keyFileName))
+            {
+                byte[] encryptedBytes = File.ReadAllBytes(_keyFileName);
                 _ecdsa.ImportEncryptedPkcs8PrivateKey(
                     Encoding.UTF8.GetBytes(_keyPassword),
                     encryptedBytes,
@@ -39,7 +46,7 @@ namespace Blockchain.Node.Services
                         HashAlgorithmName.SHA256,
                         100000));
 
-                File.WriteAllBytes(KeyFileName, encryptedBytes);
+                File.WriteAllBytes(_keyFileName, encryptedBytes);
             }
 
             PublicKey = Convert.ToBase64String(_ecdsa.ExportSubjectPublicKeyInfo());

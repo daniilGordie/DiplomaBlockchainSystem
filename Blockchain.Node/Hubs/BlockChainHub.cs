@@ -1,21 +1,20 @@
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Configuration;
 using Blockchain.Core;
+using Blockchain.Core.Contracts;
 using System.Security.Cryptography;
 using System.Text;
 using System.Collections.Concurrent;
-using System.Linq;
 
 namespace Blockchain.Node.Hubs
 {
     public class BlockchainHub : Hub
     {
-        private readonly IConfiguration _configuration;
+        private readonly IProjectMembershipStore _projectMembershipStore;
         private static readonly ConcurrentDictionary<string, string> _connectionUsers = new();
 
-        public BlockchainHub(IConfiguration configuration)
+        public BlockchainHub(IProjectMembershipStore projectMembershipStore)
         {
-            _configuration = configuration;
+            _projectMembershipStore = projectMembershipStore;
         }
 
         public async Task JoinProject(string projectId)
@@ -32,8 +31,7 @@ namespace Blockchain.Node.Hubs
                 return;
             }
 
-            var db = new DatabaseManager(GetNodeDatabaseName(_configuration), GetRequiredConfiguration(_configuration, "NodeDbPassword"));
-            string role = db.GetUserRole(channel, userName);
+            string role = _projectMembershipStore.GetUserRole(channel, userName);
             if (role == "None")
             {
                 return;
@@ -81,31 +79,6 @@ namespace Blockchain.Node.Hubs
         {
             _connectionUsers.TryRemove(Context.ConnectionId, out _);
             return base.OnDisconnectedAsync(exception);
-        }
-
-        private static string GetRequiredConfiguration(IConfiguration configuration, string key)
-        {
-            string? value = configuration[key];
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                throw new InvalidOperationException($"{key} is not configured.");
-            }
-
-            return value;
-        }
-
-        private static string GetNodeDatabaseName(IConfiguration configuration)
-        {
-            string port = configuration["Urls"]?.Split(':').LastOrDefault()?.Replace("/", "") ?? "5041";
-            string? configuredDbName = configuration.GetConnectionString("DefaultNodeDb");
-
-            if (string.IsNullOrWhiteSpace(configuredDbName) ||
-                (configuredDbName == "nexus_node_5041.db" && port != "5041"))
-            {
-                return $"nexus_node_{port}.db";
-            }
-
-            return configuredDbName;
         }
     }
 }

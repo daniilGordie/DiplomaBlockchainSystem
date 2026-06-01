@@ -1,0 +1,102 @@
+services:
+  bootstrap-node:
+    build:
+      context: .
+      dockerfile: Blockchain.Node/Dockerfile
+    environment:
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: /data/bootstrap-node.db
+      P2P__NodeRole: Bootstrap
+      P2P__NodeId: bootstrap-node
+      P2P__PublicUrl: http://bootstrap-node:5042
+      P2P__SyncToken: demo-sync-token
+      P2P__RegistrationToken: demo-registration-token
+      NodeDbPassword: demo-db-password
+      NodeAdminToken: demo-admin-token
+      OraclePrivateKeyPassword: demo-oracle-password
+      OracleKeyPath: /keys/oracle_key.dat
+      OraclePublicKey: auto
+      WebhookSecret: demo-webhook-secret
+    ports:
+      - "7000:5041"
+    volumes:
+      - bootstrap-data:/data
+      - oracle-key:/keys
+
+  full-node-a:
+    build:
+      context: .
+      dockerfile: Blockchain.Node/Dockerfile
+    depends_on:
+      - bootstrap-node
+    environment:
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: /data/full-node-a.db
+      P2P__NodeRole: Full
+      P2P__NodeId: full-node-a
+      P2P__PublicUrl: http://full-node-a:5042
+      P2P__BootstrapPeers__0: http://bootstrap-node:5042
+      P2P__SyncToken: demo-sync-token
+      P2P__RegistrationToken: demo-registration-token
+      NodeDbPassword: demo-db-password
+      NodeAdminToken: demo-admin-token
+      OraclePrivateKeyPassword: demo-oracle-password
+      OracleKeyPath: /keys/oracle_key.dat
+      OraclePublicKey: auto
+      WebhookSecret: demo-webhook-secret
+    ports:
+      - "7001:5041"
+    volumes:
+      - full-node-a-data:/data
+      - oracle-key:/keys
+
+  full-node-b:
+    build:
+      context: .
+      dockerfile: Blockchain.Node/Dockerfile
+    depends_on:
+      - bootstrap-node
+    environment:
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: /data/full-node-b.db
+      P2P__NodeRole: Full
+      P2P__NodeId: full-node-b
+      P2P__PublicUrl: http://full-node-b:5042
+      P2P__BootstrapPeers__0: http://bootstrap-node:5042
+      P2P__SyncToken: demo-sync-token
+      P2P__RegistrationToken: demo-registration-token
+      NodeDbPassword: demo-db-password
+      NodeAdminToken: demo-admin-token
+      OraclePrivateKeyPassword: demo-oracle-password
+      OracleKeyPath: /keys/oracle_key.dat
+      OraclePublicKey: auto
+      WebhookSecret: demo-webhook-secret
+    ports:
+      - "7002:5041"
+    volumes:
+      - full-node-b-data:/data
+      - oracle-key:/keys
+
+  ui:
+    build:
+      context: .
+      dockerfile: Blockchain.UI/Dockerfile
+    depends_on:
+      - full-node-a
+    ports:
+      - "7003:80"
+
+volumes:
+  bootstrap-data:
+  full-node-a-data:
+  full-node-b-data:
+  oracle-key:

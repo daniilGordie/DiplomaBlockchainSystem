@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Blockchain.Core;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -7,9 +8,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-    namespace Blockchain.Core
+    namespace Blockchain.Infrastructure.Persistence
     {
-        public class DatabaseManager
+        public class DatabaseManager : IBlockchainStore, IPeerStore
         {
             public string DbFileName { get; private set; }
             private readonly string _dbPassword;
@@ -195,19 +196,20 @@ using System.Text.Json;
                     cmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS Peers (
                         Url TEXT PRIMARY KEY,
+                        NodeId TEXT,
+                        Role TEXT,
                         LastSeen TEXT,
                         LastFailure TEXT,
                         IsTrusted INTEGER NOT NULL DEFAULT 1
                     );";
                     cmd.ExecuteNonQuery();
+                    EnsurePeerColumns(connection);
                 }
             }
 
             public static string SanitizeChannelName(string channelId)
             {
-                if (string.IsNullOrWhiteSpace(channelId)) return "System";
-                var safeName = new string(channelId.Where(char.IsLetterOrDigit).ToArray());
-                return string.IsNullOrEmpty(safeName) ? "System" : safeName;
+                return ChannelName.Normalize(channelId);
             }
 
             private void CreateChannelTableInternal(SqliteConnection conn, SqliteTransaction tx, string channelId)
@@ -792,16 +794,43 @@ using System.Text.Json;
                 cmd.ExecuteNonQuery();
             }
 
-            public void SavePeer(string url)
+            public void SavePeer(PeerInfo peer)
+            {
+                if (string.IsNullOrWhiteSpace(peer.Url)) return;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                EnsurePeerColumns(connection);
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO Peers (Url, NodeId, Role, LastSeen, IsTrusted)
+                VALUES ($url, $nodeId, $role, $seen, $trusted)
+                ON CONFLICT(Url) DO UPDATE SET
+                    NodeId = CASE WHEN excluded.NodeId = '' THEN Peers.NodeId ELSE excluded.NodeId END,
+                    Role = CASE WHEN excluded.Role = '' THEN Peers.Role ELSE excluded.Role END,
+                    LastSeen = excluded.LastSeen,
+                    IsTrusted = excluded.IsTrusted";
+                cmd.Parameters.AddWithValue("$url", peer.Url);
+                cmd.Parameters.AddWithValue("$nodeId", peer.NodeId ?? string.Empty);
+                cmd.Parameters.AddWithValue("$role", string.IsNullOrWhiteSpace(peer.Role) ? "Full" : peer.Role);
+                cmd.Parameters.AddWithValue("$seen", DateTime.UtcNow.ToString("O"));
+                cmd.Parameters.AddWithValue("$trusted", peer.IsTrusted ? 1 : 0);
+                cmd.ExecuteNonQuery();
+            }
+
+            public void SavePeer(string url) => SavePeer(PeerInfo.FromUrl(url));
+
+            public void MarkPeerSeen(string url)
             {
                 if (string.IsNullOrWhiteSpace(url)) return;
 
                 using var connection = new SqliteConnection(ConnectionString);
                 connection.Open();
+                EnsurePeerColumns(connection);
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = @"
-                INSERT INTO Peers (Url, LastSeen, IsTrusted)
-                VALUES ($url, $seen, 1)
+                INSERT INTO Peers (Url, Role, LastSeen, IsTrusted)
+                VALUES ($url, 'Full', $seen, 1)
                 ON CONFLICT(Url) DO UPDATE SET LastSeen = excluded.LastSeen, IsTrusted = 1";
                 cmd.Parameters.AddWithValue("$url", url);
                 cmd.Parameters.AddWithValue("$seen", DateTime.UtcNow.ToString("O"));
@@ -814,30 +843,69 @@ using System.Text.Json;
 
                 using var connection = new SqliteConnection(ConnectionString);
                 connection.Open();
+                EnsurePeerColumns(connection);
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = @"
-                INSERT INTO Peers (Url, LastFailure, IsTrusted)
-                VALUES ($url, $failure, 1)
+                INSERT INTO Peers (Url, Role, LastFailure, IsTrusted)
+                VALUES ($url, 'Full', $failure, 1)
                 ON CONFLICT(Url) DO UPDATE SET LastFailure = excluded.LastFailure";
                 cmd.Parameters.AddWithValue("$url", url);
                 cmd.Parameters.AddWithValue("$failure", DateTime.UtcNow.ToString("O"));
                 cmd.ExecuteNonQuery();
             }
 
-            public List<string> LoadPeers()
+            public List<PeerInfo> LoadPeerInfos()
             {
-                var peers = new List<string>();
+                var peers = new List<PeerInfo>();
                 using var connection = new SqliteConnection(ConnectionString);
                 connection.Open();
+                EnsurePeerColumns(connection);
                 using var cmd = connection.CreateCommand();
-                cmd.CommandText = "SELECT Url FROM Peers WHERE IsTrusted = 1 ORDER BY Url";
+                cmd.CommandText = "SELECT Url, COALESCE(NodeId, ''), COALESCE(Role, 'Full'), LastSeen, LastFailure, IsTrusted FROM Peers WHERE IsTrusted = 1 ORDER BY Url";
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    peers.Add(reader.GetString(0));
+                    peers.Add(new PeerInfo(
+                        reader.GetString(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        reader.IsDBNull(4) ? null : reader.GetString(4),
+                        !reader.IsDBNull(5) && reader.GetInt32(5) != 0));
                 }
 
                 return peers;
+            }
+
+            public List<string> LoadPeers()
+            {
+                return LoadPeerInfos().Select(peer => peer.Url).ToList();
+            }
+
+            private static void EnsurePeerColumns(SqliteConnection connection)
+            {
+                EnsureColumn(connection, "Peers", "NodeId", "TEXT");
+                EnsureColumn(connection, "Peers", "Role", "TEXT");
+            }
+
+            private static void EnsureColumn(SqliteConnection connection, string tableName, string columnName, string definition)
+            {
+                using (var check = connection.CreateCommand())
+                {
+                    check.CommandText = $"PRAGMA table_info({tableName})";
+                    using var reader = check.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return;
+                        }
+                    }
+                }
+
+                using var alter = connection.CreateCommand();
+                alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}";
+                alter.ExecuteNonQuery();
             }
 
             public List<string> GetKnownChannels()
@@ -923,18 +991,7 @@ using System.Text.Json;
                     {
                         try
                         {
-                            chain.Add(new Block
-                            {
-                                Index = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0)),
-                                Timestamp = reader.IsDBNull(1) ? DateTime.MinValue : (DateTime.TryParse(reader.GetValue(1)?.ToString(), out var ts) ? ts : DateTime.MinValue),
-                                Data = DecryptString(reader.IsDBNull(2) ? "" : (reader.GetValue(2)?.ToString() ?? "")),
-                                PreviousHash = reader.IsDBNull(3) ? "" : (reader.GetValue(3)?.ToString() ?? ""),
-                                Hash = reader.IsDBNull(4) ? "" : (reader.GetValue(4)?.ToString() ?? ""),
-                                ValidatorPublicKey = DecryptString(reader.IsDBNull(5) ? "" : (reader.GetValue(5)?.ToString() ?? "")),
-                                Signature = DecryptString(reader.IsDBNull(6) ? "" : (reader.GetValue(6)?.ToString() ?? "")),
-                                Nonce = reader.IsDBNull(7) ? 0 : Convert.ToInt64(reader.GetValue(7)),
-                                ChannelId = safeChannel
-                            });
+                            chain.Add(ReadBlock(reader, safeChannel));
                         }
                         catch (Exception rowEx)
                         {
@@ -948,6 +1005,125 @@ using System.Text.Json;
                 }
 
                 return chain;
+            }
+
+            public Block? GetLatestBlock(string channelId = "System")
+            {
+                string safeChannel = SanitizeChannelName(channelId);
+                string tableName = safeChannel == "System" ? "Blocks" : $"Blocks_{safeChannel}";
+
+                try
+                {
+                    using var connection = new SqliteConnection(ConnectionString);
+                    connection.Open();
+
+                    EnsureBlockTable(connection, tableName);
+
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = $"SELECT IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId DESC LIMIT 1";
+
+                    using var reader = cmd.ExecuteReader();
+                    return reader.Read() ? ReadBlock(reader, safeChannel) : null;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[CRITICAL] Error reading latest block from {tableName}: {ex.Message}");
+                    return null;
+                }
+            }
+
+            public List<Block> LoadLatestBlocks(string channelId = "System", int count = 100)
+            {
+                var blocks = new List<Block>();
+                int limit = count > 0 ? count : 100;
+                string safeChannel = SanitizeChannelName(channelId);
+                string tableName = safeChannel == "System" ? "Blocks" : $"Blocks_{safeChannel}";
+
+                try
+                {
+                    using var connection = new SqliteConnection(ConnectionString);
+                    connection.Open();
+
+                    EnsureBlockTable(connection, tableName);
+
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = $"SELECT IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId DESC LIMIT $limit";
+                    cmd.Parameters.AddWithValue("$limit", limit);
+
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        try
+                        {
+                            blocks.Add(ReadBlock(reader, safeChannel));
+                        }
+                        catch (Exception rowEx)
+                        {
+                            Console.WriteLine($"[CRITICAL] Error reading block from DB (Channel: {safeChannel}): {rowEx.Message}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[CRITICAL] Error accessing table {tableName}: {ex.Message}");
+                }
+
+                blocks.Reverse();
+                return blocks;
+            }
+
+            public bool HasBlocks(string channelId = "System")
+            {
+                string safeChannel = SanitizeChannelName(channelId);
+                string tableName = safeChannel == "System" ? "Blocks" : $"Blocks_{safeChannel}";
+
+                try
+                {
+                    using var connection = new SqliteConnection(ConnectionString);
+                    connection.Open();
+
+                    EnsureBlockTable(connection, tableName);
+
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = $"SELECT 1 FROM {tableName} LIMIT 1";
+                    return cmd.ExecuteScalar() != null;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[CRITICAL] Error checking table {tableName}: {ex.Message}");
+                    return false;
+                }
+            }
+
+            private void EnsureBlockTable(SqliteConnection connection, string tableName)
+            {
+                using var cmdInit = connection.CreateCommand();
+                cmdInit.CommandText = $"CREATE TABLE IF NOT EXISTS {tableName} (IndexId INTEGER PRIMARY KEY, Timestamp TEXT, Data TEXT, PreviousHash TEXT, Hash TEXT, ValidatorPublicKey TEXT, Signature TEXT, Nonce INTEGER)";
+                cmdInit.ExecuteNonQuery();
+            }
+
+            private Block ReadBlock(SqliteDataReader reader, string safeChannel)
+            {
+                return new Block
+                {
+                    Index = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0)),
+                    Timestamp = reader.IsDBNull(1)
+                        ? DateTime.MinValue
+                        : (DateTime.TryParse(
+                            reader.GetValue(1)?.ToString(),
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.RoundtripKind,
+                            out var ts)
+                            ? ts
+                            : DateTime.MinValue),
+                    Data = DecryptString(reader.IsDBNull(2) ? "" : (reader.GetValue(2)?.ToString() ?? "")),
+                    PreviousHash = reader.IsDBNull(3) ? "" : (reader.GetValue(3)?.ToString() ?? ""),
+                    Hash = reader.IsDBNull(4) ? "" : (reader.GetValue(4)?.ToString() ?? ""),
+                    ValidatorPublicKey = DecryptString(reader.IsDBNull(5) ? "" : (reader.GetValue(5)?.ToString() ?? "")),
+                    Signature = DecryptString(reader.IsDBNull(6) ? "" : (reader.GetValue(6)?.ToString() ?? "")),
+                    Nonce = reader.IsDBNull(7) ? 0 : Convert.ToInt64(reader.GetValue(7)),
+                    ChannelId = safeChannel
+                };
             }
 
             public void ReplaceChain(string channelId, List<Block> blocks)

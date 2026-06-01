@@ -20,7 +20,7 @@ Must include:
 1. Send malformed signatures for write/read calls.
 2. Try project reads with wrong key binding.
 3. Try joining SignalR project group without membership.
-4. Try `AddPeer` without `NodeAdminToken`.
+4. Confirm the browser UI does not contain or submit `NodeAdminToken`; peer registration must stay server-side/admin-only.
 5. Send duplicate webhook request.
 
 Expected:

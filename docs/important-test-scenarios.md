@@ -52,7 +52,7 @@ Expected:
 
 1. Start two nodes with `P2P:SyncToken` configured.
 2. Create high-frequency task/document updates in one project.
-3. Add the second node as peer with `NodeAdminToken`.
+3. Add the second node as peer through node bootstrap configuration or a server-side admin path with `NodeAdminToken`.
 4. Validate:
    - project chain sync completes,
    - analytics block throughput is non-zero,

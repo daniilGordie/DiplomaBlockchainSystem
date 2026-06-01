@@ -4,16 +4,20 @@ using System.Linq;
 using System.Threading.Tasks;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
-using Microsoft.Data.Sqlite;
 using Blockchain.Core;
 using System.Text.Json;
 using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
-using Blockchain.Core.Contracts;
+using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.SignalR;
 using System.Security.Cryptography;
-using Blockchain.Node.Hubs;
 using System.Collections.Concurrent;
+using Blockchain.Application.Analytics;
+using Blockchain.Application.Projects;
+using Blockchain.Application.Security;
+using Blockchain.Application.Blocks;
+using Blockchain.Core.Contracts;
+using Blockchain.Node.Hubs;
 
 namespace Blockchain.Node.Services
 {
@@ -21,117 +25,136 @@ namespace Blockchain.Node.Services
     {
         private readonly ILogger<BlockchainGrpcService> _logger;
         private readonly IConfiguration _configuration;
-        private readonly string _dbFileName;
-        private readonly string _dbPassword;
+        private readonly IChainReader _chainReader;
+        private readonly ISmartContractStateReader _smartContractState;
+        private readonly IProjectMembershipStore _projectMembershipStore;
+        private readonly IPeerStore _peerStore;
+        private readonly P2POptions _p2pOptions;
         private readonly BlockchainManager _blockchainManager;
-        private readonly OracleIdentity _oracleIdentity;
         private readonly P2PNetworkService _p2pService;
-        private readonly IHubContext<BlockchainHub> _hubContext;
+        private readonly PeerChainSyncService _peerChainSync;
+        private readonly ProjectResponseCache _projectResponseCache;
+        private readonly GrpcBlockProcessor _blockProcessor;
+        private readonly AuthorizeReadRequestUseCase _authorizeReadRequest;
+        private readonly GetProjectAnalyticsUseCase _getProjectAnalytics;
+        private readonly GetSecurityAuditUseCase _getSecurityAudit;
+        private readonly GetProjectTasksUseCase _getProjectTasks;
+        private readonly GetTaskHistoryUseCase _getTaskHistory;
+        private readonly GetGovernanceProposalsUseCase _getGovernanceProposals;
+        private readonly GetProjectDocumentsUseCase _getProjectDocuments;
+        private readonly GetDocumentVersionsUseCase _getDocumentVersions;
+        private readonly ProjectAccessPolicy _projectAccessPolicy;
+        private readonly ProjectReadAccessGuard _projectReadAccess;
+        private readonly ChainReadAccessGuard _chainReadAccess;
+        private readonly UserReadAccessGuard _userReadAccess;
 
         private static readonly ConcurrentDictionary<string, byte> _syncedCommits = new();
         private static readonly ConcurrentDictionary<string, byte> _syncedArtifacts = new();
-
-        private string DbConnectionString => $"Data Source={_dbFileName};Password={_dbPassword}";
-
         public BlockchainGrpcService(
             ILogger<BlockchainGrpcService> logger,
             IConfiguration configuration,
+            IChainReader chainReader,
+            ISmartContractStateReader smartContractState,
+            IProjectMembershipStore projectMembershipStore,
+            IPeerStore peerStore,
+            IOptions<P2POptions> p2pOptions,
             BlockchainManager manager,
-            OracleIdentity oracleIdentity,
             P2PNetworkService p2pService,
-            IHubContext<BlockchainHub> hubContext)
+            PeerChainSyncService peerChainSync,
+            ProjectResponseCache projectResponseCache,
+            GrpcBlockProcessor blockProcessor,
+            AuthorizeReadRequestUseCase authorizeReadRequest,
+            GetProjectAnalyticsUseCase getProjectAnalytics,
+            GetSecurityAuditUseCase getSecurityAudit,
+            GetProjectTasksUseCase getProjectTasks,
+            GetTaskHistoryUseCase getTaskHistory,
+            GetGovernanceProposalsUseCase getGovernanceProposals,
+            GetProjectDocumentsUseCase getProjectDocuments,
+            GetDocumentVersionsUseCase getDocumentVersions,
+            ProjectAccessPolicy projectAccessPolicy,
+            ProjectReadAccessGuard projectReadAccess,
+            ChainReadAccessGuard chainReadAccess,
+            UserReadAccessGuard userReadAccess)
         {
             _logger = logger;
             _configuration = configuration;
+            _chainReader = chainReader;
+            _smartContractState = smartContractState;
+            _projectMembershipStore = projectMembershipStore;
+            _peerStore = peerStore;
+            _p2pOptions = p2pOptions.Value;
             _blockchainManager = manager;
-            _oracleIdentity = oracleIdentity;
             _p2pService = p2pService;
-            _hubContext = hubContext;
+            _peerChainSync = peerChainSync;
+            _projectResponseCache = projectResponseCache;
+            _blockProcessor = blockProcessor;
+            _authorizeReadRequest = authorizeReadRequest;
+            _getProjectAnalytics = getProjectAnalytics;
+            _getSecurityAudit = getSecurityAudit;
+            _getProjectTasks = getProjectTasks;
+            _getTaskHistory = getTaskHistory;
+            _getGovernanceProposals = getGovernanceProposals;
+            _getProjectDocuments = getProjectDocuments;
+            _getDocumentVersions = getDocumentVersions;
+            _projectAccessPolicy = projectAccessPolicy;
+            _projectReadAccess = projectReadAccess;
+            _chainReadAccess = chainReadAccess;
+            _userReadAccess = userReadAccess;
 
-            _dbFileName = GetNodeDatabaseName(_configuration);
-
-            _dbPassword = GetRequiredConfiguration(_configuration, "NodeDbPassword");
-        }
-
-        private static string GetRequiredConfiguration(IConfiguration configuration, string key)
-        {
-            string? value = configuration[key];
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                throw new InvalidOperationException(
-                    $"{key} is not configured. Set it via .NET user-secrets or environment variables.");
-            }
-
-            return value;
-        }
-
-        private static string GetNodeDatabaseName(IConfiguration configuration)
-        {
-            string port = configuration["Urls"]?.Split(':').LastOrDefault()?.Replace("/", "") ?? "5041";
-            string? configuredDbName = configuration.GetConnectionString("DefaultNodeDb");
-
-            if (string.IsNullOrWhiteSpace(configuredDbName) ||
-                (configuredDbName == "nexus_node_5041.db" && port != "5041"))
-            {
-                return $"nexus_node_{port}.db";
-            }
-
-            return configuredDbName;
-        }
-
-        private bool VerifySignature(string data, string signatureBase64, string publicKeyBase64)
-        {
-            try
-            {
-                byte[] signatureBytes = Convert.FromBase64String(signatureBase64);
-
-                if (signatureBytes.Length != 64)
-                {
-                    _logger.LogWarning($"[Security] Rejected: Invalid signature length ({signatureBytes.Length} bytes). Potential deserialization attack vector.");
-                    return false;
-                }
-
-                using var ecdsa = ECDsa.Create();
-                ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(publicKeyBase64), out _);
-
-                byte[] dataBytes = System.Text.Encoding.UTF8.GetBytes(data);
-                return ecdsa.VerifyData(dataBytes, signatureBytes, HashAlgorithmName.SHA256);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning($"[Security] Critical signature verification error: {ex.Message}");
-                return false;
-            }
         }
 
         private bool IsAuthorizedReadRequest(
-            DatabaseManager db,
+            ISmartContractStateReader smartContractState,
             string scope,
             string userName,
             string userPublicKey,
-            string authSignature)
+            string authSignature,
+            string authTimestamp,
+            string authNonce)
         {
-            if (string.IsNullOrWhiteSpace(userName) ||
-                string.Equals(userName, "Guest", StringComparison.OrdinalIgnoreCase) ||
-                string.IsNullOrWhiteSpace(userPublicKey) ||
-                string.IsNullOrWhiteSpace(authSignature))
+            var result = _authorizeReadRequest.Execute(new AuthorizeReadRequestCommand(
+                scope,
+                userName,
+                userPublicKey,
+                authSignature,
+                authTimestamp,
+                authNonce));
+
+            if (!result.Authorized)
             {
-                _logger.LogWarning("[Security] Rejected read request for scope {Scope}: missing signed identity.", scope);
-                return false;
+                _logger.LogWarning(
+                    "[Security] Rejected read request for scope {Scope}: {Reason}.",
+                    scope,
+                    result.Message);
             }
 
-            string signable = $"READ:{scope}:{userName}:{userPublicKey}";
-            if (!VerifySignature(signable, authSignature, userPublicKey))
-            {
-                _logger.LogWarning("[Security] Rejected read request for scope {Scope}: invalid signature.", scope);
-                return false;
-            }
+            return result.Authorized;
+        }
 
-            string? boundPublicKey = db.GetUserPublicKey(userName);
-            if (!string.IsNullOrWhiteSpace(boundPublicKey) &&
-                !string.Equals(boundPublicKey, userPublicKey, StringComparison.Ordinal))
+        private bool CanReadProjectScope(
+            string projectId,
+            string scope,
+            string userName,
+            string userPublicKey,
+            string authSignature,
+            string authTimestamp,
+            string authNonce)
+        {
+            var result = _projectReadAccess.CanRead(new ProjectReadAccessRequest(
+                projectId,
+                scope,
+                userName,
+                userPublicKey,
+                authSignature,
+                authTimestamp,
+                authNonce));
+
+            if (!result.Allowed)
             {
-                _logger.LogWarning("[Security] Rejected read request for user {UserName}: public key mismatch.", userName);
+                _logger.LogWarning(
+                    "[Security] Rejected project read request for scope {Scope}: {Reason}.",
+                    scope,
+                    result.Reason);
                 return false;
             }
 
@@ -168,10 +191,13 @@ namespace Blockchain.Node.Services
                (uriResult.Scheme == Uri.UriSchemeHttp || uriResult.Scheme == Uri.UriSchemeHttps))
             {
                 _p2pService.AddPeer(request.Url);
-                var db = new DatabaseManager(_dbFileName, _dbPassword);
-                db.SavePeer(request.Url);
-                int syncedBlocks = await SyncFromPeerAsync(request.Url);
-                return new StatusReply { Success = true, Message = $"Peer added. Synced {syncedBlocks} blocks." };
+                _peerStore.SavePeer(request.Url);
+                var sync = await _peerChainSync.SyncFromPeerAsync(request.Url);
+                foreach (var channelId in sync.ChangedChannels)
+                {
+                    _projectResponseCache.InvalidateProject(channelId);
+                }
+                return new StatusReply { Success = true, Message = $"Peer added. Synced {sync.AcceptedBlocks} blocks." };
             }
             return new StatusReply { Success = false, Message = "Invalid URL format" };
         }
@@ -183,65 +209,87 @@ namespace Blockchain.Node.Services
             return Task.FromResult(resp);
         }
 
+        public override Task<StatusReply> RegisterPeer(RegisterPeerRequest request, ServerCallContext context)
+        {
+            if (!IsValidRegistrationToken(request.RegistrationToken))
+            {
+                _logger.LogWarning("[Security] Rejected RegisterPeer request: invalid registration token.");
+                return Task.FromResult(new StatusReply { Success = false, Message = "Invalid registration token" });
+            }
+
+            string publicUrl = P2POptions.NormalizeUrl(request.PublicUrl);
+            if (!IsValidPeerUrl(publicUrl, allowLocalhost: IsLocalNetworkMode()))
+            {
+                return Task.FromResult(new StatusReply { Success = false, Message = "Invalid public URL" });
+            }
+
+            if (IsSelfPeer(publicUrl))
+            {
+                return Task.FromResult(new StatusReply { Success = false, Message = "Cannot register this node as its own peer" });
+            }
+
+            string role = string.IsNullOrWhiteSpace(request.Role) ? P2PNodeRole.Full.ToString() : request.Role.Trim();
+            var peer = new PeerInfo(publicUrl, request.NodeId?.Trim() ?? string.Empty, role);
+            _peerStore.SavePeer(peer);
+            _p2pService.AddPeer(publicUrl);
+
+            _logger.LogInformation("[P2P] Registered peer {NodeId} ({Role}) at {PublicUrl}.", peer.NodeId, peer.Role, peer.Url);
+            return Task.FromResult(new StatusReply { Success = true, Message = "Peer registered" });
+        }
+
+        public override Task<PeerDirectoryResponse> GetPeerDirectory(EmptyRequest request, ServerCallContext context)
+        {
+            var response = new PeerDirectoryResponse
+            {
+                CurrentNodeId = _p2pOptions.EffectiveNodeId,
+                CurrentPublicUrl = _p2pOptions.NormalizedPublicUrl,
+                CurrentRole = _p2pOptions.Role.ToString()
+            };
+            foreach (var peer in _peerStore.LoadPeerInfos())
+            {
+                response.Peers.Add(new PeerDirectoryItem
+                {
+                    NodeId = peer.NodeId ?? string.Empty,
+                    PublicUrl = peer.Url,
+                    Role = string.IsNullOrWhiteSpace(peer.Role) ? P2PNodeRole.Full.ToString() : peer.Role,
+                    LastSeen = peer.LastSeen ?? string.Empty,
+                    LastFailure = peer.LastFailure ?? string.Empty,
+                    IsTrusted = peer.IsTrusted
+                });
+            }
+
+            return Task.FromResult(response);
+        }
+
         public override Task<KnownChannelsResponse> GetKnownChannels(EmptyRequest request, ServerCallContext context)
         {
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             var response = new KnownChannelsResponse();
-            response.ChannelIds.AddRange(db.GetKnownChannels());
+            response.ChannelIds.AddRange(_chainReader.GetKnownChannels());
             return Task.FromResult(response);
         }
 
         public override async Task<StatusReply> BroadcastBlock(BlockModel request, ServerCallContext context)
         {
-            var peerBlock = ToBlock(request);
-
-            bool isAccepted = _blockchainManager.ProcessPeerBlock(peerBlock);
-
-            if (isAccepted)
+            var result = await _blockProcessor.ProcessBroadcastAsync(request);
+            if (result.Success)
             {
                 TrackPayloadForAnalytics(request.Data);
-                await NotifyClientsAsync(request);
+                _projectResponseCache.InvalidateProject(result.ChannelId);
             }
 
-            return new StatusReply { Success = isAccepted, Message = isAccepted ? "Accepted" : "Rejected" };
+            return new StatusReply { Success = result.Success, Message = result.Message };
         }
 
         public override async Task<StatusReply> ReceiveBlock(BlockModel request, ServerCallContext context)
         {
-            try
+            var result = await _blockProcessor.ProcessReceivedAsync(request);
+            if (result.Success)
             {
-                string signableData = $"{request.Index}{request.Timestamp}{request.Data}{request.PreviousHash}";
-                bool isSigValid = VerifySignature(signableData, request.Signature, request.ValidatorPublicKey);
-
-                if (!isSigValid)
-                    return new StatusReply { Success = false, Message = "Crypto Fraud Detected: Invalid Signature" };
-
-                var db = new DatabaseManager(_dbFileName, _dbPassword);
-
-                var contract = new TaskContract();
-                if (!contract.Validate(request.Data, request.ValidatorPublicKey, db))
-                    return new StatusReply { Success = false, Message = "Access Denied by Smart Contract" };
-
-                var newBlock = ToBlock(request);
-
                 TrackPayloadForAnalytics(request.Data);
-
-                bool isAccepted = _blockchainManager.ProcessPeerBlock(newBlock);
-                if (!isAccepted)
-                {
-                    return new StatusReply { Success = false, Message = "Rejected by blockchain validation" };
-                }
-
-                await NotifyClientsAsync(request);
-                await _p2pService.BroadcastBlockAsync(newBlock);
-
-                return new StatusReply { Success = true, Message = "Block anchored successfully via PoC" };
+                _projectResponseCache.InvalidateProject(result.ChannelId);
             }
-            catch (Exception ex)
-            {
-                _logger.LogError($"[ReceiveBlock] Error: {ex.Message}");
-                return new StatusReply { Success = false, Message = $"Server Error: {ex.Message}" };
-            }
+
+            return new StatusReply { Success = result.Success, Message = result.Message };
         }
 
         public override Task<BlockModel> GetLastBlock(EmptyRequest request, ServerCallContext context)
@@ -251,46 +299,53 @@ namespace Blockchain.Node.Services
             {
                 return Task.FromResult(new BlockModel { Index = 0, Data = "", Hash = "0", PreviousHash = "0", Timestamp = DateTime.UtcNow.ToString("O"), ValidatorPublicKey = "", Signature = "", Nonce = 0 });
             }
-            return Task.FromResult(new BlockModel { Index = b.Index, Data = b.Data, Hash = b.Hash, PreviousHash = b.PreviousHash, Timestamp = b.Timestamp.ToString("O"), ValidatorPublicKey = b.ValidatorPublicKey ?? "", Signature = b.Signature ?? "", Nonce = b.Nonce });
+            return Task.FromResult(GrpcProjectMapper.ToBlockModel(b));
         }
 
         public override Task<ChainResponse> GetChain(ChainRequest request, ServerCallContext context)
         {
             var response = new ChainResponse();
 
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
-
             string channelToRead = string.IsNullOrEmpty(request.ChannelId) ? "System" : request.ChannelId;
             string userName = string.IsNullOrEmpty(request.UserName) ? "Guest" : request.UserName;
 
             bool isNodeSync = IsValidNodeSyncRequest(userName, request.SyncToken);
-            if (!isNodeSync && !IsAuthorizedReadRequest(db, $"CHAIN:{channelToRead}", userName, request.UserPublicKey, request.AuthSignature))
+            if (!isNodeSync)
             {
-                return Task.FromResult(response);
-            }
+                var access = _chainReadAccess.CanRead(new ChainReadAccessRequest(
+                    channelToRead,
+                    $"CHAIN:{channelToRead}",
+                    userName,
+                    request.UserPublicKey,
+                    request.AuthSignature,
+                    request.AuthTimestamp,
+                    request.AuthNonce));
 
-            string role = isNodeSync ? "NodeSync" : db.GetUserRole(channelToRead, userName);
-            if (!isNodeSync && role == "None" && channelToRead != "System")
-            {
-                return Task.FromResult(response);
-            }
-
-            var blocks = db.LoadChain(channelToRead);
-
-            foreach (var block in blocks.TakeLast(request.Count > 0 ? request.Count : 100))
-            {
-                response.Blocks.Add(new BlockModel
+                if (!access.Allowed)
                 {
-                    Index = block.Index,
-                    Timestamp = block.Timestamp.ToString("O"),
-                    Data = block.Data,
-                    PreviousHash = block.PreviousHash,
-                    Hash = block.Hash,
-                    ValidatorPublicKey = block.ValidatorPublicKey ?? "",
-                    Signature = block.Signature ?? "",
-                    Nonce = block.Nonce,
-                    ChannelId = block.ChannelId
-                });
+                    _logger.LogWarning(
+                        "[Security] Rejected chain read request for channel {ChannelId}: {Reason}.",
+                        channelToRead,
+                        access.Reason);
+                    return Task.FromResult(response);
+                }
+            }
+
+            int requestedCount = request.Count > 0 ? request.Count : 100;
+            int count = Math.Clamp(requestedCount, 1, 500);
+            var blocks = request.AfterIndex >= 0
+                ? _chainReader.LoadChain(channelToRead)
+                    .Where(block => block.Index > request.AfterIndex)
+                    .OrderBy(block => block.Index)
+                    .Take(count)
+                    .ToList()
+                : _chainReader.LoadLatestBlocks(channelToRead, count)
+                    .OrderBy(block => block.Index)
+                    .ToList();
+
+            foreach (var block in blocks)
+            {
+                response.Blocks.Add(GrpcProjectMapper.ToBlockModel(block));
             }
 
             return Task.FromResult(response);
@@ -303,7 +358,7 @@ namespace Blockchain.Node.Services
                 return false;
             }
 
-            string configuredToken = _configuration["P2P:SyncToken"] ?? string.Empty;
+            string configuredToken = _p2pOptions.SyncToken;
             if (string.IsNullOrWhiteSpace(configuredToken) || string.IsNullOrWhiteSpace(syncToken))
             {
                 return false;
@@ -314,56 +369,38 @@ namespace Blockchain.Node.Services
             return CryptographicOperations.FixedTimeEquals(left, right);
         }
 
+        private bool IsValidRegistrationToken(string suppliedToken)
+        {
+            string configuredToken = _p2pOptions.RegistrationToken;
+            if (string.IsNullOrWhiteSpace(configuredToken) || string.IsNullOrWhiteSpace(suppliedToken))
+            {
+                return false;
+            }
+
+            byte[] left = System.Text.Encoding.UTF8.GetBytes(configuredToken);
+            byte[] right = System.Text.Encoding.UTF8.GetBytes(suppliedToken);
+            return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
+        }
+
         public override Task<TaskResponse> GetProjectTasks(ProjectRequest request, ServerCallContext context)
         {
             var response = new TaskResponse();
 
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
-
             string projectId = string.IsNullOrWhiteSpace(request.ProjectId) ? "System" : request.ProjectId;
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
 
-            if (!IsAuthorizedReadRequest(db, $"PROJECT:{projectId}:TASKS", userName, request.UserPublicKey, request.AuthSignature))
-            {
-                return Task.FromResult(response);
-            }
-
-            string role = db.GetUserRole(projectId, userName);
-            response.UserRole = role;
-
-            if (role == "None" && projectId != "System")
+            if (!CanReadProjectScope(projectId, $"PROJECT:{projectId}:TASKS", userName, request.UserPublicKey, request.AuthSignature, request.AuthTimestamp, request.AuthNonce))
             {
                 _logger.LogWarning($"[Security] User '{userName}' attempted to access tasks for project '{projectId}' without permissions.");
                 return Task.FromResult(response);
             }
 
-            try
+            var result = _getProjectTasks.Execute(projectId, userName);
+            response.UserRole = result.UserRole;
+            foreach (var task in result.Tasks)
             {
-                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(DbConnectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-
-                cmd.CommandText = "SELECT TaskId, Title, Creator, Assignee, Status, ProjectId, Description, ParentTaskId, BranchInfo FROM Tasks WHERE ProjectId = $p";
-                cmd.Parameters.AddWithValue("$p", projectId);
-
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    response.Tasks.Add(new TaskItem
-                    {
-                        Id = reader.GetString(0),
-                        Title = db.DecryptStoredValue(reader.GetString(1)),
-                        Creator = db.DecryptStoredValue(reader.GetString(2)),
-                        Assignee = db.DecryptStoredValue(reader.GetString(3)),
-                        Status = reader.GetInt32(4),
-                        ProjectId = reader.GetString(5),
-                        Description = reader.IsDBNull(6) ? "" : db.DecryptStoredValue(reader.GetString(6)),
-                        ParentTaskId = reader.IsDBNull(7) ? "" : db.DecryptStoredValue(reader.GetString(7)),
-                        BranchInfo = reader.IsDBNull(8) ? "" : db.DecryptStoredValue(reader.GetString(8))
-                    });
-                }
+                response.Tasks.Add(GrpcProjectMapper.ToTaskItem(task));
             }
-            catch (Exception ex) { _logger.LogError(ex, "DB Read Error in Tasks"); }
 
             return Task.FromResult(response);
         }
@@ -372,41 +409,17 @@ namespace Blockchain.Node.Services
         {
             var response = new TaskHistoryResponse();
 
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             string projectId = string.IsNullOrWhiteSpace(request.ProjectId) ? "System" : request.ProjectId;
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
 
-            if (!IsAuthorizedReadRequest(db, $"PROJECT:{projectId}:TASK_HISTORY:{request.TaskId}", userName, request.UserPublicKey, request.AuthSignature))
+            if (!CanReadProjectScope(projectId, $"PROJECT:{projectId}:TASK_HISTORY:{request.TaskId}", userName, request.UserPublicKey, request.AuthSignature, request.AuthTimestamp, request.AuthNonce))
             {
                 return Task.FromResult(response);
             }
 
-            string role = db.GetUserRole(projectId, userName);
-            if (role == "None" && projectId != "System")
+            foreach (var item in _getTaskHistory.Execute(projectId, request.TaskId))
             {
-                return Task.FromResult(response);
-            }
-
-            var blocks = db.LoadChain(projectId);
-
-            foreach (var b in blocks)
-            {
-                if (!b.Data.Contains(request.TaskId)) continue;
-                try
-                {
-                    using var doc = JsonDocument.Parse(b.Data);
-                    var root = doc.RootElement;
-                    if (root.TryGetProperty("TaskId", out var tId) && tId.GetString() == request.TaskId)
-                    {
-                        var action = root.TryGetProperty("Type", out var type) ? type.GetString() : "Update";
-                        var user = root.TryGetProperty("User", out var u) ? u.GetString() : "System";
-                        var statusId = root.TryGetProperty("Status", out var s) ? s.GetInt32() : 0;
-                        string statusLabel = statusId == 0 ? "To Do" : (statusId == 1 ? "In Progress" : "Done");
-
-                        response.Items.Add(new TaskHistoryItem { Timestamp = b.Timestamp.ToString("g"), User = user, Action = action, StatusLabel = statusLabel, BlockIndex = b.Index });
-                    }
-                }
-                catch { }
+                response.Items.Add(GrpcProjectMapper.ToTaskHistoryItem(item));
             }
             return Task.FromResult(response);
         }
@@ -418,65 +431,17 @@ namespace Blockchain.Node.Services
         {
             var response = new GovernanceResponse();
 
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             string projectId = string.IsNullOrWhiteSpace(request.ProjectId) ? "System" : request.ProjectId;
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
 
-            if (!IsAuthorizedReadRequest(db, $"PROJECT:{projectId}:GOVERNANCE", userName, request.UserPublicKey, request.AuthSignature))
+            if (!CanReadProjectScope(projectId, $"PROJECT:{projectId}:GOVERNANCE", userName, request.UserPublicKey, request.AuthSignature, request.AuthTimestamp, request.AuthNonce))
             {
                 return Task.FromResult(response);
             }
 
-            string role = db.GetUserRole(projectId, userName);
-            if (role == "None" && projectId != "System")
+            foreach (var proposal in _getGovernanceProposals.Execute(projectId, userName))
             {
-                return Task.FromResult(response);
-            }
-
-            try
-            {
-                db.RefreshGovernanceStates(projectId);
-
-                using var conn = new SqliteConnection(DbConnectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT p.ProposalId, p.ProjectId, p.Title, p.Description, p.CreatedBy, p.CreatedAt,
-                           p.Status, p.YesVotes, p.NoVotes, v.Vote
-                    FROM GovernanceProposals p
-                    LEFT JOIN GovernanceVotes v ON v.ProposalId = p.ProposalId AND v.UserName = $user
-                    WHERE p.ProjectId = $project
-                    ORDER BY p.CreatedAt DESC";
-                cmd.Parameters.AddWithValue("$project", projectId);
-                cmd.Parameters.AddWithValue("$user", userName);
-
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    string userVote = "";
-                    if (!reader.IsDBNull(9))
-                    {
-                        userVote = reader.GetInt32(9) == 1 ? "Yes" : "No";
-                    }
-
-                    response.Proposals.Add(new GovernanceProposalItem
-                    {
-                        ProposalId = reader.GetString(0),
-                        ProjectId = reader.GetString(1),
-                        Title = db.DecryptStoredValue(reader.GetString(2)),
-                        Description = reader.IsDBNull(3) ? "" : db.DecryptStoredValue(reader.GetString(3)),
-                        CreatedBy = db.DecryptStoredValue(reader.GetString(4)),
-                        CreatedAt = reader.GetString(5),
-                        Status = reader.GetString(6),
-                        YesVotes = reader.GetInt32(7),
-                        NoVotes = reader.GetInt32(8),
-                        UserVote = userVote
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "DB Read Error in Governance");
+                response.Proposals.Add(GrpcProjectMapper.ToGovernanceProposalItem(proposal));
             }
 
             return Task.FromResult(response);
@@ -484,136 +449,39 @@ namespace Blockchain.Node.Services
 
         public override Task<AnalyticsResponse> GetAnalytics(ProjectRequest request, ServerCallContext context)
         {
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             string projectId = string.IsNullOrWhiteSpace(request.ProjectId) ? "System" : request.ProjectId;
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
 
-            if (!IsAuthorizedReadRequest(db, $"PROJECT:{projectId}:ANALYTICS", userName, request.UserPublicKey, request.AuthSignature))
+            if (!CanReadProjectScope(projectId, $"PROJECT:{projectId}:ANALYTICS", userName, request.UserPublicKey, request.AuthSignature, request.AuthTimestamp, request.AuthNonce))
             {
                 return Task.FromResult(new AnalyticsResponse());
             }
 
-            string role = db.GetUserRole(projectId, userName);
-            if (role == "None" && projectId != "System")
+            if (_projectResponseCache.TryGetAnalytics(projectId, out var cachedAnalytics))
             {
-                return Task.FromResult(new AnalyticsResponse());
+                return Task.FromResult(cachedAnalytics);
             }
 
-            var blocks = db.LoadChain(projectId);
+            var resp = GrpcAnalyticsMapper.ToAnalyticsResponse(_getProjectAnalytics.Execute(projectId));
 
-            var payloadCounts = CountProjectPayloads(blocks);
-            var resp = new AnalyticsResponse
-            {
-                TotalBlocks = blocks.Count(),
-                TotalCommits = payloadCounts.CommitCount,
-                TotalArtifacts = payloadCounts.ArtifactCount
-            };
-
-            try
-            {
-                using var conn = new SqliteConnection(DbConnectionString);
-                conn.Open();
-
-                using var cmdT = conn.CreateCommand();
-                cmdT.CommandText = "SELECT COUNT(1) FROM Tasks WHERE ProjectId = $p";
-                cmdT.Parameters.AddWithValue("$p", projectId);
-                resp.TotalTasks = Convert.ToInt32(cmdT.ExecuteScalar());
-
-                using var cmdD = conn.CreateCommand();
-                cmdD.CommandText = "SELECT COUNT(DISTINCT DocumentId) FROM DocumentVersions WHERE ProjectId = $p";
-                cmdD.Parameters.AddWithValue("$p", projectId);
-                resp.TotalDocuments = Convert.ToInt32(cmdD.ExecuteScalar());
-
-                using var cmdS = conn.CreateCommand();
-                cmdS.CommandText = "SELECT Status, COUNT(1) FROM Tasks WHERE ProjectId = $p GROUP BY Status";
-                cmdS.Parameters.AddWithValue("$p", projectId);
-                using var rS = cmdS.ExecuteReader();
-                while (rS.Read()) { int s = rS.GetInt32(0); int c = rS.GetInt32(1); if (s == 0) resp.TasksTodo = c; else if (s == 1) resp.TasksInProgress = c; else if (s == 2) resp.TasksDone = c; }
-
-                using var cmdU = conn.CreateCommand();
-                cmdU.CommandText = @"
-                    SELECT b.UserName, b.Amount
-                    FROM Balances b
-                    INNER JOIN ProjectMembers pm ON pm.UserName = b.UserName
-                    WHERE pm.ProjectId = $p";
-                cmdU.Parameters.AddWithValue("$p", projectId);
-                using var rU = cmdU.ExecuteReader();
-                while (rU.Read()) resp.UserReputation.Add(rU.GetString(0), rU.GetInt32(1));
-            }
-            catch { }
-
-            resp.SecurityFindings = CountSecurityFindings(blocks);
-            if (blocks.Count > 1)
-            {
-                var orderedBlocks = blocks.OrderBy(b => b.Index).ToList();
-                var intervals = orderedBlocks
-                    .Skip(1)
-                    .Select((block, index) => Math.Abs((block.Timestamp - orderedBlocks[index].Timestamp).TotalSeconds))
-                    .Where(seconds => seconds > 0)
-                    .ToList();
-
-                resp.AverageBlockIntervalSeconds = intervals.Count > 0 ? intervals.Average() : 0;
-                var totalMinutes = Math.Max((orderedBlocks.Last().Timestamp - orderedBlocks.First().Timestamp).TotalMinutes, 1d / 60d);
-                resp.BlocksPerMinute = Math.Round(orderedBlocks.Count / totalMinutes, 2);
-            }
-
+            _projectResponseCache.SetAnalytics(projectId, resp);
             return Task.FromResult(resp);
         }
 
         public override Task<DocumentResponse> GetProjectDocuments(ProjectRequest request, ServerCallContext context)
         {
             var response = new DocumentResponse();
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             string projectId = string.IsNullOrWhiteSpace(request.ProjectId) ? "System" : request.ProjectId;
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
 
-            if (!IsAuthorizedReadRequest(db, $"PROJECT:{projectId}:DOCUMENTS", userName, request.UserPublicKey, request.AuthSignature))
+            if (!CanReadProjectScope(projectId, $"PROJECT:{projectId}:DOCUMENTS", userName, request.UserPublicKey, request.AuthSignature, request.AuthTimestamp, request.AuthNonce))
             {
                 return Task.FromResult(response);
             }
 
-            string role = db.GetUserRole(projectId, userName);
-            if (role == "None" && projectId != "System")
+            foreach (var document in _getProjectDocuments.Execute(projectId))
             {
-                return Task.FromResult(response);
-            }
-
-            try
-            {
-                using var conn = new SqliteConnection(DbConnectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT d.DocumentId, d.Title, d.Version, d.UpdatedBy, d.UpdatedAt, d.ContentHash, d.Content
-                    FROM DocumentVersions d
-                    INNER JOIN (
-                        SELECT DocumentId, MAX(Version) AS LatestVersion
-                        FROM DocumentVersions
-                        WHERE ProjectId = $project
-                        GROUP BY DocumentId
-                    ) latest ON latest.DocumentId = d.DocumentId AND latest.LatestVersion = d.Version
-                    WHERE d.ProjectId = $project
-                    ORDER BY d.UpdatedAt DESC";
-                cmd.Parameters.AddWithValue("$project", projectId);
-
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    response.Documents.Add(new DocumentSummary
-                    {
-                        DocumentId = reader.GetString(0),
-                        Title = db.DecryptStoredValue(reader.GetString(1)),
-                        LatestVersion = reader.GetInt32(2),
-                        UpdatedBy = db.DecryptStoredValue(reader.GetString(3)),
-                        UpdatedAt = reader.GetString(4),
-                        ContentHash = reader.GetString(5),
-                        Content = db.DecryptStoredValue(reader.GetString(6))
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "DB Read Error in Documents");
+                response.Documents.Add(GrpcProjectMapper.ToDocumentSummary(document));
             }
 
             return Task.FromResult(response);
@@ -622,52 +490,17 @@ namespace Blockchain.Node.Services
         public override Task<DocumentVersionResponse> GetDocumentVersions(DocumentHistoryRequest request, ServerCallContext context)
         {
             var response = new DocumentVersionResponse();
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             string projectId = string.IsNullOrWhiteSpace(request.ProjectId) ? "System" : request.ProjectId;
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
 
-            if (!IsAuthorizedReadRequest(db, $"PROJECT:{projectId}:DOCUMENT:{request.DocumentId}", userName, request.UserPublicKey, request.AuthSignature))
+            if (!CanReadProjectScope(projectId, $"PROJECT:{projectId}:DOCUMENT:{request.DocumentId}", userName, request.UserPublicKey, request.AuthSignature, request.AuthTimestamp, request.AuthNonce))
             {
                 return Task.FromResult(response);
             }
 
-            string role = db.GetUserRole(projectId, userName);
-            if (role == "None" && projectId != "System")
+            foreach (var version in _getDocumentVersions.Execute(projectId, request.DocumentId))
             {
-                return Task.FromResult(response);
-            }
-
-            try
-            {
-                using var conn = new SqliteConnection(DbConnectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT DocumentId, Version, Title, Content, ContentHash, UpdatedBy, UpdatedAt
-                    FROM DocumentVersions
-                    WHERE ProjectId = $project AND DocumentId = $document
-                    ORDER BY Version DESC";
-                cmd.Parameters.AddWithValue("$project", projectId);
-                cmd.Parameters.AddWithValue("$document", request.DocumentId);
-
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    response.Versions.Add(new DocumentVersionItem
-                    {
-                        DocumentId = reader.GetString(0),
-                        Version = reader.GetInt32(1),
-                        Title = db.DecryptStoredValue(reader.GetString(2)),
-                        Content = db.DecryptStoredValue(reader.GetString(3)),
-                        ContentHash = reader.GetString(4),
-                        UpdatedBy = db.DecryptStoredValue(reader.GetString(5)),
-                        UpdatedAt = reader.GetString(6)
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "DB Read Error in DocumentVersions");
+                response.Versions.Add(GrpcProjectMapper.ToDocumentVersionItem(version));
             }
 
             return Task.FromResult(response);
@@ -675,11 +508,10 @@ namespace Blockchain.Node.Services
 
         public override Task<SecurityAuditResponse> GetSecurityAudit(ProjectRequest request, ServerCallContext context)
         {
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             string projectId = string.IsNullOrWhiteSpace(request.ProjectId) ? "System" : request.ProjectId;
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
 
-            if (!IsAuthorizedReadRequest(db, $"PROJECT:{projectId}:SECURITY_AUDIT", userName, request.UserPublicKey, request.AuthSignature))
+            if (!CanReadProjectScope(projectId, $"PROJECT:{projectId}:SECURITY_AUDIT", userName, request.UserPublicKey, request.AuthSignature, request.AuthTimestamp, request.AuthNonce))
             {
                 return Task.FromResult(new SecurityAuditResponse
                 {
@@ -688,103 +520,115 @@ namespace Blockchain.Node.Services
                 });
             }
 
-            string role = db.GetUserRole(projectId, userName);
-            if (role == "None" && projectId != "System")
+            if (_projectResponseCache.TryGetSecurityAudit(projectId, out var cachedAudit))
             {
-                return Task.FromResult(new SecurityAuditResponse
-                {
-                    ChainValid = false,
-                    CheckedBlocks = 0
-                });
+                return Task.FromResult(cachedAudit);
             }
 
-            var blocks = db.LoadChain(projectId).OrderBy(b => b.Index).ToList();
-            var response = new SecurityAuditResponse { CheckedBlocks = blocks.Count };
+            var response = GrpcAnalyticsMapper.ToSecurityAuditResponse(_getSecurityAudit.Execute(projectId));
 
-            for (int i = 0; i < blocks.Count; i++)
-            {
-                var current = blocks[i];
-
-                if (current.Hash != current.CalculateHash())
-                {
-                    response.InvalidHashes++;
-                    response.Items.Add(new SecurityAuditItem
-                    {
-                        Severity = "Critical",
-                        CheckName = "Hash integrity",
-                        Details = $"Block #{current.Index} hash does not match its content."
-                    });
-                }
-
-                if (!current.VerifySignature())
-                {
-                    response.InvalidSignatures++;
-                    response.Items.Add(new SecurityAuditItem
-                    {
-                        Severity = "Critical",
-                        CheckName = "ECDSA signature",
-                        Details = $"Block #{current.Index} signature is invalid."
-                    });
-                }
-
-                if (!current.Hash.StartsWith(Blockchain.Core.Constants.NetworkParameters.TargetPrefix))
-                {
-                    response.InvalidProofOfWork++;
-                    response.Items.Add(new SecurityAuditItem
-                    {
-                        Severity = "High",
-                        CheckName = "Proof of work",
-                        Details = $"Block #{current.Index} does not satisfy the target prefix."
-                    });
-                }
-
-                string expectedPreviousHash = i == 0 ? "0" : blocks[i - 1].Hash;
-                if (current.PreviousHash != expectedPreviousHash)
-                {
-                    response.BrokenLinks++;
-                    response.Items.Add(new SecurityAuditItem
-                    {
-                        Severity = "Critical",
-                        CheckName = "Chain linkage",
-                        Details = $"Block #{current.Index} previous hash points to an unexpected parent."
-                    });
-                }
-            }
-
-            response.ChainValid = response.InvalidHashes == 0
-                && response.InvalidSignatures == 0
-                && response.InvalidProofOfWork == 0
-                && response.BrokenLinks == 0;
-
-            if (response.ChainValid)
-            {
-                response.Items.Add(new SecurityAuditItem
-                {
-                    Severity = "Info",
-                    CheckName = "Audit result",
-                    Details = "All checked blocks passed hash, signature, proof-of-work, and linkage validation."
-                });
-            }
-
+            _projectResponseCache.SetSecurityAudit(projectId, response);
             return Task.FromResult(response);
         }
 
         public override Task<ProjectListResponse> GetMyProjects(UserRequest request, ServerCallContext context)
         {
-            var db = new DatabaseManager(_dbFileName, _dbPassword);
             var response = new ProjectListResponse();
 
             string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
-            if (!IsAuthorizedReadRequest(db, $"USER:{userName}:PROJECTS", userName, request.UserPublicKey, request.AuthSignature))
+            var access = _userReadAccess.CanRead(new UserReadAccessRequest(
+                $"USER:{userName}:PROJECTS",
+                userName,
+                request.UserPublicKey,
+                request.AuthSignature,
+                request.AuthTimestamp,
+                request.AuthNonce));
+
+            if (!access.Allowed)
             {
+                _logger.LogWarning(
+                    "[Security] Rejected user read request for {UserName}: {Reason}.",
+                    userName,
+                    access.Reason);
                 return Task.FromResult(response);
             }
 
-            var projects = db.GetUserProjects(userName);
+            var projects = _projectMembershipStore.GetUserProjects(userName);
 
             response.ProjectIds.AddRange(projects);
 
             return Task.FromResult(response);
+        }
+
+        public override Task<UserIdentityResponse> GetUserIdentity(UserRequest request, ServerCallContext context)
+        {
+            string userName = string.IsNullOrWhiteSpace(request.UserName) ? "Guest" : request.UserName;
+            var access = _authorizeReadRequest.Execute(new AuthorizeReadRequestCommand(
+                $"USER:{userName}:IDENTITY",
+                userName,
+                request.UserPublicKey,
+                request.AuthSignature,
+                request.AuthTimestamp,
+                request.AuthNonce));
+
+            string? boundPublicKey = _smartContractState.GetUserPublicKey(userName);
+            bool exists = !string.IsNullOrWhiteSpace(boundPublicKey);
+            bool matches = !exists || string.Equals(boundPublicKey, request.UserPublicKey, StringComparison.Ordinal);
+
+            if (access.Status == AuthorizeReadRequestStatus.PublicKeyMismatch)
+            {
+                return Task.FromResult(new UserIdentityResponse
+                {
+                    Success = true,
+                    Exists = true,
+                    PublicKeyMatches = false,
+                    Message = "User name is already bound to another wallet key."
+                });
+            }
+
+            if (!access.Authorized)
+            {
+                return Task.FromResult(new UserIdentityResponse
+                {
+                    Success = false,
+                    Exists = exists,
+                    PublicKeyMatches = matches,
+                    Message = access.Message
+                });
+            }
+
+            return Task.FromResult(new UserIdentityResponse
+            {
+                Success = true,
+                Exists = exists,
+                PublicKeyMatches = matches,
+                Message = exists ? "User identity is bound to this wallet key." : "User name is available."
+            });
+        }
+
+        public override Task<UserNameAvailabilityResponse> CheckUserName(UserNameRequest request, ServerCallContext context)
+        {
+            string userName = request.UserName?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(userName) ||
+                string.Equals(userName, "Guest", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(new UserNameAvailabilityResponse
+                {
+                    Success = false,
+                    Exists = false,
+                    Message = "Enter a non-empty user name."
+                });
+            }
+
+            bool exists = !string.IsNullOrWhiteSpace(_smartContractState.GetUserPublicKey(userName));
+            return Task.FromResult(new UserNameAvailabilityResponse
+            {
+                Success = true,
+                Exists = exists,
+                Message = exists
+                    ? "User name is already bound to a wallet."
+                    : "User name is available."
+            });
         }
 
         private static void TrackPayloadForAnalytics(string data)
@@ -821,168 +665,37 @@ namespace Blockchain.Node.Services
             }
         }
 
-        private static int CountSecurityFindings(List<Block> blocks)
-        {
-            int findings = 0;
-            var orderedBlocks = blocks.OrderBy(b => b.Index).ToList();
-
-            for (int i = 0; i < orderedBlocks.Count; i++)
-            {
-                var current = orderedBlocks[i];
-                string expectedPreviousHash = i == 0 ? "0" : orderedBlocks[i - 1].Hash;
-
-                if (current.Hash != current.CalculateHash()) findings++;
-                if (!current.VerifySignature()) findings++;
-                if (!current.Hash.StartsWith(Blockchain.Core.Constants.NetworkParameters.TargetPrefix)) findings++;
-                if (current.PreviousHash != expectedPreviousHash) findings++;
-            }
-
-            return findings;
-        }
-
-        private static (int CommitCount, int ArtifactCount) CountProjectPayloads(List<Block> blocks)
-        {
-            var commitHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var artifactHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var block in blocks)
-            {
-                if (string.IsNullOrWhiteSpace(block.Data))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    using var doc = JsonDocument.Parse(block.Data);
-                    if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                    {
-                        continue;
-                    }
-
-                    var root = doc.RootElement;
-                    string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
-                    if (type == "CodeCommit" && root.TryGetProperty("CommitHash", out var commitHashProp))
-                    {
-                        string commitHash = commitHashProp.GetString() ?? "";
-                        if (!string.IsNullOrWhiteSpace(commitHash))
-                        {
-                            commitHashes.Add(commitHash);
-                        }
-                    }
-
-                    if (root.TryGetProperty("FileHash", out var fileHashProp))
-                    {
-                        string fileHash = fileHashProp.GetString() ?? "";
-                        if (!string.IsNullOrWhiteSpace(fileHash))
-                        {
-                            artifactHashes.Add(fileHash);
-                        }
-                    }
-                }
-                catch
-                {
-                    // Malformed historical payloads are ignored in aggregate analytics.
-                }
-            }
-
-            return (commitHashes.Count, artifactHashes.Count);
-        }
-
-        private async Task<int> SyncFromPeerAsync(string peerUrl)
-        {
-            int acceptedBlocks = 0;
-
-            try
-            {
-                var db = new DatabaseManager(_dbFileName, _dbPassword);
-                var channels = await _p2pService.FetchKnownChannelsAsync(peerUrl);
-                if (!channels.Contains("System", StringComparer.OrdinalIgnoreCase))
-                {
-                    channels.Insert(0, "System");
-                }
-
-                foreach (var channelId in channels.OrderBy(channel => channel == "System" ? 0 : 1))
-                {
-                    var blocks = await _p2pService.FetchChainAsync(peerUrl, channelId);
-                    var candidateChain = blocks.Select(ToBlock).OrderBy(block => block.Index).ToList();
-                    if (_blockchainManager.TryAdoptChain(channelId, candidateChain))
-                    {
-                        acceptedBlocks += candidateChain.Count;
-                        continue;
-                    }
-
-                    foreach (var block in candidateChain)
-                    {
-                        if (db.BlockExists(block.Hash, block.ChannelId))
-                        {
-                            continue;
-                        }
-
-                        if (_blockchainManager.ProcessPeerBlock(block))
-                        {
-                            acceptedBlocks++;
-                        }
-                    }
-                }
-
-                db.SavePeer(peerUrl);
-            }
-            catch (Exception ex)
-            {
-                var db = new DatabaseManager(_dbFileName, _dbPassword);
-                db.MarkPeerFailure(peerUrl);
-                _logger.LogWarning("[P2P] Initial sync from {PeerUrl} failed: {Message}", peerUrl, ex.Message);
-            }
-
-            return acceptedBlocks;
-        }
-
-        private async Task NotifyClientsAsync(BlockModel block)
-        {
-            if (_hubContext == null) return;
-
-            string channelId = string.IsNullOrWhiteSpace(block.ChannelId) ? "System" : block.ChannelId;
-            await _hubContext.Clients.Group(channelId).SendAsync("NewBlockBroadcast", block);
-
-            if (!block.Data.Contains("\"Type\":\"Transfer\"")) return;
-
-            using var doc = JsonDocument.Parse(block.Data);
-            var root = doc.RootElement;
-            if (root.TryGetProperty("TargetUser", out var targetUserProp) &&
-                root.TryGetProperty("Amount", out var amountProp) &&
-                root.TryGetProperty("User", out var senderProp))
-            {
-                string targetUser = targetUserProp.GetString() ?? "";
-                int amount = amountProp.GetInt32();
-                string sender = senderProp.GetString() ?? "Unknown";
-
-                await _hubContext.Clients.Group($"USER_{targetUser}").SendAsync("FinancialTransferReceived", sender, amount);
-            }
-        }
-
-        private static Block ToBlock(BlockModel model)
-        {
-            return new Block
-            {
-                Index = model.Index,
-                Data = model.Data,
-                PreviousHash = model.PreviousHash,
-                Hash = model.Hash,
-                Timestamp = DateTime.Parse(model.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind),
-                ValidatorPublicKey = model.ValidatorPublicKey,
-                Signature = model.Signature,
-                Nonce = model.Nonce,
-                ChannelId = string.IsNullOrWhiteSpace(model.ChannelId) ? "System" : model.ChannelId
-            };
-        }
-
         private bool IsSelfPeer(string peerUrl)
         {
-            string? publicUrl = _configuration["P2P:PublicUrl"];
+            string publicUrl = _p2pOptions.NormalizedPublicUrl;
             return !string.IsNullOrWhiteSpace(publicUrl)
                 && !string.IsNullOrWhiteSpace(peerUrl)
-                && string.Equals(publicUrl.TrimEnd('/'), peerUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+                && string.Equals(publicUrl, P2POptions.NormalizeUrl(peerUrl), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsValidPeerUrl(string peerUrl, bool allowLocalhost)
+        {
+            if (!Uri.TryCreate(peerUrl, UriKind.Absolute, out var uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                return false;
+            }
+
+            return allowLocalhost
+                || (!uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                    && uri.Host != "127.0.0.1"
+                    && uri.Host != "::1");
+        }
+
+        private bool IsLocalNetworkMode()
+        {
+            return _p2pOptions.NormalizedBootstrapPeers.Any(IsLoopbackUrl)
+                || IsLoopbackUrl(_p2pOptions.NormalizedPublicUrl);
+        }
+
+        private static bool IsLoopbackUrl(string url)
+        {
+            return Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.IsLoopback;
         }
     }
 }

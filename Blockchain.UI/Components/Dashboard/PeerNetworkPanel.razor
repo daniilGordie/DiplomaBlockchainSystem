@@ -4,6 +4,8 @@
             <div class="d-flex align-items-center gap-2 mb-1">
                 <h5 class="mb-0 text-white fw-semibold">P2P Network</h5>
                 <span class="badge bg-info">Current node: @CurrentNodeLabel</span>
+                <span class="badge @RoleBadge(CurrentNodeRole)">@CurrentNodeRole</span>
+                <span class="badge bg-secondary">@Peers.Count peers</span>
             </div>
             <div class="text-muted small">@ConnectionStatusLabel</div>
         </div>
@@ -23,51 +25,77 @@
         </div>
 
         <div class="col-lg-6">
-            <label class="form-label text-white-50">Add peer to current node</label>
-            <div class="input-group network-panel__group">
-                <span class="input-group-text">Peer URL</span>
-                <input value="@PeerUrlInput" @oninput="OnPeerUrlInput" class="form-control" placeholder="Enter peer URL" aria-label="Peer URL" />
-                <button class="btn btn-primary fw-semibold" @onclick="OnAddPeer" disabled="@IsBusy">Add Peer</button>
+            <label class="form-label text-white-50">Peer administration</label>
+            <div class="network-panel__group p-3 border border-secondary rounded">
+                <div class="text-white small fw-semibold">Configured on the node</div>
+                <div class="form-text text-muted">Add peers through node bootstrap configuration or a server-side admin tool.</div>
             </div>
-            <div class="form-text text-muted">Add the other node here, then repeat from the other node for two-way sync.</div>
         </div>
     </div>
 
     <div class="mt-3">
-        <div class="text-white-50 small fw-semibold mb-2">Known peers</div>
+            <div class="text-white-50 small fw-semibold mb-2">Known peers</div>
         @if (Peers.Count == 0)
         {
             <div class="text-muted small">No peers registered on this node.</div>
         }
         else
         {
-            <div class="d-flex flex-wrap gap-2">
+            <div class="table-responsive">
+                <table class="table table-dark table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Role</th>
+                            <th>Node</th>
+                            <th>URL</th>
+                            <th>Status</th>
+                            <th>Last seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
                 @foreach (var peer in Peers)
                 {
-                    <span class="badge bg-secondary font-monospace">@peer</span>
+                        <tr>
+                            <td><span class="badge @RoleBadge(peer.Role)">@peer.Role</span></td>
+                            <td class="font-monospace small">@NodeLabel(peer)</td>
+                            <td class="font-monospace small">@peer.PublicUrl</td>
+                            <td><span class="badge @StatusBadge(peer)">@peer.Status</span></td>
+                            <td class="small text-white-50">@LastSeenLabel(peer)</td>
+                        </tr>
                 }
+                    </tbody>
+                </table>
             </div>
         }
     </div>
 </div>
 
 @code {
+    [Parameter] public IReadOnlyList<Blockchain.UI.Application.Clients.PeerNodeInfo> Peers { get; set; } = Array.Empty<Blockchain.UI.Application.Clients.PeerNodeInfo>();
     [Parameter] public string CurrentNodeUrl { get; set; } = "";
+    [Parameter] public string CurrentNodeRole { get; set; } = "Unknown";
     [Parameter] public string NodeUrlInput { get; set; } = "";
-    [Parameter] public string PeerUrlInput { get; set; } = "";
-    [Parameter] public IReadOnlyList<string> Peers { get; set; } = Array.Empty<string>();
     [Parameter] public string ConnectionStatus { get; set; } = "";
     [Parameter] public bool IsBusy { get; set; }
 
     [Parameter] public EventCallback<string> NodeUrlInputChanged { get; set; }
-    [Parameter] public EventCallback<string> PeerUrlInputChanged { get; set; }
     [Parameter] public EventCallback OnConnectNode { get; set; }
-    [Parameter] public EventCallback OnAddPeer { get; set; }
     [Parameter] public EventCallback OnRefreshPeers { get; set; }
 
     private string CurrentNodeLabel => string.IsNullOrWhiteSpace(CurrentNodeUrl) ? "Not connected" : CurrentNodeUrl;
     private string ConnectionStatusLabel => string.IsNullOrWhiteSpace(ConnectionStatus) ? "Connection status unavailable." : ConnectionStatus;
 
     private Task OnNodeUrlInput(ChangeEventArgs e) => NodeUrlInputChanged.InvokeAsync(e.Value?.ToString() ?? "");
-    private Task OnPeerUrlInput(ChangeEventArgs e) => PeerUrlInputChanged.InvokeAsync(e.Value?.ToString() ?? "");
+
+    private static string RoleBadge(string role) =>
+        string.Equals(role, "Bootstrap", StringComparison.OrdinalIgnoreCase) ? "bg-warning text-dark" : "bg-primary";
+
+    private static string StatusBadge(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
+        string.IsNullOrWhiteSpace(peer.LastFailure) ? "bg-success" : "bg-danger";
+
+    private static string NodeLabel(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
+        string.IsNullOrWhiteSpace(peer.NodeId) ? "unknown" : peer.NodeId;
+
+    private static string LastSeenLabel(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
+        string.IsNullOrWhiteSpace(peer.LastSeen) ? "never" : peer.LastSeen;
 }

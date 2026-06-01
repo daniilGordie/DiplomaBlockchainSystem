@@ -11,7 +11,9 @@ service BlockchainService {
   rpc GetChain (ChainRequest) returns (ChainResponse);
 
   rpc AddPeer (PeerRequest) returns (StatusReply);
+  rpc RegisterPeer (RegisterPeerRequest) returns (StatusReply);
   rpc GetPeers (EmptyRequest) returns (PeerListResponse);
+  rpc GetPeerDirectory (EmptyRequest) returns (PeerDirectoryResponse);
   rpc GetKnownChannels (EmptyRequest) returns (KnownChannelsResponse);
 
   rpc GetProjectTasks (ProjectRequest) returns (TaskResponse);
@@ -22,6 +24,8 @@ service BlockchainService {
   rpc GetDocumentVersions (DocumentHistoryRequest) returns (DocumentVersionResponse);
   rpc GetSecurityAudit (ProjectRequest) returns (SecurityAuditResponse);
   rpc GetMyProjects (UserRequest) returns (ProjectListResponse);
+  rpc GetUserIdentity (UserRequest) returns (UserIdentityResponse);
+  rpc CheckUserName (UserNameRequest) returns (UserNameAvailabilityResponse);
 }
 
 message BlockModel {
@@ -41,6 +45,29 @@ message PeerRequest {
   string admin_token = 2;
 }
 message PeerListResponse { repeated string urls = 1; }
+
+message RegisterPeerRequest {
+  string node_id = 1;
+  string public_url = 2;
+  string role = 3;
+  string registration_token = 4;
+}
+
+message PeerDirectoryItem {
+  string node_id = 1;
+  string public_url = 2;
+  string role = 3;
+  string last_seen = 4;
+  string last_failure = 5;
+  bool is_trusted = 6;
+}
+
+message PeerDirectoryResponse {
+  repeated PeerDirectoryItem peers = 1;
+  string current_node_id = 2;
+  string current_public_url = 3;
+  string current_role = 4;
+}
 message KnownChannelsResponse { repeated string channel_ids = 1; }
 
 message TaskHistoryRequest {
@@ -49,6 +76,8 @@ message TaskHistoryRequest {
   string user_name = 3;
   string user_public_key = 4;
   string auth_signature = 5;
+  string auth_timestamp = 6;
+  string auth_nonce = 7;
 }
 message TaskHistoryResponse { repeated TaskHistoryItem items = 1; }
 message TaskHistoryItem { 
@@ -64,6 +93,8 @@ message ProjectRequest {
   string user_name = 2;
   string user_public_key = 3;
   string auth_signature = 4;
+  string auth_timestamp = 5;
+  string auth_nonce = 6;
 }
 message EmptyRequest {}
 
@@ -74,6 +105,10 @@ message ChainRequest {
   string sync_token = 4;
   string user_public_key = 5;
   string auth_signature = 6;
+  string auth_timestamp = 7;
+  string auth_nonce = 8;
+  int32 after_index = 9;
+  string after_hash = 10;
 }
 
 message ArtifactRequest { 
@@ -138,10 +173,29 @@ message UserRequest {
   string user_name = 1;
   string user_public_key = 2;
   string auth_signature = 3;
+  string auth_timestamp = 4;
+  string auth_nonce = 5;
 }
 
 message ProjectListResponse {
   repeated string project_ids = 1;
+}
+
+message UserIdentityResponse {
+  bool success = 1;
+  bool exists = 2;
+  bool public_key_matches = 3;
+  string message = 4;
+}
+
+message UserNameRequest {
+  string user_name = 1;
+}
+
+message UserNameAvailabilityResponse {
+  bool success = 1;
+  bool exists = 2;
+  string message = 3;
 }
 
 message DocumentResponse {
@@ -164,6 +218,8 @@ message DocumentHistoryRequest {
   string user_name = 3;
   string user_public_key = 4;
   string auth_signature = 5;
+  string auth_timestamp = 6;
+  string auth_nonce = 7;
 }
 
 message DocumentVersionResponse {

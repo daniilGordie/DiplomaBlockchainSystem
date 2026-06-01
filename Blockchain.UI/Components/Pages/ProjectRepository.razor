@@ -3,11 +3,10 @@
 @using Blockchain.UI.Services
 @using Blockchain.UI.Models
 @using Blockchain.UI.Components
-@using System.Text.Json
-@inject BlockchainService.BlockchainServiceClient BlockchainClient
-@inject KeyService MyKeyService
+@using Blockchain.UI.Application.Clients
+@inject IProjectRepositoryDataService RepositoryDataService
+@inject IIpfsGatewayClient IpfsGatewayClient
 @inject NavigationManager Nav
-@inject HttpClient Http
 @inject Microsoft.Extensions.Configuration.IConfiguration Config
 
 <div class="dashboard-container p-4">
@@ -117,100 +116,11 @@
 
     protected override async Task OnInitializedAsync() => await LoadData();
 
-    private string BuildReadAuthSignature(string scope)
-    {
-        if (!MyKeyService.IsLoggedIn || string.IsNullOrWhiteSpace(MyKeyService.PublicKey))
-        {
-            return string.Empty;
-        }
-
-        string userName = MyKeyService.UserName ?? "Guest";
-        string publicKey = MyKeyService.PublicKey ?? string.Empty;
-        string signable = $"READ:{scope}:{userName}:{publicKey}";
-        return MyKeyService.SignData(signable);
-    }
-
     private async Task LoadData()
     {
-        var res = await BlockchainClient.GetChainAsync(new ChainRequest
-        {
-            ChannelId = ProjectId,
-            Count = 100,
-            UserName = MyKeyService.UserName ?? "Guest",
-            UserPublicKey = MyKeyService.PublicKey ?? "",
-            AuthSignature = BuildReadAuthSignature($"CHAIN:{ProjectId}")
-        });
-        Commits.Clear(); Artifacts.Clear();
-        foreach (var b in res.Blocks)
-        {
-            if (string.IsNullOrWhiteSpace(b.Data))
-            {
-                continue;
-            }
-
-            try
-            {
-                using var doc = JsonDocument.Parse(b.Data);
-                var root = doc.RootElement;
-
-                string type = root.TryGetProperty("Type", out var t) ? t.GetString() ?? "" : "";
-                if (type == "CodeCommit")
-                {
-                    Commits.Add(new CommitPayloadUI
-                    {
-                        CommitHash = root.TryGetProperty("CommitHash", out var hash) ? hash.GetString() ?? "" : "",
-                        Message = root.TryGetProperty("Message", out var msg) ? msg.GetString() ?? "" : "",
-                        Author = root.TryGetProperty("User", out var user) ? user.GetString() ?? "Unknown" : "Unknown",
-                        PatchCid = root.TryGetProperty("PatchCid", out var p) ? p.GetString() ?? "" : "",
-                        Repository = root.TryGetProperty("Repository", out var repo) ? repo.GetString() ?? "" : "",
-                        Provider = root.TryGetProperty("Provider", out var provider) ? provider.GetString() ?? "" : "",
-                        Branch = root.TryGetProperty("Branch", out var branch) ? branch.GetString() ?? "" : ""
-                    });
-                }
-                else if (TryParseArtifact(root, out var artifact))
-                {
-                    Artifacts.Add(artifact);
-                }
-            }
-            catch
-            {
-                // Skip malformed payloads in historical chain to keep repository view available.
-            }
-        }
-        Commits.Reverse();
-    }
-
-    private static bool TryParseArtifact(JsonElement root, out ArtifactPayloadUI artifact)
-    {
-        artifact = new ArtifactPayloadUI();
-
-        string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
-        string source = root.TryGetProperty("Source", out var sourceProp) ? sourceProp.GetString() ?? "" : "";
-
-        bool isArtifact = type.Equals("Register", StringComparison.OrdinalIgnoreCase)
-            && (source.Equals("ArtifactRegistry", StringComparison.OrdinalIgnoreCase)
-                || source.Equals("UserArtifact", StringComparison.OrdinalIgnoreCase)
-                || root.TryGetProperty("FileHash", out _));
-
-        if (!isArtifact)
-        {
-            return false;
-        }
-
-        artifact = new ArtifactPayloadUI
-        {
-            FileName = root.TryGetProperty("FileName", out var fn) ? fn.GetString() ?? "artifact.bin" : "artifact.bin",
-            FileHash = root.TryGetProperty("FileHash", out var fh) ? fh.GetString() ?? "" : "",
-            RegisteredBy = root.TryGetProperty("RegisteredBy", out var rb)
-                ? rb.GetString() ?? ""
-                : (root.TryGetProperty("User", out var u) ? u.GetString() ?? "" : ""),
-            VerificationMethod = root.TryGetProperty("VerificationMethod", out var vm) ? vm.GetString() ?? "IPFS" : "IPFS",
-            SizeBytes = root.TryGetProperty("SizeBytes", out var sizeProp) && sizeProp.TryGetInt64(out var size) ? size : 0,
-            ContentType = root.TryGetProperty("ContentType", out var contentTypeProp) ? contentTypeProp.GetString() ?? "" : "",
-            Timestamp = root.TryGetProperty("Timestamp", out var timestampProp) ? timestampProp.GetString() ?? "" : ""
-        };
-
-        return !string.IsNullOrWhiteSpace(artifact.FileHash);
+        var data = await RepositoryDataService.LoadAsync(ProjectId);
+        Commits = data.Commits.ToList();
+        Artifacts = data.Artifacts.ToList();
     }
 
     private async Task LoadDiff(CommitPayloadUI commit)
@@ -220,7 +130,7 @@
         isLoadingDiff = true;
         try
         {
-            currentDiffText = await Http.GetStringAsync(BuildIpfsGatewayUrl(commit.PatchCid));
+            currentDiffText = await IpfsGatewayClient.GetTextAsync(IpfsGatewayUrl, commit.PatchCid);
         }
         catch { currentDiffText = "Error loading data from IPFS."; }
         finally { isLoadingDiff = false; }

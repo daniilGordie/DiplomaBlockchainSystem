@@ -6,6 +6,6 @@ namespace Blockchain.Core.Contracts
     {
         string Name { get; }
 
-        bool Validate(string data, string senderPublicKey, DatabaseManager db);
+        bool Validate(string data, string senderPublicKey, ISmartContractStateReader state);
     }
 }

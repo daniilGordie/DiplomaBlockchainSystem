@@ -39,7 +39,16 @@ dotnet run --project Blockchain.Node --no-launch-profile --urls "https://localho
 
 ## Install Git Hook
 
-Run this from the repository root. Use an existing project id from the UI.
+First connect the repository from the UI:
+
+1. Open the project dashboard.
+2. Go to `Artifacts`.
+3. Enter `owner/repo` or a repository URL in `Connect Repository`.
+4. Click `Connect`.
+
+The UI signs the binding request with the current project wallet. The node only accepts the binding from a project `Owner` or `Manager`, and still enforces `1 repository <-> 1 project`.
+
+Then run this from the repository root. Use the same existing project id from the UI.
 
 ```powershell
 .\install-githook.ps1 -NodeWebhookUrl "https://localhost:7041/api/webhooks/git" -ProjectId "YourProjectId" -WebhookSecret "dev-webhook-secret-123"
@@ -61,7 +70,8 @@ Node reads `repository.full_name`, `head_commit.id`, `head_commit.message`, and 
 
 Repository binding policy:
 - Node enforces `1 repository <-> 1 project`.
-- First valid commit creates the binding automatically.
+- The UI can create the binding before the first commit event.
+- First valid commit can still create the binding automatically for scripted/dev flows.
 - If the same repository sends another project id later, Node rejects the webhook.
 - If one project id is already bound to another repository, Node rejects the webhook.
 

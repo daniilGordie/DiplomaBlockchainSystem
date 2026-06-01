@@ -11,7 +11,7 @@ This is a concise operator checklist for live defense.
    - `OraclePrivateKeyPassword`
    - `OraclePublicKey`
    - `P2P:SyncToken`
-2. Ensure UI `NodeAdminToken` matches node token.
+2. Do not configure `NodeAdminToken` in UI `wwwroot` settings; browser configuration is public.
 3. Start node and UI.
 
 ## Scenario A: Auth + project access
@@ -71,7 +71,7 @@ Expected:
 ## Scenario F: P2P and secure adoption
 
 1. Start second node with matching `P2P:SyncToken`.
-2. Add peer using `NodeAdminToken`.
+2. Add peer through node bootstrap configuration or a server-side admin path that supplies `NodeAdminToken`.
 3. Produce blocks on node A and sync node B.
 
 Expected:

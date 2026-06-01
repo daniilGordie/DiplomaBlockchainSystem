@@ -14,12 +14,12 @@
   <ItemGroup>
     <PackageReference Include="Grpc.AspNetCore" Version="2.57.0" />
     <PackageReference Include="Grpc.AspNetCore.Web" Version="2.76.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.7" />
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlcipher" Version="2.1.11" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Blockchain.Application\Blockchain.Application.csproj" />
     <ProjectReference Include="..\Blockchain.Core\Blockchain.Core.csproj" />
+    <ProjectReference Include="..\Blockchain.Infrastructure\Blockchain.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

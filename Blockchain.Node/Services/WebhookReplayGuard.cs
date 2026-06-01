@@ -1,10 +1,11 @@
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
+using Blockchain.Application.Git;
 
 namespace Blockchain.Node.Services
 {
-    public sealed class WebhookReplayGuard
+    public sealed class WebhookReplayGuard : IRequestReplayGuard
     {
         private readonly ConcurrentDictionary<string, DateTime> _processed = new();
         private readonly TimeSpan _ttl;

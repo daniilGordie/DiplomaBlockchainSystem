@@ -10,6 +10,49 @@ window.downloadFileFromStream = async (fileName, contentStreamReference) => {
     URL.revokeObjectURL(url);
 };
 
+window.downloadTextFile = (fileName, content) => {
+    const blob = new Blob([content ?? ''], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchorElement = document.createElement('a');
+    anchorElement.href = url;
+    anchorElement.download = fileName ?? '';
+    document.body.appendChild(anchorElement);
+    anchorElement.click();
+    anchorElement.remove();
+    URL.revokeObjectURL(url);
+};
+
+window.readTextFromFileInput = async (inputElement) => {
+    const file = inputElement?.files?.[0];
+    if (!file) {
+        return '';
+    }
+
+    return await file.text();
+};
+
+window.readFileInputAsJson = async (inputElement) => {
+    const file = inputElement?.files?.[0];
+    if (!file) {
+        return '';
+    }
+
+    const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+    });
+
+    const commaIndex = dataUrl.indexOf(',');
+    return JSON.stringify({
+        name: file.name || 'upload.bin',
+        contentType: file.type || 'application/octet-stream',
+        size: file.size || 0,
+        base64: commaIndex >= 0 ? dataUrl.substring(commaIndex + 1) : ''
+    });
+};
+
 window.copyTextFallback = (text) => {
     try {
         const ta = document.createElement('textarea');
@@ -49,6 +92,10 @@ window.nexusPasskey = {
         if (value instanceof ArrayBuffer) return new Uint8Array(value);
         if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
         return new Uint8Array();
+    },
+    registerAndWrapKeyJson: async (userName, walletKeyBase64) => {
+        const result = await window.nexusPasskey.registerAndWrapKey(userName, walletKeyBase64);
+        return JSON.stringify(result);
     },
     registerAndWrapKey: async (userName, walletKeyBase64) => {
         if (!window.PublicKeyCredential || !navigator.credentials) {
@@ -129,6 +176,10 @@ window.nexusPasskey = {
             credentialId,
             wrappedKey: "webauthn-largeblob-v1"
         };
+    },
+    verifyAndUnwrapKeyJson: async (credentialId, wrappedKeyBase64) => {
+        const result = await window.nexusPasskey.verifyAndUnwrapKey(credentialId, wrappedKeyBase64);
+        return JSON.stringify(result);
     },
     verifyAndUnwrapKey: async (credentialId, wrappedKeyBase64) => {
         if (!window.PublicKeyCredential || !navigator.credentials) {

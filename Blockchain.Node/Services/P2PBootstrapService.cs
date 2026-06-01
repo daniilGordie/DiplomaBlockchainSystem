@@ -1,135 +1,138 @@
 using Blockchain.Core;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Blockchain.Node.Services
 {
     public class P2PBootstrapService : BackgroundService
     {
-        private readonly IConfiguration _configuration;
-        private readonly BlockchainManager _blockchainManager;
+        private readonly P2POptions _options;
         private readonly P2PNetworkService _p2pService;
+        private readonly PeerChainSyncService _peerChainSync;
+        private readonly IPeerStore _peerStore;
         private readonly ILogger<P2PBootstrapService> _logger;
-        private readonly DatabaseManager _db;
 
         public P2PBootstrapService(
-            IConfiguration configuration,
-            BlockchainManager blockchainManager,
+            IOptions<P2POptions> options,
             P2PNetworkService p2pService,
+            PeerChainSyncService peerChainSync,
+            IPeerStore peerStore,
             ILogger<P2PBootstrapService> logger)
         {
-            _configuration = configuration;
-            _blockchainManager = blockchainManager;
+            _options = options.Value;
             _p2pService = p2pService;
+            _peerChainSync = peerChainSync;
+            _peerStore = peerStore;
             _logger = logger;
-
-            _db = new DatabaseManager(GetNodeDatabaseName(configuration), GetRequiredConfiguration(configuration, "NodeDbPassword"));
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
 
-            var peers = _configuration.GetSection("P2P:BootstrapPeers").Get<string[]>() ?? Array.Empty<string>();
-            var persistedPeers = _db.LoadPeers();
+            var discoveredPeers = new Dictionary<string, PeerInfo>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var peerUrl in peers.Concat(persistedPeers).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var peer in _peerStore.LoadPeerInfos())
+            {
+                AddDiscoveredPeer(discoveredPeers, peer);
+            }
+
+            foreach (string bootstrapUrl in _options.NormalizedBootstrapPeers)
             {
                 if (stoppingToken.IsCancellationRequested) break;
-                if (IsSelf(peerUrl)) continue;
+                if (IsSelf(bootstrapUrl)) continue;
 
-                _p2pService.AddPeer(peerUrl);
-                _db.SavePeer(peerUrl);
-                await SyncFromPeerAsync(peerUrl);
+                var bootstrapPeer = new PeerInfo(bootstrapUrl, string.Empty, P2PNodeRole.Bootstrap.ToString());
+                AddDiscoveredPeer(discoveredPeers, bootstrapPeer);
+
+                if (_options.Role == P2PNodeRole.Full)
+                {
+                    await RegisterWithBootstrapAsync(bootstrapUrl);
+                }
+
+                await DiscoverPeersAsync(bootstrapUrl, discoveredPeers);
+            }
+
+            foreach (var peer in discoveredPeers.Values)
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+                if (IsSelf(peer.Url)) continue;
+
+                _p2pService.AddPeer(peer.Url);
+                _peerStore.SavePeer(peer);
+                await _peerChainSync.SyncFromPeerAsync(peer.Url);
             }
         }
 
-        private async Task SyncFromPeerAsync(string peerUrl)
+        private async Task RegisterWithBootstrapAsync(string bootstrapUrl)
         {
+            if (string.IsNullOrWhiteSpace(_options.NormalizedPublicUrl))
+            {
+                _logger.LogWarning("[P2P] PublicUrl is not configured. Full-node registration with {BootstrapUrl} skipped.", bootstrapUrl);
+                return;
+            }
+
             try
             {
-                var channels = await _p2pService.FetchKnownChannelsAsync(peerUrl);
-                if (!channels.Contains("System", StringComparer.OrdinalIgnoreCase))
+                var result = await _p2pService.RegisterWithBootstrapAsync(bootstrapUrl);
+                if (result.Success)
                 {
-                    channels.Insert(0, "System");
+                    _peerStore.MarkPeerSeen(bootstrapUrl);
+                    _logger.LogInformation("[P2P] Registered node {NodeId} at bootstrap {BootstrapUrl}.", _options.EffectiveNodeId, bootstrapUrl);
                 }
-
-                foreach (var channelId in channels.OrderBy(channel => channel == "System" ? 0 : 1))
+                else
                 {
-                    var blocks = await _p2pService.FetchChainAsync(peerUrl, channelId);
-                    var chain = blocks.Select(ToBlock).OrderBy(block => block.Index).ToList();
-
-                    if (_blockchainManager.TryAdoptChain(channelId, chain))
-                    {
-                        continue;
-                    }
-
-                    foreach (var block in chain)
-                    {
-                        if (!_db.BlockExists(block.Hash, block.ChannelId))
-                        {
-                            _blockchainManager.ProcessPeerBlock(block);
-                        }
-                    }
+                    _logger.LogWarning("[P2P] Bootstrap {BootstrapUrl} rejected registration: {Message}", bootstrapUrl, result.Message);
                 }
-
-                _db.SavePeer(peerUrl);
             }
             catch (Exception ex)
             {
-                _db.MarkPeerFailure(peerUrl);
-                _logger.LogWarning("[P2P] Bootstrap sync from {PeerUrl} failed: {Message}", peerUrl, ex.Message);
+                _peerStore.MarkPeerFailure(bootstrapUrl);
+                _logger.LogWarning("[P2P] Registration with bootstrap {BootstrapUrl} failed: {Message}", bootstrapUrl, ex.Message);
             }
+        }
+
+        private async Task DiscoverPeersAsync(string bootstrapUrl, Dictionary<string, PeerInfo> discoveredPeers)
+        {
+            try
+            {
+                var directory = await _p2pService.FetchPeerDirectoryAsync(bootstrapUrl);
+                foreach (var item in directory)
+                {
+                    AddDiscoveredPeer(discoveredPeers, new PeerInfo(
+                        P2POptions.NormalizeUrl(item.PublicUrl),
+                        item.NodeId,
+                        string.IsNullOrWhiteSpace(item.Role) ? P2PNodeRole.Full.ToString() : item.Role,
+                        string.IsNullOrWhiteSpace(item.LastSeen) ? null : item.LastSeen,
+                        string.IsNullOrWhiteSpace(item.LastFailure) ? null : item.LastFailure,
+                        item.IsTrusted));
+                }
+            }
+            catch (Exception ex)
+            {
+                _peerStore.MarkPeerFailure(bootstrapUrl);
+                _logger.LogWarning("[P2P] Peer discovery from {BootstrapUrl} failed: {Message}", bootstrapUrl, ex.Message);
+            }
+        }
+
+        private void AddDiscoveredPeer(Dictionary<string, PeerInfo> discoveredPeers, PeerInfo peer)
+        {
+            string url = P2POptions.NormalizeUrl(peer.Url);
+            if (string.IsNullOrWhiteSpace(url) || IsSelf(url))
+            {
+                return;
+            }
+
+            discoveredPeers[url] = peer with { Url = url };
         }
 
         private bool IsSelf(string peerUrl)
         {
-            string? publicUrl = _configuration["P2P:PublicUrl"];
+            string publicUrl = _options.NormalizedPublicUrl;
             return !string.IsNullOrWhiteSpace(publicUrl)
-                && string.Equals(publicUrl.TrimEnd('/'), peerUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+                && string.Equals(publicUrl, P2POptions.NormalizeUrl(peerUrl), StringComparison.OrdinalIgnoreCase);
         }
 
-        private static Block ToBlock(BlockModel model)
-        {
-            return new Block
-            {
-                Index = model.Index,
-                Data = model.Data,
-                PreviousHash = model.PreviousHash,
-                Hash = model.Hash,
-                Timestamp = DateTime.Parse(model.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind),
-                ValidatorPublicKey = model.ValidatorPublicKey,
-                Signature = model.Signature,
-                Nonce = model.Nonce,
-                ChannelId = string.IsNullOrWhiteSpace(model.ChannelId) ? "System" : model.ChannelId
-            };
-        }
-
-        private static string GetRequiredConfiguration(IConfiguration configuration, string key)
-        {
-            string? value = configuration[key];
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                throw new InvalidOperationException(
-                    $"{key} is not configured. Set it via .NET user-secrets or environment variables.");
-            }
-
-            return value;
-        }
-
-        private static string GetNodeDatabaseName(IConfiguration configuration)
-        {
-            string port = configuration["Urls"]?.Split(':').LastOrDefault()?.Replace("/", "") ?? "5041";
-            string? configuredDbName = configuration.GetConnectionString("DefaultNodeDb");
-
-            if (string.IsNullOrWhiteSpace(configuredDbName) ||
-                (configuredDbName == "nexus_node_5041.db" && port != "5041"))
-            {
-                return $"nexus_node_{port}.db";
-            }
-
-            return configuredDbName;
-        }
     }
 }

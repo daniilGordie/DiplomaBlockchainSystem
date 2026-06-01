@@ -9,7 +9,7 @@ namespace Blockchain.Core.Contracts
     {
         public string Name => "TaskFlow";
 
-        public bool Validate(string data, string senderPublicKey, DatabaseManager db)
+        public bool Validate(string data, string senderPublicKey, ISmartContractStateReader state)
         {
             try
             {
@@ -65,7 +65,7 @@ namespace Blockchain.Core.Contracts
                             return false;
                         }
 
-                        if (hasAssignee && db.GetUserRole(projectId, assignee.Trim()) == "None")
+                        if (hasAssignee && state.GetUserRole(projectId, assignee.Trim()) == "None")
                         {
                             Console.WriteLine("[SmartContract Debug] Rejected: assignee must be a project member.");
                             return false;
@@ -81,7 +81,7 @@ namespace Blockchain.Core.Contracts
                         return false;
                     }
 
-                    string role = db.GetUserRole(projectId, user);
+                    string role = state.GetUserRole(projectId, user);
                     Console.WriteLine($"[SmartContract Debug] Checking role for '{user}' in '{projectId}': {role}");
 
                     if (role == "None" && projectId != "System")

@@ -18,11 +18,11 @@ namespace Blockchain.Core.Contracts
             };
         }
 
-        public bool Execute(string data, string senderPublicKey, DatabaseManager db)
+        public bool Execute(string data, string senderPublicKey, ISmartContractStateReader state)
         {
             foreach (var contract in _contracts)
             {
-                if (!contract.Validate(data, senderPublicKey, db))
+                if (!contract.Validate(data, senderPublicKey, state))
                 {
                     System.Console.WriteLine($"[SmartContract] Transaction rejected by: {contract.Name}");
                     return false;

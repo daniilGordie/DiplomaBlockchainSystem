@@ -1,5 +1,8 @@
 @using Blockchain.UI.Models
-@using Microsoft.AspNetCore.Components.Forms
+@using Blockchain.UI.Application.Clients
+@using Microsoft.JSInterop
+@using System.Text.Json
+@inject IJSRuntime JS
 
 <div class="glass-card p-4 section-shell">
     <div class="d-flex justify-content-between align-items-center mb-4">
@@ -67,6 +70,22 @@
                         <div class="form-control bg-dark text-white border-secondary font-monospace text-truncate" title="@GitStatus.Endpoint">@GitStatus.Endpoint</div>
                     </div>
                     <div class="col-12">
+                        <label class="form-label small text-muted">Repository</label>
+                        <div class="input-group">
+                            <input value="@repositoryInput"
+                                   @oninput="OnRepositoryInput"
+                                   class="form-control bg-dark text-white border-secondary"
+                                   placeholder="owner/repo or https://github.com/owner/repo.git"
+                                   disabled="@(!IsLoggedIn || IsGitRepositoryConnecting)" />
+                            <button class="btn btn-primary fw-semibold"
+                                    @onclick="ConnectRepository"
+                                    disabled="@(!IsLoggedIn || IsGitRepositoryConnecting || string.IsNullOrWhiteSpace(repositoryInput))">
+                                @(IsGitRepositoryConnecting ? "Connecting..." : "Connect")
+                            </button>
+                        </div>
+                        <div class="small text-white-50 mt-1">Owner or Manager signs this binding with their project wallet.</div>
+                    </div>
+                    <div class="col-12">
                         <label class="form-label small text-muted">Local repository hook command</label>
                         <div class="form-control bg-dark text-warning border-secondary font-monospace text-break">@BuildLocalHookCommand()</div>
                         <div class="small text-white-50 mt-1">Run it from the target repository root. Use the same WebhookSecret as the node.</div>
@@ -82,7 +101,7 @@
                         <div class="small text-muted mb-2">Repository bindings</div>
                         @if (!GitStatus.RepositoryBindings.Any())
                         {
-                            <div class="text-muted small">No repository is connected yet. The first valid commit event creates the binding.</div>
+                            <div class="text-muted small">No repository is connected yet.</div>
                         }
                         else
                         {
@@ -107,7 +126,15 @@
 
                 <div class="mb-3">
                     <label class="form-label text-muted small">Select a file (Max 50MB)</label>
-                    <InputFile OnChange="OnUploadFile" class="form-control" disabled="@(IsUploading || !IsLoggedIn)" />
+                    <div class="input-group">
+                        <input type="file" @ref="artifactFileInput" class="form-control" disabled="@(IsUploading || !IsLoggedIn)" />
+                        <button class="btn btn-outline-secondary"
+                                type="button"
+                                @onclick="UploadSelectedFile"
+                                disabled="@(IsUploading || !IsLoggedIn)">
+                            Upload
+                        </button>
+                    </div>
                 </div>
 
                 @if (IsUploading)
@@ -208,13 +235,49 @@
     [Parameter] public string CurrentProjectId { get; set; } = "System";
     [Parameter] public bool IsUploading { get; set; }
     [Parameter] public bool IsLoggedIn { get; set; }
+    [Parameter] public bool IsGitRepositoryConnecting { get; set; }
     [Parameter] public string StatusMessage { get; set; } = "";
     [Parameter] public string IpfsGatewayUrl { get; set; } = "http://127.0.0.1:8080/ipfs";
     [Parameter] public List<ArtifactPayloadUI> Artifacts { get; set; } = new();
     [Parameter] public List<CommitPayloadUI> Commits { get; set; } = new();
     [Parameter] public IntegrationStatusUI GitStatus { get; set; } = new();
     [Parameter] public IntegrationStatusUI IpfsStatus { get; set; } = new();
-    [Parameter] public EventCallback<InputFileChangeEventArgs> OnUploadFile { get; set; }
+    [Parameter] public EventCallback<string> OnConnectRepository { get; set; }
+    [Parameter] public EventCallback<ArtifactUploadRequest> OnUploadFile { get; set; }
+
+    private string repositoryInput = "";
+    private ElementReference artifactFileInput;
+
+    private Task OnRepositoryInput(ChangeEventArgs e)
+    {
+        repositoryInput = e.Value?.ToString() ?? "";
+        return Task.CompletedTask;
+    }
+
+    private async Task ConnectRepository()
+    {
+        await OnConnectRepository.InvokeAsync(repositoryInput);
+        repositoryInput = "";
+    }
+
+    private async Task UploadSelectedFile()
+    {
+        string fileJson = await JS.InvokeAsync<string>("readFileInputAsJson", artifactFileInput);
+        if (string.IsNullOrWhiteSpace(fileJson))
+        {
+            return;
+        }
+
+        using var document = JsonDocument.Parse(fileJson);
+        JsonElement root = document.RootElement;
+        var request = new ArtifactUploadRequest(
+            root.TryGetProperty("name", out var name) ? name.GetString() ?? "upload.bin" : "upload.bin",
+            root.TryGetProperty("contentType", out var contentType) ? contentType.GetString() ?? "application/octet-stream" : "application/octet-stream",
+            root.TryGetProperty("size", out var size) && size.TryGetInt64(out long sizeBytes) ? sizeBytes : 0,
+            root.TryGetProperty("base64", out var base64) ? base64.GetString() ?? "" : "");
+
+        await OnUploadFile.InvokeAsync(request);
+    }
 
     private string BuildIpfsGatewayUrl(string cid) => $"{IpfsGatewayUrl.Trim().TrimEnd('/')}/{cid}";
     private string BuildLocalHookCommand() => $".\\install-githook.ps1 -NodeWebhookUrl \"{GitStatus.Endpoint}\" -ProjectId \"{CurrentProjectId}\" -WebhookSecret \"<node-webhook-secret>\"";

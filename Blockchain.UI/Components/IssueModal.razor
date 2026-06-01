@@ -1,7 +1,9 @@
 ﻿@using Blockchain.UI.Models
 @using Blockchain.UI.Services
-@using System.IO
+@using Blockchain.UI.Application.Clients
+@using Microsoft.JSInterop
 @inject KeyService MyKeyService
+@inject IJSRuntime JS
 
 @if (IsOpen)
 {
@@ -69,7 +71,10 @@
 
                     <div class="mb-3">
                         <label class="form-label text-muted small">Wallet file (wallet.json)</label>
-                        <InputFile OnChange="LoadKeystoreFile" class="form-control form-control-sm" />
+                        <div class="input-group input-group-sm">
+                            <input type="file" @ref="walletFileInput" class="form-control" accept=".json,application/json" />
+                            <button type="button" class="btn btn-outline-secondary" @onclick="LoadKeystoreFile">Load</button>
+                        </div>
                         @if (keystoreContent != null)
                         {
                             <div class="text-success small mt-1">Wallet file loaded</div>
@@ -118,24 +123,27 @@
     [Parameter] public List<string> ProjectMembers { get; set; } = new();
     [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
 
-    [Parameter] public EventCallback<(TaskEvent Event, string Keystore, string Password)> OnSaveWithCredentials { get; set; }
+    [Parameter] public EventCallback<TaskSigningRequest> OnSaveWithCredentials { get; set; }
 
     private string? keystoreContent;
     private string? walletPassword;
     private string? errorMessage;
     private bool isPasskeyWallet;
+    private ElementReference walletFileInput;
 
     private async Task Close() => await IsOpenChanged.InvokeAsync(false);
 
-    private async Task LoadKeystoreFile(InputFileChangeEventArgs e)
+    private async Task LoadKeystoreFile()
     {
         try
         {
             errorMessage = null;
-            var file = e.File;
-            using var stream = file.OpenReadStream();
-            using var reader = new StreamReader(stream);
-            keystoreContent = await reader.ReadToEndAsync();
+            keystoreContent = await JS.InvokeAsync<string>("readTextFromFileInput", walletFileInput);
+            if (string.IsNullOrWhiteSpace(keystoreContent))
+            {
+                errorMessage = "Choose a wallet file first.";
+                return;
+            }
 
             // CHANGED: detect passkey wallet mode from keystore metadata.
             isPasskeyWallet = keystoreContent.Contains("\"ProtectionMode\":\"passkey\"", StringComparison.OrdinalIgnoreCase);
@@ -185,11 +193,12 @@
                     Assignee = NormalizeAssignee(TaskModel.Assignee),
                     Status = (int)TaskModel.Status,
                     ProjectId = TaskModel.ProjectId,
-                    User = MyKeyService.UserName 
+                    User = MyKeyService.UserName,
+                    ParentTaskId = TaskModel.ParentTaskId
                 };
 
             // CHANGED: signing is performed in parent flow with mode-aware logic (password/passkey).
-            await OnSaveWithCredentials.InvokeAsync((taskEvent, keystoreContent, walletPassword ?? string.Empty));
+            await OnSaveWithCredentials.InvokeAsync(new TaskSigningRequest(taskEvent, keystoreContent, walletPassword ?? string.Empty));
 
             walletPassword = null;
             await Close();

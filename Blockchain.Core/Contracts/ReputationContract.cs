@@ -9,7 +9,7 @@ namespace Blockchain.Core.Contracts
     {
         public string Name => "ReputationToken (NXP)";
 
-        public bool Validate(string data, string senderPublicKey, DatabaseManager db)
+        public bool Validate(string data, string senderPublicKey, ISmartContractStateReader state)
         {
             try
             {
@@ -19,7 +19,7 @@ namespace Blockchain.Core.Contracts
                 if (evt == null) return false;
 
                 bool isTrustedOracleFeed = IsTrustedOracleFeed(data, senderPublicKey);
-                string? expectedPublicKey = db.GetUserPublicKey(evt.User);
+                string? expectedPublicKey = state.GetUserPublicKey(evt.User);
                 if (!isTrustedOracleFeed &&
                     !string.IsNullOrEmpty(expectedPublicKey) &&
                     expectedPublicKey != senderPublicKey)
@@ -39,7 +39,7 @@ namespace Blockchain.Core.Contracts
                     if (evt.Amount <= 0) return false;
                     if (string.IsNullOrEmpty(evt.TargetUser)) return false;
 
-                    int currentBalance = db.GetUserBalance(evt.User);
+                    int currentBalance = state.GetUserBalance(evt.User);
 
                     if (currentBalance < evt.Amount)
                     {

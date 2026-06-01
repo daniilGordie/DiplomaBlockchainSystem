@@ -14,7 +14,6 @@
 @using System.Collections.Generic
 @using Blockchain.UI.Components.Dashboard
 @using Blockchain.UI.Models
-@using Microsoft.AspNetCore.SignalR.Client
 @using Microsoft.Extensions.Configuration
 
 <PageTitle>Nexus Collaboration Platform</PageTitle>
@@ -181,7 +180,7 @@
                                NewProposalDescription="@newProposalDescription"
                                IsMining="isMining"
                                CanUseGovernance="CanCreateTask"
-                               CanCreateTaskFromAccepted="IsCurrentUserOwner"
+                               CanCreateTaskFromAccepted="CanCreateTask"
                                ImplementedProposalIds="implementedProposalIds"
                                Proposals="governanceProposals"
                                NewProposalTitleChanged="OnNewProposalTitleChanged"
@@ -214,11 +213,13 @@
                               IsUploading="isUploading"
                               IsLoggedIn="MyKeyService.IsLoggedIn"
                               StatusMessage="@statusMessage"
+                              IsGitRepositoryConnecting="isGitRepositoryConnecting"
                               IpfsGatewayUrl="@IpfsGatewayUrl"
                               Artifacts="Artifacts"
                               Commits="Commits"
                               GitStatus="gitIntegrationStatus"
                               IpfsStatus="ipfsIntegrationStatus"
+                              OnConnectRepository="ConnectGitRepository"
                               OnUploadFile="HandleFileUpload" />
             }
             @if (activeTab == ActiveTab.Analytics)
@@ -231,17 +232,38 @@
             @if (activeTab == ActiveTab.Network)
             {
                 <PeerNetworkPanel CurrentNodeUrl="@currentNodeUrl"
+                                  CurrentNodeRole="@currentNodeRole"
                                   NodeUrlInput="@nodeUrlInput"
-                                  PeerUrlInput="@peerUrlInput"
                                   Peers="peerUrls"
                                   ConnectionStatus="@nodeConnectionStatus"
                                   IsBusy="isPeerPanelBusy"
                                   NodeUrlInputChanged="OnNodeUrlInputChanged"
-                                  PeerUrlInputChanged="OnPeerUrlInputChanged"
                                   OnConnectNode="ConnectToNode"
-                                  OnAddPeer="AddPeer"
                                   OnRefreshPeers="RefreshPeers" />
             }
+        </div>
+    }
+    else if (MyKeyService.IsLocked)
+    {
+        <div class="auth-empty-state">
+            <div class="glass-card auth-empty-state__card">
+                <span class="workspace-overview__eyebrow">Wallet locked</span>
+                <h3 class="text-white fw-semibold mb-2">Unlock @MyKeyService.UserName</h3>
+                <p class="text-muted mb-3">Your wallet session is stored encrypted. Unlock it to restore signing, realtime updates, and project access.</p>
+                <div class="input-group mb-3">
+                    <input type="password"
+                           value="@unlockPassword"
+                           @oninput="OnUnlockPasswordChanged"
+                           class="form-control bg-dark text-white border-secondary"
+                           placeholder="Wallet password" />
+                    <button class="btn btn-primary" @onclick="UnlockWalletWithPassword">Unlock</button>
+                </div>
+                <button class="btn btn-outline-secondary w-100" @onclick="UnlockWalletWithPasskey">Unlock with passkey</button>
+                @if (!string.IsNullOrWhiteSpace(unlockMessage))
+                {
+                    <div class="alert alert-warning py-2 mt-3 mb-0">@unlockMessage</div>
+                }
+            </div>
         </div>
     }
     else

@@ -3,7 +3,6 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.Configuration;
 
 namespace Blockchain.UI.Services
@@ -21,16 +20,20 @@ namespace Blockchain.UI.Services
             _ipfsGatewayUrl = NormalizeGatewayUrl(configuration["IpfsGatewayUrl"] ?? "http://127.0.0.1:8080/ipfs");
         }
 
-        public async Task<string> UploadFileAsync(IBrowserFile file)
+        public async Task<string> UploadFileAsync(
+            byte[] fileBytes,
+            string fileName,
+            string contentType)
         {
             try
             {
                 using var content = new MultipartFormDataContent();
 
-                var fileContent = new StreamContent(file.OpenReadStream(50 * 1024 * 1024));
-                fileContent.Headers.ContentType = new MediaTypeHeaderValue(file.ContentType ?? "application/octet-stream");
+                var fileContent = new ByteArrayContent(fileBytes);
+                fileContent.Headers.ContentType = new MediaTypeHeaderValue(
+                    string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType);
 
-                content.Add(fileContent, "file", "upload.bin");
+                content.Add(fileContent, "file", string.IsNullOrWhiteSpace(fileName) ? "upload.bin" : fileName);
 
                 var response = await _httpClient.PostAsync(_ipfsApiUrl, content);
                 response.EnsureSuccessStatusCode();

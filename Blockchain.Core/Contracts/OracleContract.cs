@@ -9,7 +9,7 @@ namespace Blockchain.Core.Contracts
     {
         public string Name => "TrustedOracleContract";
 
-        public bool Validate(string data, string senderPublicKey, DatabaseManager db)
+        public bool Validate(string data, string senderPublicKey, ISmartContractStateReader state)
         {
             try
             {

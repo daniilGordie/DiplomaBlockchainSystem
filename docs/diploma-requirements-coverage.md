@@ -10,11 +10,11 @@ This document maps the diploma plan requirements to the current implementation a
 | Blockchain-backed task lifecycle | Implemented for project creation, task creation, task moves, assignment, completion, and history. | `DatabaseManager.SaveBlock`, project channel tables, `GetTaskHistory` |
 | Smart-contract access control | Implemented for project owners, members, task operations, governance proposals, and votes. | `AccessControllContract.Validate` |
 | Frontend verification | Implemented component-level UI tests for analytics audit trail and team key-binding inputs. | `Blockchain.UI.Tests` (bUnit) |
-| Signed read access for project data | Implemented for project-scoped gRPC reads (chain/tasks/history/governance/documents/analytics/audit) and user project-list reads. The node verifies the signed read scope and rejects requests with a mismatched registered public key. | `BlockchainGrpcService.IsAuthorizedReadRequest`, UI request signatures |
+| Signed read access for project data | Implemented for project-scoped gRPC reads (chain/tasks/history/governance/documents/analytics/audit) and user project-list reads. The node verifies the signed read scope, timestamp, nonce, and bound public key. | `BlockchainGrpcService.IsAuthorizedReadRequest`, UI request signatures |
 | Realtime access control | Implemented: SignalR project-group subscription now checks authenticated connection identity and project membership. | `BlockchainHub.RegisterUser`, `BlockchainHub.JoinProject` |
 | Project isolation | Implemented by using sanitized project-specific block tables and project-scoped history reads. | `DatabaseManager.LoadChain`, `BlockchainGrpcService.GetTaskHistory` |
 | Peer-to-peer synchronization | Implemented for block broadcast with channel preservation. | `P2PNetworkService.BroadcastBlockAsync` |
-| Peer management hardening | Implemented: `AddPeer` validates the supplied admin token against the node `NodeAdminToken` using constant-time comparison. | `BlockchainGrpcService.AddPeer`, `NodeAdminToken` |
+| Peer management hardening | Implemented: `AddPeer` validates the supplied admin token against the node `NodeAdminToken` using constant-time comparison, and the browser UI no longer stores or submits this token. | `BlockchainGrpcService.AddPeer`, `NodeAdminToken` |
 | Secure chain adoption | Implemented: longer peer chains are accepted only after structural validation and full contract replay on temporary state. | `BlockchainManager.TryAdoptChain`, replay validation helpers |
 | Encrypted local storage | Implemented as application-level field encryption for block payloads, validator keys, signatures, task fields, roles, documents, and mempool payloads when `NodeDbPassword` is configured. | `DatabaseManager.EncryptString`, node configuration |
 | Role-based team management | Implemented through project member state and RBAC checks. | `ProjectMembers`, access-control contract |
@@ -60,11 +60,11 @@ Access-control debug logs no longer print the full serialized contract payload. 
 
 ### Signed Read Authorization
 
-Project-scoped read endpoints now verify `AuthSignature` on the node. The UI signs `READ:{scope}:{userName}:{publicKey}`, and the node checks the signature before serving chains, tasks, task history, governance proposals, documents, analytics, security audit data, or the user's project list. If a user already has a public key registered through project creation or role assignment, the supplied public key must match that binding.
+Project-scoped read endpoints now verify `AuthSignature` on the node. The UI signs `READ:{scope}:{userName}:{publicKey}:{timestamp}:{nonce}`, and the node checks the signature, timestamp TTL, nonce replay status, and bound public key before serving chains, tasks, task history, governance proposals, documents, analytics, security audit data, or the user's project list.
 
 ### Peer Admin Authorization
 
-Peer registration now rejects missing or invalid `NodeAdminToken` values. The token is compared with `CryptographicOperations.FixedTimeEquals`, so the network panel can no longer add peers by sending any arbitrary token.
+Peer registration now rejects missing or invalid `NodeAdminToken` values. The token is compared with `CryptographicOperations.FixedTimeEquals`, and the browser UI no longer reads the token from `wwwroot` configuration. Peer administration is expected to use node bootstrap configuration or another server-side admin path.
 
 ### Recoverable Analytics
 

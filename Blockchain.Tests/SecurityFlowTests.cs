@@ -1,8 +1,10 @@
 using Blockchain.Core;
 using Blockchain.Core.Contracts;
+using Blockchain.Infrastructure.Persistence;
+using Blockchain.Infrastructure.Services;
 using Blockchain.Node.Services;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Cryptography;
 using System.Reflection;
 using Xunit;
@@ -142,7 +144,7 @@ public sealed class SecurityFlowTests
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_test_{Guid.NewGuid():N}.db");
         try
         {
-            var manager = new BlockchainManager(dbPath, "");
+            var manager = CreateBlockchainManager(dbPath);
             var latest = manager.GetLatestBlock("System");
             Assert.NotNull(latest);
 
@@ -191,7 +193,7 @@ public sealed class SecurityFlowTests
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_channel_guard_system_{Guid.NewGuid():N}.db");
         try
         {
-            var manager = new BlockchainManager(dbPath, "");
+            var manager = CreateBlockchainManager(dbPath);
             var latest = manager.GetLatestBlock("System");
             Assert.NotNull(latest);
 
@@ -239,7 +241,7 @@ public sealed class SecurityFlowTests
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_channel_guard_mismatch_{Guid.NewGuid():N}.db");
         try
         {
-            var manager = new BlockchainManager(dbPath, "");
+            var manager = CreateBlockchainManager(dbPath);
             using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             string publicKey = Convert.ToBase64String(ecdsa.ExportSubjectPublicKeyInfo());
 
@@ -284,7 +286,7 @@ public sealed class SecurityFlowTests
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_adopt_reject_{Guid.NewGuid():N}.db");
         try
         {
-            var manager = new BlockchainManager(dbPath, "");
+            var manager = CreateBlockchainManager(dbPath);
 
             using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             string publicKey = Convert.ToBase64String(ecdsa.ExportSubjectPublicKeyInfo());
@@ -1179,9 +1181,11 @@ public sealed class SecurityFlowTests
 
             var service = CreateGrpcService(dbPath, nodeAdminToken: "admin-secret");
             string scope = "PROJECT:ReadAuthProj:TASKS";
-            string signature = SignRead(userKey, scope, "Alice", publicKey);
+            string timestamp = DateTime.UtcNow.ToString("O");
+            string nonce = Guid.NewGuid().ToString("N");
+            string signature = SignRead(userKey, scope, "Alice", publicKey, timestamp, nonce);
 
-            bool accepted = InvokeReadAuthorization(service, db, scope, "Alice", publicKey, signature);
+            bool accepted = InvokeReadAuthorization(service, db, scope, "Alice", publicKey, signature, timestamp, nonce);
 
             Assert.True(accepted);
         }
@@ -1219,11 +1223,55 @@ public sealed class SecurityFlowTests
 
             var service = CreateGrpcService(dbPath, nodeAdminToken: "admin-secret");
             string scope = "PROJECT:ReadAuthRejectProj:TASKS";
-            string attackerSignature = SignRead(attackerKey, scope, "Alice", attackerPublicKey);
+            string timestamp = DateTime.UtcNow.ToString("O");
+            string nonce = Guid.NewGuid().ToString("N");
+            string attackerSignature = SignRead(attackerKey, scope, "Alice", attackerPublicKey, timestamp, nonce);
 
-            bool accepted = InvokeReadAuthorization(service, db, scope, "Alice", attackerPublicKey, attackerSignature);
+            bool accepted = InvokeReadAuthorization(service, db, scope, "Alice", attackerPublicKey, attackerSignature, timestamp, nonce);
 
             Assert.False(accepted);
+        }
+        finally
+        {
+            TryDelete(dbPath);
+            TryDelete(dbPath + "-wal");
+            TryDelete(dbPath + "-shm");
+        }
+    }
+
+    [Fact]
+    public void BlockchainGrpcService_ShouldRejectReplayedSignedReadNonce()
+    {
+        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_read_auth_replay_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var userKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            string publicKey = Convert.ToBase64String(userKey.ExportSubjectPublicKeyInfo());
+
+            var db = new DatabaseManager(dbPath, "");
+            db.SaveBlock(new Block
+            {
+                Index = 0,
+                Timestamp = DateTime.UtcNow,
+                Data = "{\"Type\":\"CreateProject\",\"ProjectId\":\"ReadAuthReplayProj\",\"User\":\"Alice\"}",
+                PreviousHash = "0",
+                Hash = Guid.NewGuid().ToString("N"),
+                ValidatorPublicKey = publicKey,
+                Signature = "sig",
+                ChannelId = "System"
+            }, "System");
+
+            var service = CreateGrpcService(dbPath, nodeAdminToken: "admin-secret");
+            string scope = "PROJECT:ReadAuthReplayProj:TASKS";
+            string timestamp = DateTime.UtcNow.ToString("O");
+            string nonce = Guid.NewGuid().ToString("N");
+            string signature = SignRead(userKey, scope, "Alice", publicKey, timestamp, nonce);
+
+            bool firstAttempt = InvokeReadAuthorization(service, db, scope, "Alice", publicKey, signature, timestamp, nonce);
+            bool replayAttempt = InvokeReadAuthorization(service, db, scope, "Alice", publicKey, signature, timestamp, nonce);
+
+            Assert.True(firstAttempt);
+            Assert.False(replayAttempt);
         }
         finally
         {
@@ -1264,14 +1312,20 @@ public sealed class SecurityFlowTests
             })
             .Build();
 
-        var manager = new BlockchainManager(dbPath, "");
-        return new BlockchainGrpcService(
-            NullLogger<BlockchainGrpcService>.Instance,
-            configuration,
-            manager,
-            oracleIdentity: null!,
-            p2pService: null!,
-            hubContext: null!);
+        var database = new DatabaseManager(dbPath, "");
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddLogging();
+        services.AddSignalR();
+        services.AddNexusNodeServices(database);
+
+        var provider = services.BuildServiceProvider();
+        return ActivatorUtilities.CreateInstance<BlockchainGrpcService>(provider);
+    }
+
+    private static BlockchainManager CreateBlockchainManager(string dbPath)
+    {
+        return new BlockchainManager(new DatabaseManager(dbPath, ""), new DatabaseReplayStoreFactory());
     }
 
     private static bool InvokeReadAuthorization(
@@ -1280,11 +1334,13 @@ public sealed class SecurityFlowTests
         string scope,
         string userName,
         string publicKey,
-        string signature)
+        string signature,
+        string timestamp,
+        string nonce)
     {
         var method = typeof(BlockchainGrpcService).GetMethod("IsAuthorizedReadRequest", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
-        return (bool)method!.Invoke(service, new object[] { db, scope, userName, publicKey, signature })!;
+        return (bool)method!.Invoke(service, new object[] { db, scope, userName, publicKey, signature, timestamp, nonce })!;
     }
 
     private static bool InvokeAdminTokenValidation(BlockchainGrpcService service, string token)
@@ -1294,9 +1350,9 @@ public sealed class SecurityFlowTests
         return (bool)method!.Invoke(service, new object[] { token })!;
     }
 
-    private static string SignRead(ECDsa key, string scope, string userName, string publicKey)
+    private static string SignRead(ECDsa key, string scope, string userName, string publicKey, string timestamp, string nonce)
     {
-        string signable = $"READ:{scope}:{userName}:{publicKey}";
+        string signable = $"READ:{scope}:{userName}:{publicKey}:{timestamp}:{nonce}";
         byte[] signature = key.SignData(
             System.Text.Encoding.UTF8.GetBytes(signable),
             HashAlgorithmName.SHA256,

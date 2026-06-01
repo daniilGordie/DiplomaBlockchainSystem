@@ -1,40 +1,43 @@
 using Blockchain.Node;
+using Blockchain.UI.Application.Clients;
 using Blockchain.UI.Services;
 using Blockchain.UI.Components;
 using Blockchain.UI.Components.Dashboard;
+using Blockchain.UI.Application.UseCases;
 using Blockchain.UI.Models;
-using Google.Protobuf;
-using Grpc.Net.Client;
-using Grpc.Net.Client.Web;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
-using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.JSInterop;
-using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Blockchain.UI.Components.Pages;
 
-public partial class BlockchainDashboard : ComponentBase
+public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
 {
     [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private KeyService MyKeyService { get; set; } = default!;
     [Inject] private IpfsService Ipfs { get; set; } = default!;
     [Inject] private IConfiguration Config { get; set; } = default!;
-    [Inject] private HttpClient Http { get; set; } = default!;
+    [Inject] private IGitIntegrationClient GitIntegrationClient { get; set; } = default!;
+    [Inject] private IIpfsIntegrationClient IpfsIntegrationClient { get; set; } = default!;
+    [Inject] private IArtifactIntegrationClient ArtifactIntegrationClient { get; set; } = default!;
+    [Inject] private IBlockchainRealtimeClient RealtimeClient { get; set; } = default!;
+    [Inject] private IProjectWorkspaceDataService WorkspaceDataService { get; set; } = default!;
+    [Inject] private IBlockAnchoringService BlockAnchoringService { get; set; } = default!;
+    [Inject] private IPeerNetworkClient PeerNetworkClient { get; set; } = default!;
+    [Inject] private IClipboardService ClipboardService { get; set; } = default!;
+    [Inject] private DashboardActions DashboardActions { get; set; } = default!;
 
-    private BlockchainService.BlockchainServiceClient BlockchainClient { get; set; } = default!;
-    private HubConnection? hubConnection;
     private string currentNodeUrl = "";
-    private string nodeAdminToken = "";
     private string nodeUrlInput = "";
-    private string peerUrlInput = "";
     private string nodeConnectionStatus = "";
     private bool isPeerPanelBusy = false;
-    private List<string> peerUrls = new();
+    private List<PeerNodeInfo> peerUrls = new();
+    private string currentNodeRole = "Unknown";
 
     private ActiveTab activeTab = ActiveTab.Board;
     private List<ProjectTask> Tasks = new();
@@ -55,6 +58,7 @@ public partial class BlockchainDashboard : ComponentBase
     private Dictionary<string, string> projectRoles = new(StringComparer.OrdinalIgnoreCase);
     private string currentUserRole = "None";
     private HashSet<string> implementedProposalIds = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> locallyImplementedProposalIds = new(StringComparer.OrdinalIgnoreCase);
     private IntegrationStatusUI gitIntegrationStatus = new() { Name = "Git webhook" };
     private IntegrationStatusUI ipfsIntegrationStatus = new() { Name = "IPFS node" };
 
@@ -72,14 +76,20 @@ public partial class BlockchainDashboard : ComponentBase
     private string selectedDocumentId = "";
     private string documentTitle = "";
     private string documentContent = "";
+    private bool isDocumentDraftDirty = false;
+    private bool isGitRepositoryConnecting = false;
 
     private string CurrentProjectId = "System";
     private string userNameInput = "";
     private string restoreMnemonic = "";
     private string statusMessage = "";
+    private string unlockPassword = "";
+    private string unlockMessage = "";
     private bool isRestoreMode = false;
     private bool isUploading = false;
     private bool isMining = false;
+    private bool isSyncing = false;
+    private CancellationTokenSource? workspaceRefreshCts;
     private string mnemonicCopyButtonText = "Copy to Clipboard";
 
     private bool isIssueModalOpen = false;
@@ -101,16 +111,16 @@ public partial class BlockchainDashboard : ComponentBase
     private Task OnUserNameInputChanged(string value) { userNameInput = value; return Task.CompletedTask; }
     private Task OnRestoreMnemonicChanged(string value) { restoreMnemonic = value; return Task.CompletedTask; }
     private Task OnNewUserPasswordChanged(string value) { newUserPassword = value; return Task.CompletedTask; }
+    private Task OnUnlockPasswordChanged(ChangeEventArgs e) { unlockPassword = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
     private Task OnNewMemberNameChanged(string value) { newMemberName = value; return Task.CompletedTask; }
     private Task OnNewMemberRoleChanged(string value) { newMemberRole = value; return Task.CompletedTask; }
     private Task OnNewMemberPublicKeyChanged(string value) { newMemberPublicKey = value; return Task.CompletedTask; }
     private Task OnNewMemberPublicKeyFingerprintChanged(string value) { newMemberPublicKeyFingerprint = value; return Task.CompletedTask; }
     private Task OnNewProposalTitleChanged(string value) { newProposalTitle = value; return Task.CompletedTask; }
     private Task OnNewProposalDescriptionChanged(string value) { newProposalDescription = value; return Task.CompletedTask; }
-    private Task OnDocumentTitleChanged(string value) { documentTitle = value; return Task.CompletedTask; }
-    private Task OnDocumentContentChanged(string value) { documentContent = value; return Task.CompletedTask; }
+    private Task OnDocumentTitleChanged(string value) { documentTitle = value; isDocumentDraftDirty = true; return Task.CompletedTask; }
+    private Task OnDocumentContentChanged(string value) { documentContent = value; isDocumentDraftDirty = true; return Task.CompletedTask; }
     private Task OnNodeUrlInputChanged(string value) { nodeUrlInput = value; return Task.CompletedTask; }
-    private Task OnPeerUrlInputChanged(string value) { peerUrlInput = value; return Task.CompletedTask; }
     private Task CancelRestoreMode() { isRestoreMode = false; return Task.CompletedTask; }
     private string MnemonicCopyButtonText => mnemonicCopyButtonText;
 
@@ -119,11 +129,8 @@ public partial class BlockchainDashboard : ComponentBase
     {
         isGenesisModeActive = bool.TryParse(Config["GenesisModeEnabled"], out var genesis) && genesis;
 
-        currentNodeUrl = NormalizeNodeUrl(Config["NodeUrl"] ?? "https://localhost:7066");
-        nodeAdminToken = Config["NodeAdminToken"] ?? "";
+        currentNodeUrl = DashboardActions.GetInitialNodeUrl();
         nodeUrlInput = currentNodeUrl;
-        BlockchainClient = CreateBlockchainClient(currentNodeUrl);
-
         try
         {
             await StartRealtimeConnection();
@@ -134,38 +141,6 @@ public partial class BlockchainDashboard : ComponentBase
         {
             nodeConnectionStatus = $"Node unavailable: {ex.Message}";
         }
-    }
-
-    private static string NormalizeNodeUrl(string url) => url.Trim().TrimEnd('/');
-
-    private static bool IsHttpNodeUrl(string url)
-    {
-        return Uri.TryCreate(url, UriKind.Absolute, out var uri)
-            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
-    }
-
-    private static BlockchainService.BlockchainServiceClient CreateBlockchainClient(string nodeUrl)
-    {
-        var httpHandler = new GrpcWebHandler(GrpcWebMode.GrpcWeb, new HttpClientHandler());
-        var channel = GrpcChannel.ForAddress(nodeUrl, new GrpcChannelOptions
-        {
-            HttpHandler = httpHandler
-        });
-
-        return new BlockchainService.BlockchainServiceClient(channel);
-    }
-
-    private string BuildReadAuthSignature(string scope)
-    {
-        if (!MyKeyService.IsLoggedIn || string.IsNullOrWhiteSpace(MyKeyService.PublicKey))
-        {
-            return string.Empty;
-        }
-
-        string userName = MyKeyService.UserName ?? "Guest";
-        string publicKey = MyKeyService.PublicKey ?? string.Empty;
-        string signable = $"READ:{scope}:{userName}:{publicKey}";
-        return MyKeyService.SignData(signable);
     }
 
     private static bool IsValidPublicKey(string publicKeyBase64)
@@ -188,6 +163,13 @@ public partial class BlockchainDashboard : ComponentBase
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
+    private static string ComputeSimpleHash(string data)
+    {
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(data);
+        byte[] hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
     private async Task CopyMyPublicKey()
     {
         if (string.IsNullOrWhiteSpace(MyKeyService.PublicKey))
@@ -196,30 +178,13 @@ public partial class BlockchainDashboard : ComponentBase
             return;
         }
 
-        try
-        {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", MyKeyService.PublicKey);
-            statusMessage = "Public key copied to clipboard.";
-        }
-        catch (Exception ex)
-        {
-            statusMessage = $"Clipboard error: {ex.Message}";
-        }
+        var result = await ClipboardService.CopyTextAsync(MyKeyService.PublicKey);
+        statusMessage = result.Success ? "Public key copied to clipboard." : result.Error;
     }
 
     private async Task StartRealtimeConnection()
     {
-        if (hubConnection != null)
-        {
-            await hubConnection.DisposeAsync();
-        }
-
-        hubConnection = new HubConnectionBuilder()
-            .WithUrl($"{currentNodeUrl}/blockchainHub")
-            .WithAutomaticReconnect()
-            .Build();
-
-        hubConnection.On<BlockModel>("NewBlockBroadcast", async (block) =>
+        await RealtimeClient.ConnectAsync(currentNodeUrl, async block =>
         {
             if (block.ChannelId == CurrentProjectId || block.ChannelId == "System")
             {
@@ -236,7 +201,6 @@ public partial class BlockchainDashboard : ComponentBase
             }
         });
 
-        await hubConnection.StartAsync();
         nodeConnectionStatus = $"Connected to {currentNodeUrl}.";
 
         if (MyKeyService.IsLoggedIn)
@@ -247,19 +211,19 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task ConnectToNode()
     {
-        string nextUrl = NormalizeNodeUrl(nodeUrlInput);
-        if (!IsHttpNodeUrl(nextUrl))
+        var validation = DashboardActions.ValidateNodeUrl(nodeUrlInput);
+        if (!validation.Success || string.IsNullOrWhiteSpace(validation.Value))
         {
-            nodeConnectionStatus = "Enter a valid HTTP or HTTPS node URL.";
+            nodeConnectionStatus = validation.Error;
             return;
         }
 
         try
         {
             isPeerPanelBusy = true;
+            string nextUrl = validation.Value;
             currentNodeUrl = nextUrl;
             nodeUrlInput = currentNodeUrl;
-            BlockchainClient = CreateBlockchainClient(currentNodeUrl);
 
             await StartRealtimeConnection();
             await RefreshPeers();
@@ -284,62 +248,27 @@ public partial class BlockchainDashboard : ComponentBase
         }
     }
 
-    private async Task AddPeer()
-    {
-        if (string.IsNullOrWhiteSpace(nodeAdminToken))
-        {
-            statusMessage = "Node admin token is not configured in UI settings.";
-            return;
-        }
-
-        string peerUrl = NormalizeNodeUrl(peerUrlInput);
-        if (!IsHttpNodeUrl(peerUrl))
-        {
-            nodeConnectionStatus = "Enter a valid HTTP or HTTPS peer URL.";
-            return;
-        }
-
-        try
-        {
-            isPeerPanelBusy = true;
-            var response = await BlockchainClient.AddPeerAsync(new PeerRequest { Url = peerUrl, AdminToken = nodeAdminToken });
-            statusMessage = response.Success ? $"Peer added: {peerUrl}." : $"Peer rejected: {response.Message}";
-
-            if (response.Success)
-            {
-                peerUrlInput = "";
-                await RefreshPeers();
-            }
-        }
-        catch (Exception ex)
-        {
-            nodeConnectionStatus = $"Add peer failed: {ex.Message}";
-            statusMessage = nodeConnectionStatus;
-        }
-        finally
-        {
-            isPeerPanelBusy = false;
-            StateHasChanged();
-        }
-    }
-
     private async Task RefreshPeers()
     {
-        if (BlockchainClient == null)
-        {
-            return;
-        }
-
         try
         {
             isPeerPanelBusy = true;
-            var response = await BlockchainClient.GetPeersAsync(new EmptyRequest());
-            peerUrls = response.Urls.ToList();
+            var result = await DashboardActions.LoadPeersAsync(currentNodeUrl);
+            if (!result.Success || result.Value == null)
+            {
+                peerUrls.Clear();
+                nodeConnectionStatus = result.Error;
+                return;
+            }
+
+            currentNodeRole = result.Value.CurrentRole;
+            peerUrls = result.Value.Peers.ToList();
             nodeConnectionStatus = $"Connected to {currentNodeUrl}. {peerUrls.Count} peer(s) registered.";
         }
         catch (Exception ex)
         {
             peerUrls.Clear();
+            currentNodeRole = "Unknown";
             nodeConnectionStatus = $"Node unavailable: {ex.Message}";
         }
         finally
@@ -369,115 +298,12 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task LoadGitIntegrationStatus()
     {
-        try
-        {
-            using var doc = await Http.GetFromJsonAsync<JsonDocument>($"{currentNodeUrl}/api/integrations/git/status");
-            var root = doc?.RootElement;
-            string webhookUrl = root?.TryGetProperty("webhookUrl", out var webhookProp) == true ? webhookProp.GetString() ?? "" : "";
-            string mode = root?.TryGetProperty("mode", out var modeProp) == true ? modeProp.GetString() ?? "" : "";
-            string source = root?.TryGetProperty("source", out var sourceProp) == true ? sourceProp.GetString() ?? "" : "";
-            string defaultProjectId = root?.TryGetProperty("defaultProjectId", out var defaultProjectProp) == true ? defaultProjectProp.GetString() ?? "" : "";
-            string bindingPolicy = root?.TryGetProperty("bindingPolicy", out var bindingPolicyProp) == true ? bindingPolicyProp.GetString() ?? "" : "";
-            int bindingsCount = root?.TryGetProperty("bindingsCount", out var bindingsCountProp) == true ? bindingsCountProp.GetInt32() : 0;
-            bool secretConfigured = root?.TryGetProperty("webhookSecretConfigured", out var secretProp) == true && secretProp.GetBoolean();
-            var providers = new List<string>();
-            var bindings = new List<GitRepositoryBindingUI>();
-            if (root?.TryGetProperty("providers", out var providersProp) == true && providersProp.ValueKind == JsonValueKind.Array)
-            {
-                providers = providersProp.EnumerateArray()
-                    .Select(x => x.GetString() ?? "")
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .ToList();
-            }
-            if (root?.TryGetProperty("bindings", out var bindingsProp) == true && bindingsProp.ValueKind == JsonValueKind.Array)
-            {
-                bindings = bindingsProp.EnumerateArray()
-                    .Select(x => new GitRepositoryBindingUI
-                    {
-                        Repository = x.TryGetProperty("repository", out var repoProp) ? repoProp.GetString() ?? "" : "",
-                        ProjectId = x.TryGetProperty("projectId", out var projectProp) ? projectProp.GetString() ?? "" : ""
-                    })
-                    .Where(x => !string.IsNullOrWhiteSpace(x.Repository) || !string.IsNullOrWhiteSpace(x.ProjectId))
-                    .ToList();
-            }
-
-            string details = mode;
-            if (!string.IsNullOrWhiteSpace(source))
-            {
-                details += $" | source: {source}";
-            }
-            if (providers.Any())
-            {
-                details += $" | providers: {string.Join(", ", providers)}";
-            }
-            if (!string.IsNullOrWhiteSpace(bindingPolicy))
-            {
-                details += $" | {bindingPolicy}";
-            }
-            if (!string.IsNullOrWhiteSpace(defaultProjectId))
-            {
-                details += $" | default project: {defaultProjectId}";
-            }
-            details += $" | bindings: {bindingsCount}";
-
-            gitIntegrationStatus = new IntegrationStatusUI
-            {
-                IsLoaded = true,
-                IsHealthy = secretConfigured,
-                Name = "Git webhook",
-                Status = secretConfigured ? "Ready" : "Secret missing",
-                Endpoint = webhookUrl,
-                Details = details,
-                Source = source,
-                Providers = providers,
-                RepositoryBindings = bindings
-            };
-        }
-        catch (Exception ex)
-        {
-            gitIntegrationStatus = new IntegrationStatusUI
-            {
-                IsLoaded = true,
-                IsHealthy = false,
-                Name = "Git webhook",
-                Status = "Unavailable",
-                Endpoint = $"{currentNodeUrl}/api/webhooks/git",
-                Details = ex.Message
-            };
-        }
+        gitIntegrationStatus = await GitIntegrationClient.GetStatusAsync(currentNodeUrl);
     }
 
     private async Task LoadIpfsIntegrationStatus()
     {
-        try
-        {
-            using var doc = await Http.GetFromJsonAsync<JsonDocument>($"{currentNodeUrl}/api/integrations/ipfs/health");
-            var root = doc?.RootElement;
-            string apiUrl = root?.TryGetProperty("apiUrl", out var apiProp) == true ? apiProp.GetString() ?? "" : "";
-            bool reachable = root?.TryGetProperty("reachable", out var reachableProp) == true && reachableProp.GetBoolean();
-
-            ipfsIntegrationStatus = new IntegrationStatusUI
-            {
-                IsLoaded = true,
-                IsHealthy = reachable,
-                Name = "IPFS node",
-                Status = reachable ? "Reachable" : "Offline",
-                Endpoint = apiUrl,
-                Details = reachable ? "Local IPFS API responded" : "Start the local IPFS daemon"
-            };
-        }
-        catch (Exception ex)
-        {
-            ipfsIntegrationStatus = new IntegrationStatusUI
-            {
-                IsLoaded = true,
-                IsHealthy = false,
-                Name = "IPFS node",
-                Status = "Unavailable",
-                Endpoint = "http://127.0.0.1:5001/api/v0",
-                Details = ex.Message
-            };
-        }
+        ipfsIntegrationStatus = await IpfsIntegrationClient.GetStatusAsync(currentNodeUrl);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -490,6 +316,7 @@ public partial class BlockchainDashboard : ComponentBase
             {
                 await JoinSignalRGroups();
                 await SyncChain();
+                StartWorkspaceRefreshLoop();
             }
             else
             {
@@ -500,69 +327,19 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task JoinSignalRGroups()
     {
-        if (hubConnection != null && hubConnection.State == HubConnectionState.Connected && MyKeyService.IsLoggedIn)
+        if (MyKeyService.IsLoggedIn)
         {
             try
             {
-                // CHANGED: secure realtime registration (signature bound to SignalR connection id).
-                string registerChallenge = $"REGISTER:{hubConnection.ConnectionId}:{MyKeyService.UserName}";
-                string registerSignature = MyKeyService.SignData(registerChallenge);
-                bool registerOk = await hubConnection.InvokeAsync<bool>("RegisterUser", MyKeyService.UserName, MyKeyService.PublicKey, registerSignature);
-                if (!registerOk)
+                bool joined = await RealtimeClient.JoinProjectsAsync(CurrentProjectId);
+                if (!joined)
                 {
                     statusMessage = "Realtime auth failed. User group subscription denied.";
-                    return;
-                }
-                await hubConnection.InvokeAsync("JoinProject", "System");
-                if (!string.IsNullOrEmpty(CurrentProjectId))
-                {
-                    await hubConnection.InvokeAsync("JoinProject", CurrentProjectId);
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[SignalR] Error subscribing to channel: {ex.Message}");
-            }
-        }
-    }
-
-    private string ComputeSimpleHash(string data)
-    {
-        using var sha256 = SHA256.Create();
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(data);
-        return BitConverter.ToString(sha256.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
-    }
-
-    private async Task MineBlockLocal(BlockModel block)
-    {
-        await Task.Delay(10);
-
-        DateTime dt = DateTime.Parse(block.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind);
-        string timeStringS = dt.ToString("s");
-
-        block.Nonce = 0;
-
-        using var sha256 = SHA256.Create();
-
-        string baseData = $"{block.Index}{timeStringS}{block.Data}{block.PreviousHash}{block.ValidatorPublicKey}{block.Signature}";
-
-        while (true)
-        {
-            block.Nonce++;
-            string rawData = baseData + block.Nonce;
-
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(rawData);
-            byte[] hashBytes = sha256.ComputeHash(bytes);
-
-            // Fast Hex conversion
-            block.Hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-
-            if (block.Hash.StartsWith("000"))
-                break;
-
-            if (block.Nonce % 500 == 0)
-            {
-                await Task.Yield();
             }
         }
     }
@@ -605,8 +382,10 @@ public partial class BlockchainDashboard : ComponentBase
                             Title = root.TryGetProperty("Title", out var tProp) ? tProp.GetString() ?? "" : "",
                             Assignee = root.TryGetProperty("Assignee", out var aProp) ? aProp.GetString() ?? "" : "",
                             ProjectId = root.TryGetProperty("ProjectId", out var pProp) ? pProp.GetString() ?? "" : "",
-                            Status = root.TryGetProperty("Status", out var sProp) ? (ProjectTaskStatus)sProp.GetInt32() : ProjectTaskStatus.Todo
+                            Status = root.TryGetProperty("Status", out var sProp) ? (ProjectTaskStatus)sProp.GetInt32() : ProjectTaskStatus.Todo,
+                            ParentTaskId = root.TryGetProperty("ParentTaskId", out var parentProp) ? parentProp.GetString() ?? "" : ""
                         });
+                    UpdateImplementedProposalIds();
                 }
             }
             else if (type == "Move" || type == "Update")
@@ -703,18 +482,18 @@ public partial class BlockchainDashboard : ComponentBase
             }
         }
 
-        var payload = new
+        string payloadJson = new JsonObject
         {
-            Type = "AssignRole",
-            User = MyKeyService.UserName,
-            ProjectId = CurrentProjectId,
-            TargetUser = newMemberName,
-            TargetPublicKey = newMemberPublicKey,
-            Role = newMemberRole,
-            Timestamp = DateTime.UtcNow.ToString("O")
-        };
+            ["Type"] = "AssignRole",
+            ["User"] = MyKeyService.UserName,
+            ["ProjectId"] = CurrentProjectId,
+            ["TargetUser"] = newMemberName,
+            ["TargetPublicKey"] = newMemberPublicKey,
+            ["Role"] = newMemberRole,
+            ["Timestamp"] = DateTime.UtcNow.ToString("O")
+        }.ToJsonString();
 
-        await SendJsonBlock(payload);
+        await SendJsonBlockJson(payloadJson, "System");
         newMemberName = "";
         newMemberPublicKey = "";
         newMemberPublicKeyFingerprint = "";
@@ -724,25 +503,74 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task CreateWallet()
     {
-        if (!string.IsNullOrWhiteSpace(userNameInput))
+        string requestedUserName = userNameInput.Trim();
+        if (string.IsNullOrWhiteSpace(requestedUserName))
         {
-            await Logout();
-            await MyKeyService.CreateNewWallet(userNameInput);
-            showPasswordEntry = true;
-            await JoinSignalRGroups();
-            await SyncChain();
+            statusMessage = "Enter a user name before creating a wallet.";
+            return;
         }
+
+        var availability = await BlockAnchoringService.CheckUserNameAvailabilityAsync(requestedUserName);
+        if (!availability.Success)
+        {
+            statusMessage = availability.Message;
+            return;
+        }
+
+        if (availability.Exists)
+        {
+            statusMessage = $"User name '{requestedUserName}' is already taken. Restore the original wallet for this name or choose another name.";
+            return;
+        }
+
+        await Logout();
+        await MyKeyService.CreateNewWallet(requestedUserName);
+        showPasswordEntry = true;
+        statusMessage = $"Wallet created for '{requestedUserName}'. Save the wallet file before continuing.";
+        await JoinSignalRGroups();
+        await SyncChain();
+        StartWorkspaceRefreshLoop();
     }
 
     private void RestoreMode() => isRestoreMode = !isRestoreMode;
 
     private async Task RestoreWallet()
     {
-        if (await MyKeyService.RestoreWallet(restoreMnemonic, userNameInput))
+        string requestedUserName = userNameInput.Trim();
+        if (string.IsNullOrWhiteSpace(requestedUserName))
         {
+            statusMessage = "Enter the user name that belongs to this wallet.";
+            return;
+        }
+
+        if (await MyKeyService.RestoreWallet(restoreMnemonic, requestedUserName))
+        {
+            var identity = await BlockAnchoringService.CheckCurrentUserIdentityAsync();
+            if (!identity.Success)
+            {
+                await Logout();
+                statusMessage = $"Identity check failed: {identity.Message}";
+                return;
+            }
+
+            if (identity.Exists && !identity.PublicKeyMatches)
+            {
+                await Logout();
+                statusMessage = $"Wallet key does not match user name '{requestedUserName}'. Restore the correct wallet or use another user name.";
+                return;
+            }
+
             isRestoreMode = false;
+            statusMessage = identity.Exists
+                ? $"Wallet restored for '{requestedUserName}'."
+                : $"Wallet restored. User name '{requestedUserName}' is not registered yet.";
             await JoinSignalRGroups();
             await SyncChain();
+            StartWorkspaceRefreshLoop();
+        }
+        else
+        {
+            statusMessage = "Recovery phrase is invalid.";
         }
     }
 
@@ -754,8 +582,8 @@ public partial class BlockchainDashboard : ComponentBase
             return;
         }
 
-        bool copied = await TryCopyTextToClipboardAsync(MyKeyService.CurrentMnemonic);
-        if (copied)
+        var result = await ClipboardService.CopyTextAsync(MyKeyService.CurrentMnemonic);
+        if (result.Success)
         {
             mnemonicCopyButtonText = "Copied!";
             statusMessage = "Secret phrase copied to clipboard.";
@@ -766,10 +594,72 @@ public partial class BlockchainDashboard : ComponentBase
         }
         else
         {
-            statusMessage = "Copy failed. Please copy the secret phrase manually.";
+            statusMessage = result.Error;
         }
     }
-    private async Task Logout() => await MyKeyService.Logout();
+    private async Task Logout()
+    {
+        await MyKeyService.Logout();
+        CurrentProjectId = "System";
+        myProjects.Clear();
+        ownedProjects.Clear();
+        sharedProjects.Clear();
+        projectRoles.Clear();
+        currentUserRole = "None";
+        Tasks.Clear();
+        chain.Clear();
+        Commits.Clear();
+        Artifacts.Clear();
+        auditTrail.Clear();
+        documents.Clear();
+        documentVersions.Clear();
+        governanceProposals.Clear();
+        showPasswordEntry = false;
+        isRestoreMode = false;
+        statusMessage = "Signed out.";
+        StopWorkspaceRefreshLoop();
+        StateHasChanged();
+    }
+
+    private async Task UnlockWalletWithPassword()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(unlockPassword))
+            {
+                unlockMessage = "Enter wallet password.";
+                return;
+            }
+
+            await MyKeyService.UnlockSessionWithPasswordAsync(unlockPassword);
+            unlockPassword = "";
+            unlockMessage = "";
+            await JoinSignalRGroups();
+            await SyncChain();
+            StartWorkspaceRefreshLoop();
+        }
+        catch (Exception ex)
+        {
+            unlockMessage = ex.Message;
+        }
+    }
+
+    private async Task UnlockWalletWithPasskey()
+    {
+        try
+        {
+            await MyKeyService.UnlockSessionWithPasskeyAsync();
+            unlockPassword = "";
+            unlockMessage = "";
+            await JoinSignalRGroups();
+            await SyncChain();
+            StartWorkspaceRefreshLoop();
+        }
+        catch (Exception ex)
+        {
+            unlockMessage = ex.Message;
+        }
+    }
 
     private void OpenTaskModal(ProjectTask? task)
     {
@@ -811,11 +701,13 @@ public partial class BlockchainDashboard : ComponentBase
             .Select(task => task.ParentTaskId)
             .Where(parentId => !string.IsNullOrWhiteSpace(parentId) && parentId.StartsWith("GOV-", StringComparison.OrdinalIgnoreCase))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        implementedProposalIds.UnionWith(locallyImplementedProposalIds);
     }
 
     private Task CreateTaskFromProposal(string proposalId)
     {
-        if (!CanCreateTask || !IsCurrentUserOwner || string.IsNullOrWhiteSpace(proposalId))
+        if (!CanCreateTask || string.IsNullOrWhiteSpace(proposalId))
         {
             return Task.CompletedTask;
         }
@@ -856,15 +748,7 @@ public partial class BlockchainDashboard : ComponentBase
         viewingHistory = new List<TaskHistoryItem>();
         try
         {
-            var response = await BlockchainClient.GetTaskHistoryAsync(new TaskHistoryRequest
-            {
-                TaskId = taskId,
-                ProjectId = CurrentProjectId,
-                UserName = MyKeyService.UserName ?? "Guest",
-                UserPublicKey = MyKeyService.PublicKey ?? "",
-                AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:TASK_HISTORY:{taskId}")
-            });
-            viewingHistory = response.Items.OrderByDescending(x => x.Timestamp).ToList();
+            viewingHistory = (await WorkspaceDataService.LoadTaskHistoryAsync(CurrentProjectId, taskId)).ToList();
         }
         catch (Exception ex) { statusMessage = "History Error: " + ex.Message; viewingHistory = null; }
     }
@@ -885,14 +769,7 @@ public partial class BlockchainDashboard : ComponentBase
 
         try
         {
-            var response = await BlockchainClient.GetGovernanceProposalsAsync(new ProjectRequest
-            {
-                ProjectId = CurrentProjectId,
-                UserName = MyKeyService.UserName ?? "Guest",
-                UserPublicKey = MyKeyService.PublicKey ?? "",
-                AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:GOVERNANCE")
-            });
-            governanceProposals = response.Proposals.ToList();
+            governanceProposals = (await WorkspaceDataService.LoadGovernanceAsync(CurrentProjectId)).ToList();
         }
         catch (Exception ex)
         {
@@ -904,18 +781,18 @@ public partial class BlockchainDashboard : ComponentBase
     {
         if (!CanCreateTask || string.IsNullOrWhiteSpace(newProposalTitle)) return;
 
-        var payload = new
+        string payloadJson = new JsonObject
         {
-            Type = "CreateProposal",
-            ProposalId = "GOV-" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper(),
-            Title = newProposalTitle.Trim(),
-            Description = newProposalDescription.Trim(),
-            User = MyKeyService.UserName,
-            ProjectId = CurrentProjectId,
-            Timestamp = DateTime.UtcNow.ToString("O")
-        };
+            ["Type"] = "CreateProposal",
+            ["ProposalId"] = "GOV-" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper(),
+            ["Title"] = newProposalTitle.Trim(),
+            ["Description"] = newProposalDescription.Trim(),
+            ["User"] = MyKeyService.UserName,
+            ["ProjectId"] = CurrentProjectId,
+            ["Timestamp"] = DateTime.UtcNow.ToString("O")
+        }.ToJsonString();
 
-        bool ok = await SendJsonBlock(payload);
+        bool ok = await SendJsonBlockJson(payloadJson, CurrentProjectId);
         if (ok)
         {
             newProposalTitle = "";
@@ -928,17 +805,17 @@ public partial class BlockchainDashboard : ComponentBase
     {
         if (!CanCreateTask || string.IsNullOrWhiteSpace(args.ProposalId)) return;
 
-        var payload = new
+        string payloadJson = new JsonObject
         {
-            Type = "CastVote",
-            ProposalId = args.ProposalId,
-            Vote = args.VoteYes,
-            User = MyKeyService.UserName,
-            ProjectId = CurrentProjectId,
-            Timestamp = DateTime.UtcNow.ToString("O")
-        };
+            ["Type"] = "CastVote",
+            ["ProposalId"] = args.ProposalId,
+            ["Vote"] = args.VoteYes,
+            ["User"] = MyKeyService.UserName,
+            ["ProjectId"] = CurrentProjectId,
+            ["Timestamp"] = DateTime.UtcNow.ToString("O")
+        }.ToJsonString();
 
-        bool ok = await SendJsonBlock(payload);
+        bool ok = await SendJsonBlockJson(payloadJson, CurrentProjectId);
         if (ok)
         {
             await RefreshGovernance();
@@ -953,6 +830,11 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task RefreshDocuments()
     {
+        await RefreshDocuments(preserveEditorDraft: false);
+    }
+
+    private async Task RefreshDocuments(bool preserveEditorDraft)
+    {
         if (!CanCreateTask)
         {
             documents = new List<DocumentSummary>();
@@ -960,36 +842,32 @@ public partial class BlockchainDashboard : ComponentBase
             selectedDocumentId = "";
             documentTitle = "";
             documentContent = "";
+            isDocumentDraftDirty = false;
             return;
         }
 
         try
         {
-            var response = await BlockchainClient.GetProjectDocumentsAsync(new ProjectRequest
-            {
-                ProjectId = CurrentProjectId,
-                UserName = MyKeyService.UserName ?? "Guest",
-                UserPublicKey = MyKeyService.PublicKey ?? "",
-                AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:DOCUMENTS")
-            });
+            string previousSelectedDocumentId = selectedDocumentId;
+            string previousDocumentTitle = documentTitle;
+            string previousDocumentContent = documentContent;
 
-            documents = response.Documents.ToList();
+            var result = await WorkspaceDataService.LoadDocumentsAsync(CurrentProjectId, selectedDocumentId);
+            documents = result.Documents.ToList();
+            documentVersions = result.Versions.ToList();
 
-            if (!string.IsNullOrWhiteSpace(selectedDocumentId))
+            if (preserveEditorDraft)
             {
-                var selected = documents.FirstOrDefault(d => d.DocumentId == selectedDocumentId);
-                if (selected == null)
-                {
-                    selectedDocumentId = "";
-                    documentVersions = new List<DocumentVersionItem>();
-                }
-                else
-                {
-                    documentTitle = selected.Title;
-                    documentContent = selected.Content;
-                    await LoadDocumentVersions(selectedDocumentId);
-                }
+                selectedDocumentId = previousSelectedDocumentId;
+                documentTitle = previousDocumentTitle;
+                documentContent = previousDocumentContent;
+                return;
             }
+
+            selectedDocumentId = result.SelectedDocumentId;
+            documentTitle = result.DocumentTitle;
+            documentContent = result.DocumentContent;
+            isDocumentDraftDirty = false;
         }
         catch (Exception ex)
         {
@@ -999,6 +877,7 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task SelectDocument(string documentId)
     {
+        isDocumentDraftDirty = false;
         selectedDocumentId = documentId;
         var selected = documents.FirstOrDefault(d => d.DocumentId == documentId);
         if (selected != null)
@@ -1007,23 +886,14 @@ public partial class BlockchainDashboard : ComponentBase
             documentContent = selected.Content;
         }
 
-        await LoadDocumentVersions(documentId);
+        documentVersions = (await WorkspaceDataService.LoadDocumentVersionsAsync(CurrentProjectId, documentId)).ToList();
     }
 
     private async Task LoadDocumentVersions(string documentId)
     {
         if (string.IsNullOrWhiteSpace(documentId)) return;
 
-        var response = await BlockchainClient.GetDocumentVersionsAsync(new DocumentHistoryRequest
-        {
-            ProjectId = CurrentProjectId,
-            DocumentId = documentId,
-            UserName = MyKeyService.UserName ?? "Guest",
-            UserPublicKey = MyKeyService.PublicKey ?? "",
-            AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:DOCUMENT:{documentId}")
-        });
-
-        documentVersions = response.Versions.ToList();
+        documentVersions = (await WorkspaceDataService.LoadDocumentVersionsAsync(CurrentProjectId, documentId)).ToList();
     }
 
     private async Task SaveDocument()
@@ -1035,21 +905,22 @@ public partial class BlockchainDashboard : ComponentBase
             ? "DOC-" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpperInvariant()
             : selectedDocumentId;
 
-        var payload = new
+        string payloadJson = new JsonObject
         {
-            Type = isNewDocument ? "CreateDocument" : "UpdateDocument",
-            DocumentId = documentId,
-            Title = documentTitle.Trim(),
-            Content = documentContent ?? "",
-            User = MyKeyService.UserName,
-            ProjectId = CurrentProjectId,
-            Timestamp = DateTime.UtcNow.ToString("O")
-        };
+            ["Type"] = isNewDocument ? "CreateDocument" : "UpdateDocument",
+            ["DocumentId"] = documentId,
+            ["Title"] = documentTitle.Trim(),
+            ["Content"] = documentContent ?? "",
+            ["User"] = MyKeyService.UserName,
+            ["ProjectId"] = CurrentProjectId,
+            ["Timestamp"] = DateTime.UtcNow.ToString("O")
+        }.ToJsonString();
 
-        bool ok = await SendJsonBlock(payload);
+        bool ok = await SendJsonBlockJson(payloadJson, CurrentProjectId);
         if (ok)
         {
             selectedDocumentId = documentId;
+            isDocumentDraftDirty = false;
             await RefreshDocuments();
             statusMessage = isNewDocument ? "Document created and anchored." : "New document version anchored.";
         }
@@ -1060,21 +931,9 @@ public partial class BlockchainDashboard : ComponentBase
         activeTab = ActiveTab.Analytics;
         try
         {
-            analyticsData = await BlockchainClient.GetAnalyticsAsync(new ProjectRequest
-            {
-                ProjectId = CurrentProjectId,
-                UserName = MyKeyService.UserName ?? "Guest",
-                UserPublicKey = MyKeyService.PublicKey ?? "",
-                AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:ANALYTICS")
-            });
-
-            securityAudit = await BlockchainClient.GetSecurityAuditAsync(new ProjectRequest
-            {
-                ProjectId = CurrentProjectId,
-                UserName = MyKeyService.UserName ?? "Guest",
-                UserPublicKey = MyKeyService.PublicKey ?? "",
-                AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:SECURITY_AUDIT")
-            });
+            var result = await WorkspaceDataService.LoadAnalyticsAsync(CurrentProjectId);
+            analyticsData = result.Analytics;
+            securityAudit = result.SecurityAudit;
         }
         catch (Exception ex)
         {
@@ -1082,55 +941,19 @@ public partial class BlockchainDashboard : ComponentBase
         }
     }
 
-    private async Task<bool> SendJsonBlock<T>(T payload)
+    private async Task<bool> SendJsonBlockJson(string payloadJson, string targetChannel)
     {
         try
         {
             isMining = true;
             StateHasChanged();
 
-            string json = JsonSerializer.Serialize(payload);
-            string targetChannel = (json.Contains("\"Type\":\"CreateProject\"") || json.Contains("\"Type\":\"AssignRole\""))
-                                    ? "System"
-                                    : CurrentProjectId;
+            var result = await BlockAnchoringService.AnchorJsonStringAsync(payloadJson, targetChannel);
+            statusMessage = result.Message;
 
-            var cR = await BlockchainClient.GetChainAsync(new ChainRequest
-                {
-                    Count = 1,
-                    ChannelId = targetChannel,
-                    UserName = MyKeyService.UserName ?? "Guest",
-                    UserPublicKey = MyKeyService.PublicKey ?? "",
-                    AuthSignature = BuildReadAuthSignature($"CHAIN:{targetChannel}")
-                });
+            if (result.Success) await SyncChain();
 
-            string prevHash = cR.Blocks.Count > 0 ? cR.Blocks.Last().Hash : "0";
-            int expectedIndex = cR.Blocks.Count > 0 ? cR.Blocks.Last().Index + 1 : 0;
-            string timestamp = DateTime.UtcNow.ToString("O");
-            string pubKey = MyKeyService.PublicKey ?? "";
-
-            string signableData = $"{expectedIndex}{timestamp}{json}{prevHash}";
-            string sig = MyKeyService.SignData(signableData);
-
-            var blk = new BlockModel
-                {
-                    Index = expectedIndex,
-                    Data = json,
-                    Timestamp = timestamp,
-                    PreviousHash = prevHash,
-                    Hash = ComputeSimpleHash(signableData),
-                    ValidatorPublicKey = pubKey,
-                    Signature = sig,
-                    ChannelId = targetChannel
-                };
-
-            await MineBlockLocal(blk);
-
-            var r = await BlockchainClient.ReceiveBlockAsync(blk);
-            statusMessage = r.Success ? "Success. Block anchored via PoC." : $"Rejected: {r.Message}";
-
-            if (r.Success) await SyncChain();
-
-            return r.Success;
+            return result.Success;
         }
         catch (Exception ex)
         {
@@ -1142,60 +965,32 @@ public partial class BlockchainDashboard : ComponentBase
 
     private async Task SyncChain()
     {
+        if (isSyncing)
+        {
+            return;
+        }
+
         try
         {
-            if (MyKeyService.IsLoggedIn)
-            {
-                var projRes = await BlockchainClient.GetMyProjectsAsync(new UserRequest
-                {
-                    UserName = MyKeyService.UserName,
-                    UserPublicKey = MyKeyService.PublicKey ?? "",
-                    AuthSignature = BuildReadAuthSignature($"USER:{MyKeyService.UserName}:PROJECTS")
-                });
-                myProjects = projRes.ProjectIds.ToList();
-                await RefreshProjectRoleBucketsAsync();
-
-                if ((!myProjects.Contains(CurrentProjectId) || CurrentProjectId == "System") && myProjects.Count > 0)
-                {
-                    CurrentProjectId = myProjects.First();
-                    await JoinSignalRGroups();
-                }
-            }
-
-            var tR = await BlockchainClient.GetProjectTasksAsync(new ProjectRequest
-                {
-                    ProjectId = CurrentProjectId,
-                    UserName = MyKeyService.UserName ?? "Guest",
-                    UserPublicKey = MyKeyService.PublicKey ?? "",
-                    AuthSignature = BuildReadAuthSignature($"PROJECT:{CurrentProjectId}:TASKS")
-                });
-
-            currentUserRole = string.IsNullOrWhiteSpace(tR.UserRole) ? "None" : tR.UserRole;
-            Tasks = tR.Tasks.Select(t => new ProjectTask { Id = t.Id, Title = t.Title, Creator = t.Creator, Assignee = t.Assignee, Status = (ProjectTaskStatus)t.Status, ProjectId = t.ProjectId, Description = t.Description, ParentTaskId = t.ParentTaskId, BranchInfo = t.BranchInfo }).ToList();
+            isSyncing = true;
+            var workspace = await WorkspaceDataService.LoadAsync(CurrentProjectId);
+            CurrentProjectId = workspace.CurrentProjectId;
+            myProjects = workspace.MyProjects.ToList();
+            ownedProjects = workspace.OwnedProjects.ToList();
+            sharedProjects = workspace.SharedProjects.ToList();
+            projectRoles = new Dictionary<string, string>(workspace.ProjectRoles, StringComparer.OrdinalIgnoreCase);
+            currentUserRole = workspace.CurrentUserRole;
+            Tasks = workspace.Tasks.ToList();
+            chain = workspace.Chain.ToList();
+            Commits = workspace.Commits.ToList();
+            Artifacts = workspace.Artifacts.ToList();
+            auditTrail = workspace.AuditTrail.ToList();
+            projectMembers = workspace.ProjectMembers.ToList();
             UpdateImplementedProposalIds();
-            await RefreshProjectMembersAsync();
 
-            if (Tasks.Count > 0 || MyKeyService.IsLoggedIn)
+            if (workspace.CurrentProjectChanged)
             {
-                var cR = await BlockchainClient.GetChainAsync(new ChainRequest
-                    {
-                        Count = 50,
-                        ChannelId = CurrentProjectId,
-                        UserName = MyKeyService.UserName ?? "Guest",
-                        UserPublicKey = MyKeyService.PublicKey ?? "",
-                        AuthSignature = BuildReadAuthSignature($"CHAIN:{CurrentProjectId}")
-                    });
-                chain = cR.Blocks.ToList();
-                RebuildLocalArtifactsAndCommits(chain);
-                RebuildAuditTrail(chain);
-            }
-            else
-            {
-                chain = new List<BlockModel>();
-                Commits.Clear();
-                Artifacts.Clear();
-                auditTrail.Clear();
-                projectMembers.Clear();
+                await JoinSignalRGroups();
             }
 
             if (activeTab == ActiveTab.Governance)
@@ -1205,7 +1000,7 @@ public partial class BlockchainDashboard : ComponentBase
 
             if (activeTab == ActiveTab.Documents)
             {
-                await RefreshDocuments();
+                await RefreshDocuments(preserveEditorDraft: isDocumentDraftDirty);
             }
 
             await InvokeAsync(StateHasChanged);
@@ -1214,138 +1009,130 @@ public partial class BlockchainDashboard : ComponentBase
         {
             Console.WriteLine($"Sync Error: {ex.Message}");
         }
-    }
-
-    private async Task RefreshProjectRoleBucketsAsync()
-    {
-        var nextRoles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var projectId in myProjects.Distinct(StringComparer.OrdinalIgnoreCase))
+        finally
         {
-            string role = "None";
-            try
-            {
-                var response = await BlockchainClient.GetProjectTasksAsync(new ProjectRequest
-                {
-                    ProjectId = projectId,
-                    UserName = MyKeyService.UserName ?? "Guest",
-                    UserPublicKey = MyKeyService.PublicKey ?? "",
-                    AuthSignature = BuildReadAuthSignature($"PROJECT:{projectId}:TASKS")
-                });
-
-                role = string.IsNullOrWhiteSpace(response.UserRole) ? "None" : response.UserRole;
-            }
-            catch
-            {
-                role = "None";
-            }
-
-            nextRoles[projectId] = role;
-        }
-
-        projectRoles = nextRoles;
-        ownedProjects = myProjects
-            .Where(projectId => projectRoles.TryGetValue(projectId, out var role) &&
-                                string.Equals(role, "Owner", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(projectId => projectId, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        sharedProjects = myProjects
-            .Where(projectId => !projectRoles.TryGetValue(projectId, out var role) ||
-                                !string.Equals(role, "Owner", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(projectId => projectId, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (projectRoles.TryGetValue(CurrentProjectId, out var currentRole))
-        {
-            currentUserRole = currentRole;
-        }
-        else if (!myProjects.Contains(CurrentProjectId, StringComparer.OrdinalIgnoreCase))
-        {
-            currentUserRole = "None";
+            isSyncing = false;
         }
     }
 
-    private async Task RefreshProjectMembersAsync()
+    private void StartWorkspaceRefreshLoop()
     {
-        var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!string.IsNullOrWhiteSpace(MyKeyService.UserName) && currentUserRole != "None")
-        {
-            members.Add(MyKeyService.UserName);
-        }
-
-        try
-        {
-            var systemChain = await BlockchainClient.GetChainAsync(new ChainRequest
-            {
-                Count = 500,
-                ChannelId = "System",
-                UserName = MyKeyService.UserName ?? "Guest",
-                UserPublicKey = MyKeyService.PublicKey ?? "",
-                AuthSignature = BuildReadAuthSignature("CHAIN:System")
-            });
-
-            foreach (var block in systemChain.Blocks)
-            {
-                AddProjectMemberFromBlock(block, members);
-            }
-        }
-        catch
-        {
-            // Fallback below still preserves current user and known task participants.
-        }
-
-        foreach (var task in Tasks)
-        {
-            AddKnownMember(task.Creator, members);
-            AddKnownMember(task.Assignee, members);
-        }
-
-        projectMembers = members
-            .Where(member => !string.Equals(member, "None", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(member => member, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-
-    private void AddProjectMemberFromBlock(BlockModel block, HashSet<string> members)
-    {
-        if (string.IsNullOrWhiteSpace(block.Data))
+        if (workspaceRefreshCts != null || !MyKeyService.IsLoggedIn)
         {
             return;
         }
 
+        workspaceRefreshCts = new CancellationTokenSource();
+        _ = RefreshWorkspacePeriodically(workspaceRefreshCts.Token);
+    }
+
+    private void StopWorkspaceRefreshLoop()
+    {
+        workspaceRefreshCts?.Cancel();
+        workspaceRefreshCts?.Dispose();
+        workspaceRefreshCts = null;
+    }
+
+    private async Task RefreshWorkspacePeriodically(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         try
         {
-            using var doc = JsonDocument.Parse(block.Data);
-            var root = doc.RootElement;
-            string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
-            string projectId = root.TryGetProperty("ProjectId", out var projectProp) ? projectProp.GetString() ?? "" : "";
-            if (!string.Equals(projectId, CurrentProjectId, StringComparison.OrdinalIgnoreCase))
+            while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                return;
-            }
-
-            if (type == "CreateProject")
-            {
-                AddKnownMember(root.TryGetProperty("User", out var userProp) ? userProp.GetString() ?? "" : "", members);
-            }
-            else if (type == "AssignRole")
-            {
-                AddKnownMember(root.TryGetProperty("TargetUser", out var targetProp) ? targetProp.GetString() ?? "" : "", members);
+                if (MyKeyService.IsLoggedIn)
+                {
+                    await InvokeAsync(SyncChain);
+                }
             }
         }
-        catch
+        catch (OperationCanceledException)
         {
-            // Ignore malformed historical blocks.
         }
     }
 
-    private static void AddKnownMember(string? userName, HashSet<string> members)
+    public async ValueTask DisposeAsync()
     {
-        string normalized = NormalizeTaskAssignee(userName);
-        if (!string.IsNullOrWhiteSpace(normalized))
+        StopWorkspaceRefreshLoop();
+        await RealtimeClient.DisposeAsync();
+    }
+
+    private async Task ConnectGitRepository(string repository)
+    {
+        if (string.IsNullOrWhiteSpace(repository))
         {
-            members.Add(normalized);
+            statusMessage = "Enter a repository name or URL.";
+            return;
         }
+
+        if (!MyKeyService.IsLoggedIn || string.IsNullOrWhiteSpace(MyKeyService.PublicKey))
+        {
+            statusMessage = "Sign in before connecting a repository.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(CurrentProjectId) || CurrentProjectId == "System")
+        {
+            statusMessage = "Select a project before connecting a repository.";
+            return;
+        }
+
+        if (!CanManageMembers)
+        {
+            statusMessage = "Only project Owner or Manager can connect a repository.";
+            return;
+        }
+
+        string normalizedRepository = NormalizeRepositoryInput(repository);
+        string actor = MyKeyService.UserName ?? "";
+        string timestamp = DateTime.UtcNow.ToString("O");
+        string signable = $"GIT_CONNECT:{CurrentProjectId}:{normalizedRepository}:{actor}:{timestamp}";
+
+        try
+        {
+            isGitRepositoryConnecting = true;
+            var result = await GitIntegrationClient.ConnectRepositoryAsync(new GitRepositoryConnectCommand(
+                currentNodeUrl,
+                CurrentProjectId,
+                normalizedRepository,
+                actor,
+                MyKeyService.PublicKey ?? "",
+                MyKeyService.SignData(signable),
+                timestamp));
+
+            statusMessage = result.Message;
+            if (result.Success)
+            {
+                await LoadGitIntegrationStatus();
+            }
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Repository connect failed: {ex.Message}";
+        }
+        finally
+        {
+            isGitRepositoryConnecting = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string NormalizeRepositoryInput(string repository)
+    {
+        string value = repository.Trim();
+        if (value.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            value = value[..^4];
+        }
+
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            string host = uri.Host.Trim().ToLowerInvariant();
+            string path = uri.AbsolutePath.Trim('/');
+            return string.IsNullOrWhiteSpace(path) ? host : $"{host}/{path}";
+        }
+
+        return value;
     }
 
     private static string NormalizeTaskAssignee(string? assignee) =>
@@ -1353,66 +1140,6 @@ public partial class BlockchainDashboard : ComponentBase
         string.Equals(assignee.Trim(), "None", StringComparison.OrdinalIgnoreCase)
             ? ""
             : assignee.Trim();
-
-    private void RebuildLocalArtifactsAndCommits(List<BlockModel> blocks)
-    {
-        var cL = new List<CommitPayloadUI>();
-        var aL = new List<ArtifactPayloadUI>();
-
-        foreach (var b in blocks)
-        {
-            if (string.IsNullOrWhiteSpace(b.Data)) continue;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(b.Data);
-                var root = doc.RootElement;
-
-                string eventType = "";
-                if (root.TryGetProperty("Type", out var t1)) eventType = t1.GetString() ?? "";
-                else if (root.TryGetProperty("type", out var t2)) eventType = t2.GetString() ?? "";
-
-                if (eventType == "CodeCommit")
-                {
-                    cL.Add(new CommitPayloadUI
-                        {
-                            Repository = root.TryGetProperty("Repository", out var r) || root.TryGetProperty("repository", out r) ? r.GetString() ?? "Unknown" : "Unknown",
-                            CommitHash = root.TryGetProperty("CommitHash", out var h) || root.TryGetProperty("commitHash", out h) ? h.GetString() ?? "" : "",
-                            Message = root.TryGetProperty("Message", out var m) || root.TryGetProperty("message", out m) ? m.GetString() ?? "" : "",
-                            Author = root.TryGetProperty("User", out var u) || root.TryGetProperty("user", out u) ? u.GetString() ?? "Anon" : "Anon",
-                            Provider = root.TryGetProperty("Provider", out var provider) ? provider.GetString() ?? "" : "",
-                            Branch = root.TryGetProperty("Branch", out var branch) ? branch.GetString() ?? "" : ""
-                        });
-                }
-                else if (TryParseArtifactFromJson(root, out var artifact))
-                {
-                    aL.Add(artifact);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DEBUG] Failed to parse JSON in block {b.Hash}: {ex.Message}");
-            }
-        }
-
-        Commits = cL.AsEnumerable().Reverse().ToList();
-        Artifacts = aL;
-    }
-
-    private void RebuildAuditTrail(List<BlockModel> blocks)
-    {
-        var result = new List<AuditTrailEntry>();
-
-        foreach (var block in blocks.OrderByDescending(x => x.Index))
-        {
-            if (TryBuildAuditTrailEntry(block, out var entry))
-            {
-                result.Add(entry);
-            }
-        }
-
-        auditTrail = result;
-    }
 
     private static bool TryBuildAuditTrailEntry(BlockModel block, out AuditTrailEntry entry)
     {
@@ -1508,6 +1235,24 @@ public partial class BlockchainDashboard : ComponentBase
     private async Task CreateNewProject()
     {
         if (string.IsNullOrWhiteSpace(newProjectName)) return;
+        if (!MyKeyService.IsLoggedIn)
+        {
+            statusMessage = "Sign in before creating a project.";
+            return;
+        }
+
+        var identity = await BlockAnchoringService.CheckCurrentUserIdentityAsync();
+        if (!identity.Success)
+        {
+            statusMessage = $"Identity check failed: {identity.Message}";
+            return;
+        }
+
+        if (identity.Exists && !identity.PublicKeyMatches)
+        {
+            statusMessage = $"User name '{MyKeyService.UserName}' is already bound to another wallet. Restore the original wallet or choose a different user name.";
+            return;
+        }
 
         string cleanName = new string(newProjectName.Where(char.IsLetterOrDigit).ToArray());
         if (string.IsNullOrEmpty(cleanName)) return;
@@ -1518,15 +1263,15 @@ public partial class BlockchainDashboard : ComponentBase
 
         string channelId = $"{cleanName}_{channelHash}";
 
-        var payload = new
+        string payloadJson = new JsonObject
         {
-            Type = "CreateProject",
-            User = MyKeyService.UserName,
-            ProjectId = channelId,
-            Timestamp = DateTime.UtcNow.ToString("O")
-        };
+            ["Type"] = "CreateProject",
+            ["User"] = MyKeyService.UserName,
+            ["ProjectId"] = channelId,
+            ["Timestamp"] = DateTime.UtcNow.ToString("O")
+        }.ToJsonString();
 
-        bool isSuccess = await SendJsonBlock(payload);
+        bool isSuccess = await SendJsonBlockJson(payloadJson, "System");
 
         if (isSuccess)
         {
@@ -1557,11 +1302,9 @@ public partial class BlockchainDashboard : ComponentBase
 
             // CHANGED: password-based wallet export path retained for compatibility.
             string keystoreJson = MyKeyService.ExportKeystore(newUserPassword);
+            await MyKeyService.StoreSessionKeystoreAsync(keystoreJson);
 
-            var fileStream = new MemoryStream(Encoding.UTF8.GetBytes(keystoreJson));
-            using var streamRef = new DotNetStreamReference(stream: fileStream);
-
-            await JS.InvokeVoidAsync("downloadFileFromStream", "nexus_wallet.json", streamRef);
+            await JS.InvokeVoidAsync("downloadTextFile", "nexus_wallet.json", keystoreJson);
 
             showPasswordEntry = false;
             statusMessage = "wallet.json successfully downloaded.";
@@ -1584,11 +1327,9 @@ public partial class BlockchainDashboard : ComponentBase
             StateHasChanged();
 
             string keystoreJson = await MyKeyService.ExportKeystoreWithPasskeyAsync();
+            await MyKeyService.StoreSessionKeystoreAsync(keystoreJson);
 
-            var fileStream = new MemoryStream(Encoding.UTF8.GetBytes(keystoreJson));
-            using var streamRef = new DotNetStreamReference(stream: fileStream);
-
-            await JS.InvokeVoidAsync("downloadFileFromStream", "nexus_wallet.json", streamRef);
+            await JS.InvokeVoidAsync("downloadTextFile", "nexus_wallet.json", keystoreJson);
 
             showPasswordEntry = false;
             statusMessage = "Passkey-protected wallet.json downloaded.";
@@ -1601,7 +1342,7 @@ public partial class BlockchainDashboard : ComponentBase
         }
     }
 
-    private async Task HandleTaskSigningAndMining((TaskEvent Event, string Keystore, string Password) args)
+    private async Task HandleTaskSigningAndMining(TaskSigningRequest args)
     {
         try
         {
@@ -1634,54 +1375,26 @@ public partial class BlockchainDashboard : ComponentBase
             statusMessage = "Finalizing block (PoC)...";
             StateHasChanged();
 
-            string json = JsonSerializer.Serialize(args.Event);
-            string targetChannel = args.Event.ProjectId;
+            string payloadJson = BuildTaskEventJson(args.Event);
+            var result = await BlockAnchoringService.AnchorJsonStringWithKeystoreAsync(
+                payloadJson,
+                args.Event.ProjectId,
+                args.Keystore,
+                args.Password);
+            statusMessage = result.Message;
 
-            var chainResp = await BlockchainClient.GetChainAsync(new ChainRequest
-                {
-                    Count = 1,
-                    ChannelId = targetChannel,
-                    UserName = MyKeyService.UserName,
-                    UserPublicKey = MyKeyService.PublicKey ?? "",
-                    AuthSignature = BuildReadAuthSignature($"CHAIN:{targetChannel}")
-                });
-
-            string prevHash = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Hash : "0";
-            int expectedIndex = chainResp.Blocks.Count > 0 ? chainResp.Blocks.Last().Index + 1 : 0;
-            string timestamp = DateTime.UtcNow.ToString("O");
-            string pubKey = MyKeyService.PublicKey ?? "";
-
-            string signableData = $"{expectedIndex}{timestamp}{json}{prevHash}";
-
-            // CHANGED: supports both legacy password keystore and passkey-protected keystore.
-            string correctSignature;
-            if (args.Keystore.Contains("\"ProtectionMode\":\"passkey\"", StringComparison.OrdinalIgnoreCase))
+            if (result.Success)
             {
-                correctSignature = await MyKeyService.SignDataWithPasskeyKeystoreAsync(args.Keystore, signableData);
-            }
-            else
-            {
-                correctSignature = MyKeyService.SignDataWithKeystore(args.Keystore, args.Password, signableData);
-            }
-
-            var blk = new BlockModel
+                if (string.Equals(args.Event.Type, "Create", StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(args.Event.ParentTaskId) &&
+                    args.Event.ParentTaskId.StartsWith("GOV-", StringComparison.OrdinalIgnoreCase))
                 {
-                    Index = expectedIndex,
-                    Data = json,
-                    Timestamp = timestamp,
-                    PreviousHash = prevHash,
-                    Hash = ComputeSimpleHash(signableData),
-                    ValidatorPublicKey = pubKey,
-                    Signature = correctSignature,
-                    ChannelId = targetChannel
-                };
+                    locallyImplementedProposalIds.Add(args.Event.ParentTaskId);
+                    implementedProposalIds.Add(args.Event.ParentTaskId);
+                }
 
-            await MineBlockLocal(blk);
-
-            var r = await BlockchainClient.ReceiveBlockAsync(blk);
-            statusMessage = r.Success ? "Work item successfully written to the blockchain." : $"Node error: {r.Message}";
-
-            if (r.Success) await SyncChain();
+                await SyncChain();
+            }
         }
         catch (Exception ex)
         {
@@ -1694,14 +1407,42 @@ public partial class BlockchainDashboard : ComponentBase
         }
     }
 
-    private async Task HandleFileUpload(InputFileChangeEventArgs e)
+    private static string BuildTaskEventJson(TaskEvent evt)
     {
-        var file = e.File;
-        if (file == null || !MyKeyService.IsLoggedIn || !CanCreateTask) return;
+        return new JsonObject
+        {
+            ["Type"] = evt.Type,
+            ["TaskId"] = evt.TaskId,
+            ["Title"] = evt.Title,
+            ["Status"] = evt.Status,
+            ["User"] = evt.User,
+            ["ProjectId"] = evt.ProjectId,
+            ["Assignee"] = evt.Assignee,
+            ["Description"] = evt.Description,
+            ["ParentTaskId"] = evt.ParentTaskId,
+            ["BranchInfo"] = evt.BranchInfo,
+            ["TargetUser"] = evt.TargetUser,
+            ["TargetPublicKey"] = evt.TargetPublicKey,
+            ["Role"] = evt.Role,
+            ["Amount"] = evt.Amount,
+            ["ProposalId"] = evt.ProposalId,
+            ["Vote"] = evt.Vote
+        }.ToJsonString();
+    }
 
-        if (file.Size > 50 * 1024 * 1024)
+    private async Task HandleFileUpload(ArtifactUploadRequest file)
+    {
+        if (!MyKeyService.IsLoggedIn || !CanCreateTask) return;
+
+        if (file.SizeBytes > 50 * 1024 * 1024)
         {
             statusMessage = "Error: File size exceeds the 50MB limit";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(file.Base64Content))
+        {
+            statusMessage = "Error: File content is empty";
             return;
         }
 
@@ -1713,7 +1454,8 @@ public partial class BlockchainDashboard : ComponentBase
             statusMessage = "Uploading file to local IPFS node...";
             StateHasChanged();
 
-            string cid = await Ipfs.UploadFileAsync(file);
+            byte[] fileBytes = Convert.FromBase64String(file.Base64Content);
+            string cid = await Ipfs.UploadFileAsync(fileBytes, file.FileName, file.ContentType);
 
             statusMessage = "Anchoring file CID to blockchain...";
             StateHasChanged();
@@ -1736,74 +1478,26 @@ public partial class BlockchainDashboard : ComponentBase
         }
     }
 
-    private async Task<bool> AnchorArtifactViaNodeAsync(IBrowserFile file, string cid)
+    private async Task<bool> AnchorArtifactViaNodeAsync(ArtifactUploadRequest file, string cid)
     {
-        string actor = MyKeyService.UserName ?? "";
-        string timestamp = DateTime.UtcNow.ToString("O");
-        string signable = $"ARTIFACT_REGISTER:{CurrentProjectId}:{cid}:{actor}:{timestamp}";
-        string signature = MyKeyService.SignData(signable);
+        var result = await ArtifactIntegrationClient.AnchorAsync(new ArtifactAnchorCommand(
+            currentNodeUrl,
+            CurrentProjectId,
+            cid,
+            file.FileName,
+            file.SizeBytes,
+            file.ContentType));
 
-        var request = new ArtifactAnchorRequest
-        {
-            ProjectId = CurrentProjectId,
-            FileHash = cid,
-            FileName = file.Name,
-            SizeBytes = file.Size,
-            ContentType = file.ContentType ?? "application/octet-stream",
-            User = actor,
-            RegisteredBy = actor,
-            VerificationMethod = "IPFS CID",
-            Timestamp = timestamp,
-            UserPublicKey = MyKeyService.PublicKey ?? "",
-            UserSignature = signature
-        };
-
-        using var response = await Http.PostAsJsonAsync($"{currentNodeUrl}/api/integrations/artifacts/register", request);
-        if (response.IsSuccessStatusCode)
+        if (result.Success)
         {
             await SyncChain();
             return true;
         }
 
-        string details = await response.Content.ReadAsStringAsync();
-        statusMessage = $"Artifact anchor failed ({(int)response.StatusCode}): {details}";
+        statusMessage = result.Message;
         return false;
     }
 
-    private async Task<bool> TryCopyTextToClipboardAsync(string text)
-    {
-        try
-        {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
-            return true;
-        }
-        catch
-        {
-            try
-            {
-                return await JS.InvokeAsync<bool>("copyTextFallback", text);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-    }
-
-    private sealed class ArtifactAnchorRequest
-    {
-        public string ProjectId { get; set; } = "";
-        public string FileHash { get; set; } = "";
-        public string FileName { get; set; } = "";
-        public long SizeBytes { get; set; }
-        public string ContentType { get; set; } = "";
-        public string User { get; set; } = "";
-        public string RegisteredBy { get; set; } = "";
-        public string VerificationMethod { get; set; } = "IPFS CID";
-        public string Timestamp { get; set; } = "";
-        public string UserPublicKey { get; set; } = "";
-        public string UserSignature { get; set; } = "";
-    }
 }
 
 

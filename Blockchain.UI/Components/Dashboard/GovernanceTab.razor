@@ -78,18 +78,19 @@
                                 </div>
 
                                 <div class="d-flex gap-2 flex-wrap justify-content-end">
-                                    @if (proposal.Status == "Approved")
+                                    @if (IsApproved(proposal))
                                     {
-                                        if (CanCreateTaskFromAccepted)
+                                        if (isImplemented)
                                         {
-                                            if (isImplemented)
-                                            {
-                                                <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Task already created</span>
-                                            }
-                                            else
-                                            {
-                                                <button class="btn btn-sm btn-primary" @onclick="() => OnCreateTaskFromProposal.InvokeAsync(proposal.ProposalId)">Create Task From Proposal</button>
-                                            }
+                                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Task already created</span>
+                                        }
+                                        else
+                                        {
+                                            <button class="btn btn-sm btn-primary"
+                                                    disabled="@(!CanCreateTaskFromAccepted || IsMining)"
+                                                    @onclick="() => OnCreateTaskFromProposal.InvokeAsync(proposal.ProposalId)">
+                                                Create Task From Proposal
+                                            </button>
                                         }
                                     }
 
@@ -160,9 +161,14 @@
         _ => "bg-secondary"
     };
 
+    private static bool IsApproved(GovernanceProposalItem proposal)
+    {
+        return string.Equals(proposal.Status, "Approved", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string GetStatusLabel(GovernanceProposalItem proposal)
     {
-        if (proposal.Status == "Approved" && proposal.YesVotes == proposal.NoVotes)
+        if (IsApproved(proposal) && proposal.YesVotes == proposal.NoVotes)
         {
             return "Approved (Tie accepted)";
         }

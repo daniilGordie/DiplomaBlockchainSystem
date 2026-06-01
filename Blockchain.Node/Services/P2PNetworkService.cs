@@ -1,6 +1,6 @@
 using Grpc.Net.Client;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -17,13 +17,13 @@ namespace Blockchain.Node.Services
         private readonly ConcurrentDictionary<string, bool> _peers = new();
         private readonly ConcurrentDictionary<string, GrpcChannel> _channels = new();
         private readonly ILogger<P2PNetworkService> _logger;
-        private readonly string _syncToken;
+        private readonly P2POptions _options;
 
-        public P2PNetworkService(ILogger<P2PNetworkService> logger, IConfiguration configuration)
+        public P2PNetworkService(ILogger<P2PNetworkService> logger, IOptions<P2POptions> options)
         {
             _logger = logger;
-            _syncToken = configuration["P2P:SyncToken"] ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(_syncToken))
+            _options = options.Value;
+            if (string.IsNullOrWhiteSpace(_options.SyncToken))
             {
                 _logger.LogWarning("[P2P] Sync token is not configured. Secure chain sync reads from peers will be rejected.");
             }
@@ -31,15 +31,46 @@ namespace Blockchain.Node.Services
 
         public void AddPeer(string url)
         {
-            if (_peers.TryAdd(url, true))
+            string normalizedUrl = P2POptions.NormalizeUrl(url);
+            if (string.IsNullOrWhiteSpace(normalizedUrl) || IsSelf(normalizedUrl))
             {
-                _logger.LogInformation("[P2P] Added peer node: {PeerUrl}", url);
+                return;
+            }
+
+            if (_peers.TryAdd(normalizedUrl, true))
+            {
+                _logger.LogInformation("[P2P] Added peer node: {PeerUrl}", normalizedUrl);
             }
         }
 
         public List<string> GetPeers()
         {
             return new List<string>(_peers.Keys);
+        }
+
+        public async Task<StatusReply> RegisterWithBootstrapAsync(string bootstrapUrl)
+        {
+            var client = CreateClient(bootstrapUrl);
+            return await client.RegisterPeerAsync(new RegisterPeerRequest
+            {
+                NodeId = _options.EffectiveNodeId,
+                PublicUrl = _options.NormalizedPublicUrl,
+                Role = _options.Role.ToString(),
+                RegistrationToken = _options.RegistrationToken
+            });
+        }
+
+        public async Task<List<PeerDirectoryItem>> FetchPeerDirectoryAsync(string peerUrl)
+        {
+            var client = CreateClient(peerUrl);
+            var response = await client.GetPeerDirectoryAsync(new EmptyRequest());
+
+            return response.Peers
+                .Where(peer => !string.IsNullOrWhiteSpace(peer.PublicUrl))
+                .Where(peer => !IsSelf(peer.PublicUrl))
+                .GroupBy(peer => P2POptions.NormalizeUrl(peer.PublicUrl), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
         }
 
         public async Task BroadcastBlockAsync(Core.Block block)
@@ -55,15 +86,36 @@ namespace Blockchain.Node.Services
         public async Task<List<BlockModel>> FetchChainAsync(string peerUrl, string channelId)
         {
             var client = CreateClient(peerUrl);
-            var response = await client.GetChainAsync(new ChainRequest
-            {
-                Count = int.MaxValue,
-                ChannelId = string.IsNullOrWhiteSpace(channelId) ? "System" : channelId,
-                UserName = NodeSyncUser,
-                SyncToken = _syncToken
-            });
+            var blocks = new List<BlockModel>();
+            int afterIndex = -1;
+            const int pageSize = 500;
 
-            return response.Blocks.ToList();
+            while (true)
+            {
+                var response = await client.GetChainAsync(new ChainRequest
+                {
+                    Count = pageSize,
+                    ChannelId = string.IsNullOrWhiteSpace(channelId) ? "System" : channelId,
+                    UserName = NodeSyncUser,
+                    SyncToken = _options.SyncToken,
+                    AfterIndex = afterIndex
+                });
+
+                if (response.Blocks.Count == 0)
+                {
+                    break;
+                }
+
+                blocks.AddRange(response.Blocks);
+                afterIndex = response.Blocks.Max(block => block.Index);
+
+                if (response.Blocks.Count < pageSize)
+                {
+                    break;
+                }
+            }
+
+            return blocks;
         }
 
         public async Task<List<string>> FetchKnownChannelsAsync(string peerUrl)
@@ -102,7 +154,8 @@ namespace Blockchain.Node.Services
 
         private BlockchainService.BlockchainServiceClient CreateClient(string peerUrl)
         {
-            var channel = _channels.GetOrAdd(peerUrl, url =>
+            string normalizedUrl = P2POptions.NormalizeUrl(peerUrl);
+            var channel = _channels.GetOrAdd(normalizedUrl, url =>
             {
                 var handler = new SocketsHttpHandler
                 {
@@ -116,6 +169,13 @@ namespace Blockchain.Node.Services
             });
 
             return new BlockchainService.BlockchainServiceClient(channel);
+        }
+
+        private bool IsSelf(string peerUrl)
+        {
+            string publicUrl = _options.NormalizedPublicUrl;
+            return !string.IsNullOrWhiteSpace(publicUrl)
+                && string.Equals(publicUrl, P2POptions.NormalizeUrl(peerUrl), StringComparison.OrdinalIgnoreCase);
         }
 
         private static BlockModel ToBlockModel(Core.Block block)

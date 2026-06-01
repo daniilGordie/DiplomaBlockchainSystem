@@ -67,13 +67,10 @@ dotnet run --project Blockchain.Node --no-launch-profile --urls http://localhost
 dotnet run --project Blockchain.Node --no-launch-profile --urls http://localhost:5042 --P2P:NodeId node-5042 --P2P:PublicUrl http://localhost:5042 --P2P:BootstrapPeers:0 http://localhost:5041
 ```
 
-For dashboard peer management (`AddPeer`), set the same token in UI config:
-
-```json
-{
-  "NodeAdminToken": "REPLACE_WITH_LONG_RANDOM_ADMIN_TOKEN"
-}
-```
+Do not put `NodeAdminToken` in `Blockchain.UI/wwwroot` configuration. Browser
+configuration is public. Peer registration should be handled through node
+bootstrap configuration, environment-specific server tooling, or another
+server-side admin path that keeps the token off the client.
 
 ## Passkey Wallet Notes
 

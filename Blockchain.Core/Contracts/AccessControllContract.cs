@@ -10,7 +10,7 @@ namespace Blockchain.Core.Contracts
     {
         public string Name => "AccessControl (RBAC)";
 
-        public bool Validate(string data, string senderPublicKey, DatabaseManager db)
+        public bool Validate(string data, string senderPublicKey, ISmartContractStateReader state)
         {
             try
             {
@@ -46,7 +46,7 @@ namespace Blockchain.Core.Contracts
                     return false;
                 }
 
-                string? expectedPublicKey = db.GetUserPublicKey(evt.User);
+                string? expectedPublicKey = state.GetUserPublicKey(evt.User);
                 bool requiresBoundIdentity = requiresActorIdentity && evt.Type != "CreateProject" && !isTrustedOracleFeed;
                 if (requiresBoundIdentity && string.IsNullOrWhiteSpace(expectedPublicKey))
                 {
@@ -61,7 +61,7 @@ namespace Blockchain.Core.Contracts
                 }
 
                 Console.WriteLine($"[SmartContract Debug] Requesting role for user '{evt.User}' in project '{evt.ProjectId}'...");
-                string senderRole = db.GetUserRole(evt.ProjectId, evt.User);
+                string senderRole = state.GetUserRole(evt.ProjectId, evt.User);
                 Console.WriteLine($"[SmartContract Debug] Database returned role: '{senderRole}'");
 
                 if (evt.Type == "AssignRole")
@@ -74,7 +74,7 @@ namespace Blockchain.Core.Contracts
                         return false;
                     }
 
-                    if (!db.IsProjectExists(evt.ProjectId))
+                    if (!state.IsProjectExists(evt.ProjectId))
                     {
                         Console.WriteLine($"[SmartContract] RBAC Denied: cannot assign role in non-existing project '{evt.ProjectId}'.");
                         return false;
@@ -91,7 +91,7 @@ namespace Blockchain.Core.Contracts
                         return false;
                     }
 
-                    string? existingTargetKey = db.GetUserPublicKey(evt.TargetUser);
+                    string? existingTargetKey = state.GetUserPublicKey(evt.TargetUser);
                     if (!string.IsNullOrWhiteSpace(existingTargetKey) && existingTargetKey != evt.TargetPublicKey)
                     {
                         Console.WriteLine($"[SmartContract] RBAC Denied: target user '{evt.TargetUser}' already has another bound key.");
@@ -115,7 +115,7 @@ namespace Blockchain.Core.Contracts
                     evt.Type == "CreateDocument" || evt.Type == "UpdateDocument" ||
                     evt.Type == "CodeCommit" || evt.Type == "Register" || evt.Type == "Transfer")
                 {
-                    if (db.IsProjectExists(evt.ProjectId) && senderRole == "None")
+                    if (state.IsProjectExists(evt.ProjectId) && senderRole == "None")
                     {
                         Console.WriteLine($"[SmartContract] RBAC Denied: {evt.User} has no access to {evt.ProjectId}");
                         return false;
@@ -148,7 +148,7 @@ namespace Blockchain.Core.Contracts
                         return false;
                     }
 
-                    if (evt.Type == "CastVote" && string.IsNullOrWhiteSpace(db.GetProposalCreator(evt.ProposalId)))
+                    if (evt.Type == "CastVote" && string.IsNullOrWhiteSpace(state.GetProposalCreator(evt.ProposalId)))
                     {
                         Console.WriteLine("[SmartContract] Governance denied: proposal not found.");
                         return false;
