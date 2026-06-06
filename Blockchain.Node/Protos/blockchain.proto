@@ -51,6 +51,10 @@ message RegisterPeerRequest {
   string public_url = 2;
   string role = 3;
   string registration_token = 4;
+  string node_public_key = 5;
+  string signature = 6;
+  string signed_at = 7;
+  string nonce = 8;
 }
 
 message PeerDirectoryItem {
@@ -60,6 +64,7 @@ message PeerDirectoryItem {
   string last_seen = 4;
   string last_failure = 5;
   bool is_trusted = 6;
+  string node_public_key = 7;
 }
 
 message PeerDirectoryResponse {
@@ -67,6 +72,13 @@ message PeerDirectoryResponse {
   string current_node_id = 2;
   string current_public_url = 3;
   string current_role = 4;
+  repeated string bootstrap_peers = 5;
+  bool iroh_enabled = 6;
+  string iroh_sidecar_url = 7;
+  bool sync_token_configured = 8;
+  bool node_identity_configured = 9;
+  bool registration_token_fallback_enabled = 10;
+  int32 discovery_interval_seconds = 11;
 }
 message KnownChannelsResponse { repeated string channel_ids = 1; }
 

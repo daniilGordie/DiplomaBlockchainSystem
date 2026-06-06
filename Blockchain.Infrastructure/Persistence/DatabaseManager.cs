@@ -200,7 +200,8 @@ using System.Text.Json;
                         Role TEXT,
                         LastSeen TEXT,
                         LastFailure TEXT,
-                        IsTrusted INTEGER NOT NULL DEFAULT 1
+                        IsTrusted INTEGER NOT NULL DEFAULT 1,
+                        NodePublicKey TEXT
                     );";
                     cmd.ExecuteNonQuery();
                     EnsurePeerColumns(connection);
@@ -803,11 +804,12 @@ using System.Text.Json;
                 EnsurePeerColumns(connection);
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = @"
-                INSERT INTO Peers (Url, NodeId, Role, LastSeen, IsTrusted)
-                VALUES ($url, $nodeId, $role, $seen, $trusted)
+                INSERT INTO Peers (Url, NodeId, Role, LastSeen, IsTrusted, NodePublicKey)
+                VALUES ($url, $nodeId, $role, $seen, $trusted, $nodePublicKey)
                 ON CONFLICT(Url) DO UPDATE SET
                     NodeId = CASE WHEN excluded.NodeId = '' THEN Peers.NodeId ELSE excluded.NodeId END,
                     Role = CASE WHEN excluded.Role = '' THEN Peers.Role ELSE excluded.Role END,
+                    NodePublicKey = CASE WHEN excluded.NodePublicKey = '' THEN Peers.NodePublicKey ELSE excluded.NodePublicKey END,
                     LastSeen = excluded.LastSeen,
                     IsTrusted = excluded.IsTrusted";
                 cmd.Parameters.AddWithValue("$url", peer.Url);
@@ -815,6 +817,7 @@ using System.Text.Json;
                 cmd.Parameters.AddWithValue("$role", string.IsNullOrWhiteSpace(peer.Role) ? "Full" : peer.Role);
                 cmd.Parameters.AddWithValue("$seen", DateTime.UtcNow.ToString("O"));
                 cmd.Parameters.AddWithValue("$trusted", peer.IsTrusted ? 1 : 0);
+                cmd.Parameters.AddWithValue("$nodePublicKey", peer.NodePublicKey ?? string.Empty);
                 cmd.ExecuteNonQuery();
             }
 
@@ -861,7 +864,7 @@ using System.Text.Json;
                 connection.Open();
                 EnsurePeerColumns(connection);
                 using var cmd = connection.CreateCommand();
-                cmd.CommandText = "SELECT Url, COALESCE(NodeId, ''), COALESCE(Role, 'Full'), LastSeen, LastFailure, IsTrusted FROM Peers WHERE IsTrusted = 1 ORDER BY Url";
+                cmd.CommandText = "SELECT Url, COALESCE(NodeId, ''), COALESCE(Role, 'Full'), LastSeen, LastFailure, IsTrusted, COALESCE(NodePublicKey, '') FROM Peers WHERE IsTrusted = 1 ORDER BY Url";
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -871,7 +874,8 @@ using System.Text.Json;
                         reader.GetString(2),
                         reader.IsDBNull(3) ? null : reader.GetString(3),
                         reader.IsDBNull(4) ? null : reader.GetString(4),
-                        !reader.IsDBNull(5) && reader.GetInt32(5) != 0));
+                        !reader.IsDBNull(5) && reader.GetInt32(5) != 0,
+                        reader.GetString(6)));
                 }
 
                 return peers;
@@ -886,6 +890,7 @@ using System.Text.Json;
             {
                 EnsureColumn(connection, "Peers", "NodeId", "TEXT");
                 EnsureColumn(connection, "Peers", "Role", "TEXT");
+                EnsureColumn(connection, "Peers", "NodePublicKey", "TEXT");
             }
 
             private static void EnsureColumn(SqliteConnection connection, string tableName, string columnName, string definition)
@@ -1237,7 +1242,6 @@ using System.Text.Json;
                 var result = new List<string>();
                 using var connection = new SqliteConnection(ConnectionString);
                 connection.Open();
-                // CHANGED: schema self-healing for old "Data" column in mempool table.
                 using (var cmdCheck = connection.CreateCommand())
                 {
                     cmdCheck.CommandText = "PRAGMA table_info(Mempool)";

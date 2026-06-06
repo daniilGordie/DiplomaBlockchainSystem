@@ -233,13 +233,18 @@
             {
                 <PeerNetworkPanel CurrentNodeUrl="@currentNodeUrl"
                                   CurrentNodeRole="@currentNodeRole"
+                                  Snapshot="@peerDirectorySnapshot"
+                                  SetupStatus="@nodeSetupStatus"
+                                  MigrationChecklist="@migrationChecklist"
+                                  UpdateCheck="@updateCheckStatus"
                                   NodeUrlInput="@nodeUrlInput"
                                   Peers="peerUrls"
                                   ConnectionStatus="@nodeConnectionStatus"
                                   IsBusy="isPeerPanelBusy"
                                   NodeUrlInputChanged="OnNodeUrlInputChanged"
                                   OnConnectNode="ConnectToNode"
-                                  OnRefreshPeers="RefreshPeers" />
+                                  OnRefreshPeers="RefreshPeers"
+                                  OnCreateSetupPlan="CreateSetupPlan" />
             }
         </div>
     }

@@ -40,7 +40,6 @@ namespace Blockchain.Node.Hubs
             await Groups.AddToGroupAsync(Context.ConnectionId, channel);
         }
 
-        // CHANGED: cryptographic registration to mitigate nickname impersonation in realtime groups.
         public async Task<bool> RegisterUser(string userName, string publicKeyBase64, string signatureBase64)
         {
             if (string.IsNullOrWhiteSpace(userName) || string.IsNullOrWhiteSpace(publicKeyBase64) || string.IsNullOrWhiteSpace(signatureBase64))

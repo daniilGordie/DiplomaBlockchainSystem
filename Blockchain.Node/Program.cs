@@ -87,7 +87,10 @@ app.MapHub<BlockchainHub>("/blockchainHub").RequireCors("AllowAll");
 app.MapGitIntegrationEndpoints(webhookSecret);
 app.MapArtifactIntegrationEndpoints();
 app.MapIpfsIntegrationEndpoints();
+app.MapIrohP2PEndpoints();
+app.MapSetupStatusEndpoints();
 
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/", () => "Nexus P2P Node is running. Use gRPC-Web to connect.");
 
 app.Run();

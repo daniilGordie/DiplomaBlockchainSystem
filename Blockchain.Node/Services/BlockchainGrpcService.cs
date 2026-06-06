@@ -47,6 +47,7 @@ namespace Blockchain.Node.Services
         private readonly ProjectReadAccessGuard _projectReadAccess;
         private readonly ChainReadAccessGuard _chainReadAccess;
         private readonly UserReadAccessGuard _userReadAccess;
+        private readonly PeerRegistrationSecurity _peerRegistrationSecurity;
 
         private static readonly ConcurrentDictionary<string, byte> _syncedCommits = new();
         private static readonly ConcurrentDictionary<string, byte> _syncedArtifacts = new();
@@ -74,7 +75,8 @@ namespace Blockchain.Node.Services
             ProjectAccessPolicy projectAccessPolicy,
             ProjectReadAccessGuard projectReadAccess,
             ChainReadAccessGuard chainReadAccess,
-            UserReadAccessGuard userReadAccess)
+            UserReadAccessGuard userReadAccess,
+            PeerRegistrationSecurity peerRegistrationSecurity)
         {
             _logger = logger;
             _configuration = configuration;
@@ -100,6 +102,7 @@ namespace Blockchain.Node.Services
             _projectReadAccess = projectReadAccess;
             _chainReadAccess = chainReadAccess;
             _userReadAccess = userReadAccess;
+            _peerRegistrationSecurity = peerRegistrationSecurity;
 
         }
 
@@ -187,8 +190,7 @@ namespace Blockchain.Node.Services
                 return new StatusReply { Success = false, Message = "Cannot add this node as its own peer" };
             }
 
-            if (Uri.TryCreate(request.Url, UriKind.Absolute, out var uriResult) &&
-               (uriResult.Scheme == Uri.UriSchemeHttp || uriResult.Scheme == Uri.UriSchemeHttps))
+            if (IsValidPeerUrl(request.Url, allowLocalhost: IsLocalNetworkMode(), allowIroh: CanAcceptIrohPeerUrls()))
             {
                 _p2pService.AddPeer(request.Url);
                 _peerStore.SavePeer(request.Url);
@@ -211,14 +213,8 @@ namespace Blockchain.Node.Services
 
         public override Task<StatusReply> RegisterPeer(RegisterPeerRequest request, ServerCallContext context)
         {
-            if (!IsValidRegistrationToken(request.RegistrationToken))
-            {
-                _logger.LogWarning("[Security] Rejected RegisterPeer request: invalid registration token.");
-                return Task.FromResult(new StatusReply { Success = false, Message = "Invalid registration token" });
-            }
-
             string publicUrl = P2POptions.NormalizeUrl(request.PublicUrl);
-            if (!IsValidPeerUrl(publicUrl, allowLocalhost: IsLocalNetworkMode()))
+            if (!IsValidPeerUrl(publicUrl, allowLocalhost: IsLocalNetworkMode(), allowIroh: CanAcceptIrohPeerUrls()))
             {
                 return Task.FromResult(new StatusReply { Success = false, Message = "Invalid public URL" });
             }
@@ -229,7 +225,36 @@ namespace Blockchain.Node.Services
             }
 
             string role = string.IsNullOrWhiteSpace(request.Role) ? P2PNodeRole.Full.ToString() : request.Role.Trim();
-            var peer = new PeerInfo(publicUrl, request.NodeId?.Trim() ?? string.Empty, role);
+            string remoteAddress = context?.Peer ?? "unknown";
+            if (!_peerRegistrationSecurity.AllowRegistrationAttempt(remoteAddress))
+            {
+                _logger.LogWarning("[Security] Rejected RegisterPeer request from {RemoteAddress}: rate limit exceeded.", remoteAddress);
+                return Task.FromResult(new StatusReply { Success = false, Message = "Registration rate limit exceeded" });
+            }
+
+            var validation = _peerRegistrationSecurity.ValidateSignedRegistration(request, publicUrl, role);
+            if (!validation.Accepted)
+            {
+                if (!_p2pOptions.AllowRegistrationTokenFallback || !IsValidRegistrationToken(request.RegistrationToken))
+                {
+                    _logger.LogWarning("[Security] Rejected RegisterPeer request for {PublicUrl}: {Reason}.", publicUrl, validation.Message);
+                    return Task.FromResult(new StatusReply { Success = false, Message = validation.Message });
+                }
+
+                _logger.LogWarning("[Security] Accepted legacy token-based peer registration for {PublicUrl}. Configure signed node identity before production.", publicUrl);
+            }
+
+            if (_peerStore.LoadPeerInfos().Count >= Math.Clamp(_p2pOptions.MaxRegisteredPeers, 1, 100000)
+                && !_peerStore.LoadPeerInfos().Any(peerInfo => string.Equals(peerInfo.Url, publicUrl, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Task.FromResult(new StatusReply { Success = false, Message = "Peer directory is full" });
+            }
+
+            var peer = new PeerInfo(
+                publicUrl,
+                request.NodeId?.Trim() ?? string.Empty,
+                role,
+                NodePublicKey: request.NodePublicKey?.Trim() ?? string.Empty);
             _peerStore.SavePeer(peer);
             _p2pService.AddPeer(publicUrl);
 
@@ -243,8 +268,15 @@ namespace Blockchain.Node.Services
             {
                 CurrentNodeId = _p2pOptions.EffectiveNodeId,
                 CurrentPublicUrl = _p2pOptions.NormalizedPublicUrl,
-                CurrentRole = _p2pOptions.Role.ToString()
+                CurrentRole = _p2pOptions.Role.ToString(),
+                IrohEnabled = _p2pOptions.Iroh.Enabled,
+                IrohSidecarUrl = _p2pOptions.Iroh.NormalizedSidecarUrl,
+                SyncTokenConfigured = !string.IsNullOrWhiteSpace(_p2pOptions.SyncToken),
+                NodeIdentityConfigured = !string.IsNullOrWhiteSpace(_p2pOptions.EffectiveIdentityKeyPath),
+                RegistrationTokenFallbackEnabled = _p2pOptions.AllowRegistrationTokenFallback,
+                DiscoveryIntervalSeconds = Math.Clamp(_p2pOptions.DiscoveryIntervalSeconds, 10, 3600)
             };
+            response.BootstrapPeers.AddRange(_p2pOptions.NormalizedBootstrapPeers);
             foreach (var peer in _peerStore.LoadPeerInfos())
             {
                 response.Peers.Add(new PeerDirectoryItem
@@ -254,7 +286,8 @@ namespace Blockchain.Node.Services
                     Role = string.IsNullOrWhiteSpace(peer.Role) ? P2PNodeRole.Full.ToString() : peer.Role,
                     LastSeen = peer.LastSeen ?? string.Empty,
                     LastFailure = peer.LastFailure ?? string.Empty,
-                    IsTrusted = peer.IsTrusted
+                    IsTrusted = peer.IsTrusted,
+                    NodePublicKey = peer.NodePublicKey ?? string.Empty
                 });
             }
 
@@ -673,8 +706,13 @@ namespace Blockchain.Node.Services
                 && string.Equals(publicUrl, P2POptions.NormalizeUrl(peerUrl), StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool IsValidPeerUrl(string peerUrl, bool allowLocalhost)
+        private static bool IsValidPeerUrl(string peerUrl, bool allowLocalhost, bool allowIroh)
         {
+            if (allowIroh && IrohSidecarClient.IsIrohPeerUrl(peerUrl))
+            {
+                return !string.IsNullOrWhiteSpace(IrohSidecarClient.ParseIrohPeerId(peerUrl));
+            }
+
             if (!Uri.TryCreate(peerUrl, UriKind.Absolute, out var uri)
                 || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             {
@@ -692,6 +730,9 @@ namespace Blockchain.Node.Services
             return _p2pOptions.NormalizedBootstrapPeers.Any(IsLoopbackUrl)
                 || IsLoopbackUrl(_p2pOptions.NormalizedPublicUrl);
         }
+
+        private bool CanAcceptIrohPeerUrls() =>
+            _p2pOptions.Iroh.Enabled || _p2pOptions.Role == P2PNodeRole.Bootstrap;
 
         private static bool IsLoopbackUrl(string url)
         {

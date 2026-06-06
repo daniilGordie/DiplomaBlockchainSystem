@@ -145,7 +145,6 @@
                 return;
             }
 
-            // CHANGED: detect passkey wallet mode from keystore metadata.
             isPasskeyWallet = keystoreContent.Contains("\"ProtectionMode\":\"passkey\"", StringComparison.OrdinalIgnoreCase);
             if (isPasskeyWallet)
             {
@@ -197,7 +196,6 @@
                     ParentTaskId = TaskModel.ParentTaskId
                 };
 
-            // CHANGED: signing is performed in parent flow with mode-aware logic (password/passkey).
             await OnSaveWithCredentials.InvokeAsync(new TaskSigningRequest(taskEvent, keystoreContent, walletPassword ?? string.Empty));
 
             walletPassword = null;

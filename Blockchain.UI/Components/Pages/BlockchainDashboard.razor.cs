@@ -38,6 +38,10 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     private bool isPeerPanelBusy = false;
     private List<PeerNodeInfo> peerUrls = new();
     private string currentNodeRole = "Unknown";
+    private PeerDirectorySnapshot? peerDirectorySnapshot;
+    private NodeSetupStatus? nodeSetupStatus;
+    private MigrationChecklist? migrationChecklist;
+    private UpdateCheckStatus? updateCheckStatus;
 
     private ActiveTab activeTab = ActiveTab.Board;
     private List<ProjectTask> Tasks = new();
@@ -89,6 +93,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     private bool isUploading = false;
     private bool isMining = false;
     private bool isSyncing = false;
+    private string workspaceSnapshotKey = "";
     private CancellationTokenSource? workspaceRefreshCts;
     private string mnemonicCopyButtonText = "Copy to Clipboard";
 
@@ -257,17 +262,29 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             if (!result.Success || result.Value == null)
             {
                 peerUrls.Clear();
+                peerDirectorySnapshot = null;
+                nodeSetupStatus = null;
+                migrationChecklist = null;
+                updateCheckStatus = null;
                 nodeConnectionStatus = result.Error;
                 return;
             }
 
-            currentNodeRole = result.Value.CurrentRole;
-            peerUrls = result.Value.Peers.ToList();
+            currentNodeRole = result.Value.Directory.CurrentRole;
+            peerDirectorySnapshot = result.Value.Directory;
+            nodeSetupStatus = result.Value.SetupStatus;
+            migrationChecklist = result.Value.MigrationChecklist;
+            updateCheckStatus = result.Value.UpdateCheck;
+            peerUrls = result.Value.Directory.Peers.ToList();
             nodeConnectionStatus = $"Connected to {currentNodeUrl}. {peerUrls.Count} peer(s) registered.";
         }
         catch (Exception ex)
         {
             peerUrls.Clear();
+            peerDirectorySnapshot = null;
+            nodeSetupStatus = null;
+            migrationChecklist = null;
+            updateCheckStatus = null;
             currentNodeRole = "Unknown";
             nodeConnectionStatus = $"Node unavailable: {ex.Message}";
         }
@@ -282,6 +299,43 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     {
         activeTab = ActiveTab.Network;
         await RefreshPeers();
+    }
+
+    private async Task<SetupPlanResponse?> CreateSetupPlan(SetupPlanRequest request)
+    {
+        var validation = DashboardActions.ValidateNodeUrl(currentNodeUrl);
+        if (!validation.Success || string.IsNullOrWhiteSpace(validation.Value))
+        {
+            statusMessage = validation.Error;
+            return null;
+        }
+
+        try
+        {
+            isPeerPanelBusy = true;
+            var response = await DashboardActions.CreateSetupPlanAsync(validation.Value, request);
+            if (response?.Valid == true && !string.IsNullOrWhiteSpace(response.FileName))
+            {
+                await JS.InvokeVoidAsync("downloadTextFile", response.FileName, response.EnvContent);
+                statusMessage = $"Generated {response.FileName}.";
+            }
+            else
+            {
+                statusMessage = response?.Messages.Count > 0 ? string.Join(" ", response.Messages) : "Setup plan failed.";
+            }
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Setup plan failed: {ex.Message}";
+            return null;
+        }
+        finally
+        {
+            isPeerPanelBusy = false;
+            StateHasChanged();
+        }
     }
 
     private async Task LoadArtifacts()
@@ -347,6 +401,11 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     private (bool RefreshMembership, bool RefreshGovernance) ApplyBlockToUI(BlockModel block)
     {
         if (string.IsNullOrWhiteSpace(block.Data)) return (false, false);
+        if (chain.Any(existing => IsSameBlock(existing, block)))
+        {
+            return (false, false);
+        }
+
         bool shouldRefreshMembership = false;
         bool shouldRefreshGovernance = false;
         try
@@ -429,9 +488,15 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             }
 
             chain.Add(block);
+            workspaceSnapshotKey = "";
             if (TryBuildAuditTrailEntry(block, out var entry))
             {
-                auditTrail.Insert(0, entry);
+                if (!auditTrail.Any(existing => existing.BlockIndex == entry.BlockIndex &&
+                                                string.Equals(existing.BlockHash, entry.BlockHash, StringComparison.OrdinalIgnoreCase)))
+                {
+                    auditTrail.Insert(0, entry);
+                }
+
                 if (auditTrail.Count > 200)
                 {
                     auditTrail = auditTrail.Take(200).ToList();
@@ -974,6 +1039,14 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         {
             isSyncing = true;
             var workspace = await WorkspaceDataService.LoadAsync(CurrentProjectId);
+            string nextSnapshotKey = BuildWorkspaceSnapshotKey(workspace);
+            if (!string.IsNullOrEmpty(workspaceSnapshotKey) &&
+                string.Equals(workspaceSnapshotKey, nextSnapshotKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            workspaceSnapshotKey = nextSnapshotKey;
             CurrentProjectId = workspace.CurrentProjectId;
             myProjects = workspace.MyProjects.ToList();
             ownedProjects = workspace.OwnedProjects.ToList();
@@ -1013,6 +1086,44 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         {
             isSyncing = false;
         }
+    }
+
+    private static string BuildWorkspaceSnapshotKey(ProjectWorkspaceData workspace)
+    {
+        var lastBlock = workspace.Chain
+            .OrderByDescending(block => block.Index)
+            .FirstOrDefault();
+
+        string projects = string.Join('|', workspace.MyProjects.OrderBy(project => project, StringComparer.OrdinalIgnoreCase));
+        string ownedProjects = string.Join('|', workspace.OwnedProjects.OrderBy(project => project, StringComparer.OrdinalIgnoreCase));
+        string sharedProjects = string.Join('|', workspace.SharedProjects.OrderBy(project => project, StringComparer.OrdinalIgnoreCase));
+        string roles = string.Join('|', workspace.ProjectRoles
+            .OrderBy(role => role.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(role => $"{role.Key}:{role.Value}"));
+        string members = string.Join('|', workspace.ProjectMembers.OrderBy(member => member, StringComparer.OrdinalIgnoreCase));
+
+        return string.Join("::",
+            workspace.CurrentProjectId,
+            workspace.CurrentUserRole,
+            projects,
+            ownedProjects,
+            sharedProjects,
+            roles,
+            members,
+            workspace.Tasks.Count,
+            workspace.Chain.Count,
+            lastBlock?.Index.ToString() ?? "",
+            lastBlock?.Hash ?? "",
+            workspace.Commits.Count,
+            workspace.Artifacts.Count,
+            workspace.AuditTrail.Count);
+    }
+
+    private static bool IsSameBlock(BlockModel left, BlockModel right)
+    {
+        return left.Index == right.Index &&
+               string.Equals(left.Hash, right.Hash, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(left.ChannelId, right.ChannelId, StringComparison.OrdinalIgnoreCase);
     }
 
     private void StartWorkspaceRefreshLoop()
@@ -1300,7 +1411,6 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             passkeyModalMessage = "";
             StateHasChanged();
 
-            // CHANGED: password-based wallet export path retained for compatibility.
             string keystoreJson = MyKeyService.ExportKeystore(newUserPassword);
             await MyKeyService.StoreSessionKeystoreAsync(keystoreJson);
 
@@ -1317,7 +1427,6 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         }
     }
 
-    // CHANGED: native passkey-based wallet export path (no custom password required).
     private async Task DownloadWithPasskeyAndFinishRegistration()
     {
         try

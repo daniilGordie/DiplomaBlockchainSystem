@@ -16,7 +16,8 @@ public sealed record PeerInfo(
     string Role,
     string? LastSeen = null,
     string? LastFailure = null,
-    bool IsTrusted = true)
+    bool IsTrusted = true,
+    string NodePublicKey = "")
 {
     public static PeerInfo FromUrl(string url, string role = "Full") => new(url, string.Empty, role);
 }

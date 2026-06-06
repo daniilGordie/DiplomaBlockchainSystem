@@ -1,0 +1,44 @@
+services:
+  bootstrap-node:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: ${NODE_DB_PATH:-/data/bootstrap-node.db}
+      NodeDbPassword: ${NODE_DB_PASSWORD}
+      NodeAdminToken: ${NODE_ADMIN_TOKEN}
+      WebhookSecret: ${WEBHOOK_SECRET}
+      OraclePublicKey: ${ORACLE_PUBLIC_KEY}
+      P2P__NodeRole: Bootstrap
+      P2P__NodeId: ${P2P_NODE_ID}
+      P2P__PublicUrl: ${P2P_PUBLIC_URL}
+      P2P__SyncToken: ${P2P_SYNC_TOKEN}
+      P2P__RegistrationToken: ${P2P_REGISTRATION_TOKEN:-}
+      P2P__IdentityKeyPath: ${P2P_IDENTITY_KEY_PATH:-/data/node-identity.p256.key}
+      P2P__DiscoveryIntervalSeconds: ${P2P_DISCOVERY_INTERVAL_SECONDS:-60}
+      P2P__AllowRegistrationTokenFallback: ${P2P_ALLOW_REGISTRATION_TOKEN_FALLBACK:-false}
+      P2P__MaxRegisteredPeers: ${P2P_MAX_REGISTERED_PEERS:-5000}
+      P2P__MaxRegistrationsPerMinutePerAddress: ${P2P_MAX_REGISTRATIONS_PER_MINUTE_PER_ADDRESS:-30}
+      P2P__Iroh__Enabled: "false"
+      NodeVersion__UpdateManifestUrl: ${UPDATE_MANIFEST_URL:-}
+      Logging__LogLevel__System.Net.Http.HttpClient: Warning
+    volumes:
+      - bootstrap-data:/data
+    ports:
+      - "${NODE_HTTP_PORT:-7041}:5041"
+      - "${NODE_GRPC_PORT:-7141}:5042"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  bootstrap-data:

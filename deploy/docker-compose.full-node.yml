@@ -1,0 +1,70 @@
+services:
+  full-node:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: ${NODE_DB_PATH:-/data/full-node.db}
+      NodeDbPassword: ${NODE_DB_PASSWORD}
+      NodeAdminToken: ${NODE_ADMIN_TOKEN}
+      WebhookSecret: ${WEBHOOK_SECRET}
+      OraclePublicKey: ${ORACLE_PUBLIC_KEY}
+      P2P__NodeRole: Full
+      P2P__NodeId: ${P2P_NODE_ID:-}
+      P2P__PublicUrl: ""
+      P2P__BootstrapPeers__0: ${P2P_BOOTSTRAP_GRPC_URL}
+      P2P__SyncToken: ${P2P_SYNC_TOKEN}
+      P2P__RegistrationToken: ${P2P_REGISTRATION_TOKEN:-}
+      P2P__IdentityKeyPath: ${P2P_IDENTITY_KEY_PATH:-/data/node-identity.p256.key}
+      P2P__DiscoveryIntervalSeconds: ${P2P_DISCOVERY_INTERVAL_SECONDS:-60}
+      P2P__AllowRegistrationTokenFallback: ${P2P_ALLOW_REGISTRATION_TOKEN_FALLBACK:-false}
+      P2P__Iroh__Enabled: "true"
+      P2P__Iroh__SidecarUrl: http://iroh-sidecar:49152
+      P2P__Iroh__LocalApiToken: ${IROH_LOCAL_API_TOKEN}
+      NodeVersion__UpdateManifestUrl: ${UPDATE_MANIFEST_URL:-}
+      Logging__LogLevel__System.Net.Http.HttpClient: Warning
+    volumes:
+      - full-node-data:/data
+    depends_on:
+      iroh-sidecar:
+        condition: service_healthy
+    ports:
+      - "${NODE_HTTP_PORT:-7042}:5041"
+      - "${NODE_GRPC_PORT:-7142}:5042"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  iroh-sidecar:
+    build:
+      context: ..
+      dockerfile: iroh-sidecar/Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXUS_IROH_LISTEN: 0.0.0.0:49152
+      NEXUS_NODE_URL: http://full-node:5041
+      NEXUS_IROH_TOKEN: ${IROH_LOCAL_API_TOKEN}
+      NEXUS_IROH_SECRET_KEY_PATH: ${IROH_SECRET_KEY_PATH:-/data/iroh-secret.key}
+      NEXUS_IROH_RELAY_MODE: ${IROH_RELAY_MODE:-default}
+      RUST_LOG: ${IROH_LOG:-info,nexus_iroh_sidecar=info}
+    volumes:
+      - iroh-sidecar-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:49152/status >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  full-node-data:
+  iroh-sidecar-data:

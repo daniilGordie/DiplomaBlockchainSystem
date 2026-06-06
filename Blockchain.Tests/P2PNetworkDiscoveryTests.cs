@@ -4,6 +4,8 @@ using Blockchain.Node;
 using Blockchain.Node.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using System.Security.Cryptography;
+using System.Text;
 
 public class P2PNetworkDiscoveryTests
 {
@@ -22,13 +24,10 @@ public class P2PNetworkDiscoveryTests
                 ["P2P:SyncToken"] = "sync-secret"
             });
 
-            var result = await service.RegisterPeer(new RegisterPeerRequest
-            {
-                NodeId = "node-a",
-                PublicUrl = "https://node-a.example.test",
-                Role = "Full",
-                RegistrationToken = "registration-secret"
-            }, null!);
+            var result = await service.RegisterPeer(CreateSignedRegistration(
+                "node-a",
+                "https://node-a.example.test",
+                "Full"), null!);
 
             var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
 
@@ -38,6 +37,7 @@ public class P2PNetworkDiscoveryTests
             Assert.Equal("https://node-a.example.test", peer.PublicUrl);
             Assert.Equal("Full", peer.Role);
             Assert.True(peer.IsTrusted);
+            Assert.False(string.IsNullOrWhiteSpace(peer.NodePublicKey));
             Assert.False(string.IsNullOrWhiteSpace(peer.LastSeen));
         }
         finally
@@ -47,7 +47,39 @@ public class P2PNetworkDiscoveryTests
     }
 
     [Fact]
-    public async Task RegisterPeer_ShouldRejectInvalidRegistrationToken()
+    public async Task RegisterPeer_ShouldAcceptIrohPeerRecordOnBootstrapNode()
+    {
+        string dbPath = TempDbPath("p2p-register-iroh");
+        try
+        {
+            var service = CreateGrpcService(dbPath, new Dictionary<string, string?>
+            {
+                ["P2P:NodeRole"] = "Bootstrap",
+                ["P2P:NodeId"] = "bootstrap",
+                ["P2P:PublicUrl"] = "https://bootstrap.example.test",
+                ["P2P:RegistrationToken"] = "registration-secret",
+                ["P2P:SyncToken"] = "sync-secret"
+            });
+
+            var result = await service.RegisterPeer(CreateSignedRegistration(
+                "iroh-node-a",
+                "iroh://2jc4u57t7y4wuwcany4oa7enrhnnj3cfom3t7fhrc27fdvxfpv3q",
+                "Full"), null!);
+
+            var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
+
+            Assert.True(result.Success);
+            var peer = Assert.Single(directory.Peers);
+            Assert.Equal("iroh://2jc4u57t7y4wuwcany4oa7enrhnnj3cfom3t7fhrc27fdvxfpv3q", peer.PublicUrl);
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public async Task RegisterPeer_ShouldRejectUnsignedLegacyTokenByDefault()
     {
         string dbPath = TempDbPath("p2p-register-token");
         try
@@ -65,13 +97,75 @@ public class P2PNetworkDiscoveryTests
                 NodeId = "node-a",
                 PublicUrl = "https://node-a.example.test",
                 Role = "Full",
-                RegistrationToken = "wrong"
+                RegistrationToken = "registration-secret"
             }, null!);
 
             var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
 
             Assert.False(result.Success);
             Assert.Empty(directory.Peers);
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public async Task RegisterPeer_ShouldRejectInvalidSignature()
+    {
+        string dbPath = TempDbPath("p2p-register-invalid-signature");
+        try
+        {
+            var service = CreateGrpcService(dbPath, new Dictionary<string, string?>
+            {
+                ["P2P:NodeRole"] = "Bootstrap",
+                ["P2P:PublicUrl"] = "https://bootstrap.example.test",
+                ["P2P:SyncToken"] = "sync-secret"
+            });
+
+            var request = CreateSignedRegistration("node-a", "https://node-a.example.test", "Full");
+            request.Signature = Convert.ToBase64String(new byte[64]);
+
+            var result = await service.RegisterPeer(request, null!);
+            var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
+
+            Assert.False(result.Success);
+            Assert.Empty(directory.Peers);
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public async Task RegisterPeer_ShouldAllowLegacyTokenOnlyWhenExplicitlyEnabled()
+    {
+        string dbPath = TempDbPath("p2p-register-token-fallback");
+        try
+        {
+            var service = CreateGrpcService(dbPath, new Dictionary<string, string?>
+            {
+                ["P2P:NodeRole"] = "Bootstrap",
+                ["P2P:PublicUrl"] = "https://bootstrap.example.test",
+                ["P2P:RegistrationToken"] = "registration-secret",
+                ["P2P:AllowRegistrationTokenFallback"] = "true",
+                ["P2P:SyncToken"] = "sync-secret"
+            });
+
+            var result = await service.RegisterPeer(new RegisterPeerRequest
+            {
+                NodeId = "node-a",
+                PublicUrl = "https://node-a.example.test",
+                Role = "Full",
+                RegistrationToken = "registration-secret"
+            }, null!);
+
+            var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
+
+            Assert.True(result.Success);
+            Assert.Single(directory.Peers);
         }
         finally
         {
@@ -93,13 +187,10 @@ public class P2PNetworkDiscoveryTests
                 ["P2P:SyncToken"] = "sync-secret"
             });
 
-            var result = await service.RegisterPeer(new RegisterPeerRequest
-            {
-                NodeId = "node-local",
-                PublicUrl = "http://localhost:7001",
-                Role = "Full",
-                RegistrationToken = "registration-secret"
-            }, null!);
+            var result = await service.RegisterPeer(CreateSignedRegistration(
+                "node-local",
+                "http://localhost:7001",
+                "Full"), null!);
 
             Assert.False(result.Success);
             Assert.Equal("Invalid public URL", result.Message);
@@ -158,6 +249,30 @@ public class P2PNetworkDiscoveryTests
 
         var provider = services.BuildServiceProvider();
         return ActivatorUtilities.CreateInstance<BlockchainGrpcService>(provider);
+    }
+
+    private static RegisterPeerRequest CreateSignedRegistration(string nodeId, string publicUrl, string role)
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        string publicKey = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        string signedAt = DateTimeOffset.UtcNow.ToString("O");
+        string nonce = Guid.NewGuid().ToString("N");
+        string payload = NodeIdentity.BuildRegistrationPayload(nodeId, publicUrl, role, signedAt, nonce);
+        string signature = Convert.ToBase64String(key.SignData(
+            Encoding.UTF8.GetBytes(payload),
+            HashAlgorithmName.SHA256,
+            DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+
+        return new RegisterPeerRequest
+        {
+            NodeId = nodeId,
+            PublicUrl = publicUrl,
+            Role = role,
+            NodePublicKey = publicKey,
+            Signature = signature,
+            SignedAt = signedAt,
+            Nonce = nonce
+        };
     }
 
     private static string TempDbPath(string prefix) => Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}.db");

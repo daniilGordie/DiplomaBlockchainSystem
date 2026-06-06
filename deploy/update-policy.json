@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "product": "Nexus Diploma Blockchain",
+  "channel": "stable",
+  "minimumSupportedNodeVersion": "0.1.0",
+  "currentNodeVersion": "0.1.0",
+  "currentIrohSidecarVersion": "0.1.0",
+  "identityPersistenceRequired": [
+    "P2P_IDENTITY_KEY_PATH",
+    "IROH_SECRET_KEY_PATH",
+    "NODE_DB_PATH"
+  ],
+  "rollingUpdate": {
+    "bootstrap": "Upgrade one bootstrap node at a time. Keep the peer database volume mounted.",
+    "fullNode": "Upgrade full-node and iroh-sidecar together. Keep both data volumes mounted.",
+    "rollback": "Redeploy the previous image tag with the same volumes."
+  },
+  "compatibility": {
+    "peerRegistration": "Signed registration v1 is required. Token fallback is legacy-only.",
+    "irohProtocolAlpn": "nexus-blockchain/iroh/1",
+    "grpcProto": "blockchain.proto"
+  }
+}

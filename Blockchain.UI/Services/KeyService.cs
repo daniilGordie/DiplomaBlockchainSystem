@@ -197,7 +197,6 @@ namespace Blockchain.UI.Services
             return ExportKeystoreWithRawAesKey(aesKey, salt, iv, "password", "", "");
         }
 
-        // CHANGED: passkey-based keystore export (Windows Hello / TouchID / Google Password Manager via WebAuthn platform authenticator).
         public async Task<string> ExportKeystoreWithPasskeyAsync()
         {
             if (string.IsNullOrEmpty(_privateKey)) throw new Exception("No key for export.");
@@ -263,7 +262,6 @@ namespace Blockchain.UI.Services
             return signature;
         }
 
-        // CHANGED: signing using passkey-protected wallet.json without user-entered password.
         public async Task<string> SignDataWithPasskeyKeystoreAsync(string keystoreJson, string dataToSign)
         {
             string decryptedPrivateKey = await DecryptPrivateKeyFromPasskeyKeystoreAsync(keystoreJson);

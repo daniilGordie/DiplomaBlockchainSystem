@@ -15,6 +15,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddNexusNodeServices(this IServiceCollection services, DatabaseManager databaseManager)
     {
         services.AddOptions<P2POptions>().BindConfiguration("P2P");
+        services.AddOptions<NodeVersionOptions>().BindConfiguration("NodeVersion");
+        services.AddHttpClient();
         services.AddNexusInfrastructure(databaseManager);
 
         services.AddSingleton<BlockMiner>();
@@ -33,7 +35,12 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ChainAdoptionService>()));
 
         services.AddSingleton<P2PNetworkService>();
+        services.AddSingleton<NodeIdentity>();
+        services.AddSingleton<PeerRegistrationSecurity>();
+        services.AddHttpClient<IrohSidecarClient>();
+        services.AddHostedService<NodeIdentityWarmupService>();
         services.AddHostedService<P2PBootstrapService>();
+        services.AddHostedService<IrohInboundPump>();
         services.AddSingleton<OracleIdentity>();
         services.AddSingleton<ProjectEventAnchorService>();
         services.AddSingleton<GrpcBlockProcessor>();

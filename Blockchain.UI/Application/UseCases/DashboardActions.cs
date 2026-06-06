@@ -33,18 +33,35 @@ public sealed class DashboardActions
         return UiResult<string>.Ok(normalized);
     }
 
-    public async Task<UiResult<PeerDirectorySnapshot>> LoadPeersAsync(string nodeUrl)
+    public async Task<UiResult<PeerNetworkOverview>> LoadPeersAsync(string nodeUrl)
     {
         try
         {
             var directory = await _peerNetworkClient.GetPeerDirectoryAsync(nodeUrl);
-            return UiResult<PeerDirectorySnapshot>.Ok(directory);
+            NodeSetupStatus? setupStatus = null;
+            MigrationChecklist? migrationChecklist = null;
+            UpdateCheckStatus? updateCheck = null;
+            try
+            {
+                setupStatus = await _peerNetworkClient.GetSetupStatusAsync(nodeUrl);
+                migrationChecklist = await _peerNetworkClient.GetMigrationChecklistAsync(nodeUrl);
+                updateCheck = await _peerNetworkClient.GetUpdateCheckAsync(nodeUrl);
+            }
+            catch
+            {
+                // Older nodes may not expose setup endpoints yet. Directory status is still useful.
+            }
+
+            return UiResult<PeerNetworkOverview>.Ok(new PeerNetworkOverview(directory, setupStatus, migrationChecklist, updateCheck));
         }
         catch (Exception ex)
         {
-            return UiResult<PeerDirectorySnapshot>.Fail($"Node unavailable: {ex.Message}");
+            return UiResult<PeerNetworkOverview>.Fail($"Node unavailable: {ex.Message}");
         }
     }
+
+    public Task<SetupPlanResponse?> CreateSetupPlanAsync(string nodeUrl, SetupPlanRequest request) =>
+        _peerNetworkClient.CreateSetupPlanAsync(nodeUrl, request);
 
     private static string NormalizeNodeUrl(string url) => url.Trim().TrimEnd('/');
 

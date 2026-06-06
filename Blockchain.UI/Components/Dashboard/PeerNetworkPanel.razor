@@ -5,6 +5,7 @@
                 <h5 class="mb-0 text-white fw-semibold">P2P Network</h5>
                 <span class="badge bg-info">Current node: @CurrentNodeLabel</span>
                 <span class="badge @RoleBadge(CurrentNodeRole)">@CurrentNodeRole</span>
+                <span class="badge @TransportBadge">@TransportLabel</span>
                 <span class="badge bg-secondary">@Peers.Count peers</span>
             </div>
             <div class="text-muted small">@ConnectionStatusLabel</div>
@@ -13,8 +14,8 @@
         <button class="btn btn-outline-secondary btn-sm" @onclick="OnRefreshPeers" disabled="@IsBusy">Refresh Peers</button>
     </div>
 
-    <div class="row g-4 mt-2">
-        <div class="col-lg-6">
+    <div class="row g-3 mt-2">
+        <div class="col-xl-4 col-lg-6">
             <label class="form-label text-white-50">Connect UI to node</label>
             <div class="input-group network-panel__group">
                 <span class="input-group-text">Node URL</span>
@@ -24,14 +25,141 @@
             <div class="form-text text-muted">Use this to switch the browser client between local nodes.</div>
         </div>
 
-        <div class="col-lg-6">
-            <label class="form-label text-white-50">Peer administration</label>
+        <div class="col-xl-4 col-lg-6">
+            <label class="form-label text-white-50">Network mode</label>
             <div class="network-panel__group p-3 border border-secondary rounded">
-                <div class="text-white small fw-semibold">Configured on the node</div>
-                <div class="form-text text-muted">Add peers through node bootstrap configuration or a server-side admin tool.</div>
+                <div class="d-flex align-items-center justify-content-between gap-2">
+                    <div class="text-white small fw-semibold">@ModeLabel</div>
+                    <span class="badge @ModeBadge">@ModeStatus</span>
+                </div>
+                <div class="form-text text-muted">@ModeHint</div>
+            </div>
+        </div>
+
+        <div class="col-xl-4">
+            <label class="form-label text-white-50">Node readiness</label>
+            <div class="network-panel__group p-3 border border-secondary rounded">
+                <div class="d-flex flex-wrap gap-2">
+                    <span class="badge @ReadyBadge(Snapshot?.NodeIdentityConfigured == true)">identity</span>
+                    <span class="badge @ReadyBadge(Snapshot?.SyncTokenConfigured == true)">sync token</span>
+                    <span class="badge @ReadyBadge(Snapshot?.IrohEnabled == true)">iroh</span>
+                    <span class="badge @(Snapshot?.RegistrationTokenFallbackEnabled == true ? "bg-warning text-dark" : "bg-success")">signed registration</span>
+                </div>
+                <div class="form-text text-muted">Secrets are configured on the node, not in the browser.</div>
             </div>
         </div>
     </div>
+
+    <div class="row g-3 mt-1">
+        <div class="col-12">
+            <div class="network-panel__group p-3 border border-secondary rounded">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <div class="text-white-50 small fw-semibold">Setup wizard</div>
+                    <span class="badge bg-secondary">@SetupModeLabel</span>
+                </div>
+                <div class="btn-group w-100 mb-3" role="group" aria-label="Node setup mode">
+                    <button type="button" class="btn btn-sm @SetupModeButton("local")" @onclick="@(() => SelectSetupMode("local"))">Local node</button>
+                    <button type="button" class="btn btn-sm @SetupModeButton("full-node")" @onclick="@(() => SelectSetupMode("full-node"))">Join network</button>
+                    <button type="button" class="btn btn-sm @SetupModeButton("bootstrap")" @onclick="@(() => SelectSetupMode("bootstrap"))">Bootstrap node</button>
+                </div>
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <label class="form-label text-white-50 small">Node ID</label>
+                        <input class="form-control form-control-sm bg-dark text-white border-secondary" value="@SetupNodeId" @oninput="OnSetupNodeIdChanged" placeholder="auto-generated" />
+                    </div>
+                    @if (SetupMode == "bootstrap")
+                    {
+                        <div class="col-md-8">
+                            <label class="form-label text-white-50 small">Public bootstrap URL</label>
+                            <input class="form-control form-control-sm bg-dark text-white border-secondary" value="@SetupPublicUrl" @oninput="OnSetupPublicUrlChanged" placeholder="https://bootstrap.example.com" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="col-md-5">
+                            <label class="form-label text-white-50 small">Bootstrap gRPC URL</label>
+                            <input class="form-control form-control-sm bg-dark text-white border-secondary" value="@SetupBootstrapGrpcUrl" @oninput="OnSetupBootstrapGrpcUrlChanged" disabled="@(SetupMode == "local")" placeholder="https://bootstrap.example.com:7141" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label text-white-50 small">Relay mode</label>
+                            <select class="form-select form-select-sm bg-dark text-white border-secondary" value="@SetupRelayMode" @onchange="OnSetupRelayModeChanged">
+                                <option value="default">default</option>
+                                <option value="staging">staging</option>
+                                <option value="disabled">disabled</option>
+                            </select>
+                        </div>
+                    }
+                    <div class="col-md-12">
+                        <label class="form-label text-white-50 small">Oracle public key</label>
+                        <input class="form-control form-control-sm bg-dark text-white border-secondary" value="@SetupOraclePublicKey" @oninput="OnSetupOraclePublicKeyChanged" placeholder="auto" />
+                    </div>
+                    <div class="col-md-12 d-flex align-items-center justify-content-between gap-2">
+                        <div class="text-muted small">@SetupValidationLabel</div>
+                        <button class="btn btn-primary btn-sm fw-semibold" @onclick="GenerateSetupPlan" disabled="@(IsBusy || !CanGenerateSetupPlan)">Generate .env</button>
+                    </div>
+                </div>
+                @if (SetupPlan?.Messages.Count > 0)
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        @foreach (var message in SetupPlan.Messages)
+                        {
+                            <span class="badge @(SetupPlan.Valid ? "bg-warning text-dark" : "bg-danger")">@message</span>
+                        }
+                    </div>
+                }
+                @if (SetupPlan?.Valid == true)
+                {
+                    <textarea class="form-control form-control-sm bg-dark text-info border-secondary font-monospace mt-2" rows="8" readonly>@SetupPlan.EnvContent</textarea>
+                }
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="network-panel__group p-3 border border-secondary rounded h-100">
+                <div class="text-white-50 small fw-semibold mb-2">Bootstrap peers</div>
+                @if (Snapshot?.BootstrapPeers.Count > 0)
+                {
+                    <div class="d-flex flex-column gap-1">
+                        @foreach (var bootstrap in Snapshot.BootstrapPeers)
+                        {
+                            <code class="small text-info">@bootstrap</code>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="text-muted small">No bootstrap peer configured for this node.</div>
+                }
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="network-panel__group p-3 border border-secondary rounded h-100">
+                <div class="text-white-50 small fw-semibold mb-2">Transport</div>
+                <div class="small text-white">Discovery interval: @DiscoveryIntervalLabel</div>
+                <div class="small text-white">Iroh sidecar: @IrohSidecarLabel</div>
+                <div class="small text-white">Iroh relay: @IrohRelayLabel</div>
+                <div class="small text-white">Node version: @NodeVersionLabel</div>
+                <div class="small text-white">Update check: @UpdateCheckLabel</div>
+                @if (!string.IsNullOrWhiteSpace(UpdateWarningLabel))
+                {
+                    <div class="alert alert-warning py-1 px-2 mt-2 mb-0 small">@UpdateWarningLabel</div>
+                }
+                <div class="form-text text-muted">For public installs use the full-node package with persistent node and Iroh identities.</div>
+            </div>
+        </div>
+    </div>
+
+    @if (MigrationChecklist?.Checks.Count > 0)
+    {
+        <div class="mt-3">
+            <div class="text-white-50 small fw-semibold mb-2">Update and migration readiness</div>
+            <div class="d-flex flex-wrap gap-2">
+                @foreach (var check in MigrationChecklist.Checks)
+                {
+                    <span class="badge @(check.Passed ? "bg-success" : "bg-danger")" title="@check.Detail">@check.Name</span>
+                }
+            </div>
+        </div>
+    }
 
     <div class="mt-3">
             <div class="text-white-50 small fw-semibold mb-2">Known peers</div>
@@ -72,6 +200,10 @@
 
 @code {
     [Parameter] public IReadOnlyList<Blockchain.UI.Application.Clients.PeerNodeInfo> Peers { get; set; } = Array.Empty<Blockchain.UI.Application.Clients.PeerNodeInfo>();
+    [Parameter] public Blockchain.UI.Application.Clients.PeerDirectorySnapshot? Snapshot { get; set; }
+    [Parameter] public Blockchain.UI.Application.Clients.NodeSetupStatus? SetupStatus { get; set; }
+    [Parameter] public Blockchain.UI.Application.Clients.MigrationChecklist? MigrationChecklist { get; set; }
+    [Parameter] public Blockchain.UI.Application.Clients.UpdateCheckStatus? UpdateCheck { get; set; }
     [Parameter] public string CurrentNodeUrl { get; set; } = "";
     [Parameter] public string CurrentNodeRole { get; set; } = "Unknown";
     [Parameter] public string NodeUrlInput { get; set; } = "";
@@ -81,17 +213,111 @@
     [Parameter] public EventCallback<string> NodeUrlInputChanged { get; set; }
     [Parameter] public EventCallback OnConnectNode { get; set; }
     [Parameter] public EventCallback OnRefreshPeers { get; set; }
+    [Parameter] public Func<Blockchain.UI.Application.Clients.SetupPlanRequest, Task<Blockchain.UI.Application.Clients.SetupPlanResponse?>>? OnCreateSetupPlan { get; set; }
+
+    private string SetupMode { get; set; } = "full-node";
+    private string SetupNodeId { get; set; } = "";
+    private string SetupPublicUrl { get; set; } = "https://bootstrap.example.com";
+    private string SetupBootstrapGrpcUrl { get; set; } = "https://bootstrap.example.com:7141";
+    private string SetupRelayMode { get; set; } = "default";
+    private string SetupOraclePublicKey { get; set; } = "auto";
+    private Blockchain.UI.Application.Clients.SetupPlanResponse? SetupPlan { get; set; }
 
     private string CurrentNodeLabel => string.IsNullOrWhiteSpace(CurrentNodeUrl) ? "Not connected" : CurrentNodeUrl;
     private string ConnectionStatusLabel => string.IsNullOrWhiteSpace(ConnectionStatus) ? "Connection status unavailable." : ConnectionStatus;
+    private string TransportLabel => Snapshot?.IrohEnabled == true ? "Iroh" : "HTTP/gRPC";
+    private string TransportBadge => Snapshot?.IrohEnabled == true ? "bg-success" : "bg-secondary";
+    private string DiscoveryIntervalLabel => Snapshot == null ? "unknown" : $"{Snapshot.DiscoveryIntervalSeconds}s";
+    private string IrohSidecarLabel => Snapshot?.IrohEnabled == true ? Snapshot.IrohSidecarUrl : "disabled";
+    private string IrohRelayLabel => SetupStatus?.IrohEnabled == true
+        ? string.IsNullOrWhiteSpace(SetupStatus.IrohRelayUrl) ? "not reported" : SetupStatus.IrohRelayUrl
+        : "disabled";
+    private string NodeVersionLabel => string.IsNullOrWhiteSpace(SetupStatus?.NodeVersion) ? "unknown" : $"{SetupStatus.NodeVersion} / {SetupStatus.ProtocolVersion}";
+    private string UpdateCheckLabel => UpdateCheck == null
+        ? "unknown"
+        : !UpdateCheck.Configured
+            ? "manifest not configured"
+            : UpdateCheck.UpdateAvailable
+                ? $"available {UpdateCheck.LatestNodeVersion}"
+                : "current";
+    private string UpdateWarningLabel => UpdateCheck == null
+        ? ""
+        : !UpdateCheck.ProtocolCompatible || !UpdateCheck.IrohSidecarCompatible
+            ? UpdateCheck.Warning
+            : UpdateCheck.UpdateAvailable
+                ? "A newer node version is available."
+                : "";
+    private string SetupModeLabel => SetupMode switch
+    {
+        "local" => "Local node",
+        "bootstrap" => "Bootstrap node",
+        _ => "Join network"
+    };
+    private bool CanGenerateSetupPlan => SetupMode switch
+    {
+        "bootstrap" => IsHttpUrl(SetupPublicUrl),
+        "full-node" => IsHttpUrl(SetupBootstrapGrpcUrl),
+        "local" => true,
+        _ => false
+    };
+    private string SetupValidationLabel => CanGenerateSetupPlan
+        ? "Ready to generate a node environment file."
+        : SetupMode == "bootstrap"
+            ? "Enter a valid public bootstrap HTTP or HTTPS URL."
+            : "Enter a valid bootstrap gRPC HTTP or HTTPS URL.";
+    private string ModeLabel => string.Equals(CurrentNodeRole, "Bootstrap", StringComparison.OrdinalIgnoreCase)
+        ? "Bootstrap node"
+        : Snapshot?.BootstrapPeers.Count > 0 ? "Joined network" : "Local node";
+    private string ModeStatus => Snapshot == null ? "Unknown" : Peers.Count > 0 ? "Connected" : "Ready";
+    private string ModeBadge => Snapshot == null ? "bg-secondary" : Peers.Count > 0 ? "bg-success" : "bg-info";
+    private string ModeHint => string.Equals(CurrentNodeRole, "Bootstrap", StringComparison.OrdinalIgnoreCase)
+        ? "This node accepts signed full-node registrations and publishes the peer directory."
+        : Snapshot?.BootstrapPeers.Count > 0
+            ? "This node registers with bootstrap peers and syncs data from discovered nodes."
+            : "This node is running without bootstrap discovery. Configure bootstrap peers to join the shared network.";
 
     private Task OnNodeUrlInput(ChangeEventArgs e) => NodeUrlInputChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    private Task OnSetupNodeIdChanged(ChangeEventArgs e) { SetupNodeId = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
+    private Task OnSetupPublicUrlChanged(ChangeEventArgs e) { SetupPublicUrl = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
+    private Task OnSetupBootstrapGrpcUrlChanged(ChangeEventArgs e) { SetupBootstrapGrpcUrl = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
+    private Task OnSetupRelayModeChanged(ChangeEventArgs e) { SetupRelayMode = e.Value?.ToString() ?? "default"; return Task.CompletedTask; }
+    private Task OnSetupOraclePublicKeyChanged(ChangeEventArgs e) { SetupOraclePublicKey = e.Value?.ToString() ?? "auto"; return Task.CompletedTask; }
+
+    private void SelectSetupMode(string mode)
+    {
+        SetupMode = mode;
+        SetupPlan = null;
+    }
+
+    private string SetupModeButton(string mode) => SetupMode == mode ? "btn-primary" : "btn-outline-secondary";
+
+    private async Task GenerateSetupPlan()
+    {
+        if (OnCreateSetupPlan == null || !CanGenerateSetupPlan)
+        {
+            return;
+        }
+
+        SetupPlan = await OnCreateSetupPlan.Invoke(new Blockchain.UI.Application.Clients.SetupPlanRequest(
+            SetupMode,
+            SetupPublicUrl,
+            SetupBootstrapGrpcUrl,
+            SetupNodeId,
+            SetupRelayMode,
+            SetupOraclePublicKey));
+    }
+
+    private static bool IsHttpUrl(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static string RoleBadge(string role) =>
         string.Equals(role, "Bootstrap", StringComparison.OrdinalIgnoreCase) ? "bg-warning text-dark" : "bg-primary";
 
     private static string StatusBadge(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
         string.IsNullOrWhiteSpace(peer.LastFailure) ? "bg-success" : "bg-danger";
+
+    private static string ReadyBadge(bool ready) => ready ? "bg-success" : "bg-danger";
 
     private static string NodeLabel(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
         string.IsNullOrWhiteSpace(peer.NodeId) ? "unknown" : peer.NodeId;
