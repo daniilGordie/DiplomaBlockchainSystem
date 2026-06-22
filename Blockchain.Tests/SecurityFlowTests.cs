@@ -139,6 +139,56 @@ public sealed class SecurityFlowTests
     }
 
     [Fact]
+    public void ProcessPeerBlock_ShouldAcceptUnixTimestampSignedBlock()
+    {
+        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_unix_timestamp_{Guid.NewGuid():N}.db");
+        try
+        {
+            var manager = CreateBlockchainManager(dbPath);
+            var latest = manager.GetLatestBlock("System");
+            Assert.NotNull(latest);
+
+            using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            string publicKey = Convert.ToBase64String(ecdsa.ExportSubjectPublicKeyInfo());
+
+            long unixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            DateTime timestamp = DateTimeOffset.FromUnixTimeSeconds(unixSeconds).UtcDateTime;
+            string data = "{\"Type\":\"CreateProject\",\"ProjectId\":\"UnixTimeProj\",\"User\":\"Alice\"}";
+            string prevHash = latest!.Hash;
+            int index = latest.Index + 1;
+            string signableData = $"{index}{unixSeconds}{data}{prevHash}";
+
+            byte[] signatureBytes = ecdsa.SignData(
+                System.Text.Encoding.UTF8.GetBytes(signableData),
+                HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+
+            var peerBlock = new Block
+            {
+                Index = index,
+                Timestamp = timestamp,
+                TimestampUnixSeconds = unixSeconds,
+                Data = data,
+                PreviousHash = prevHash,
+                ValidatorPublicKey = publicKey,
+                Signature = Convert.ToBase64String(signatureBytes),
+                ChannelId = "System"
+            };
+            manager.MineBlock(peerBlock);
+
+            bool accepted = manager.ProcessPeerBlock(peerBlock);
+
+            Assert.True(accepted);
+        }
+        finally
+        {
+            TryDelete(dbPath);
+            TryDelete(dbPath + "-wal");
+            TryDelete(dbPath + "-shm");
+        }
+    }
+
+    [Fact]
     public void ProcessPeerBlock_ShouldRejectHashContentMismatch()
     {
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_test_{Guid.NewGuid():N}.db");

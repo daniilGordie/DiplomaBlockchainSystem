@@ -34,7 +34,8 @@ public sealed class CoreBlockAuditVerifier : IBlockAuditVerifier
             ValidatorPublicKey = block.ValidatorPublicKey,
             Signature = block.Signature,
             Nonce = block.Nonce,
-            ChannelId = block.ChannelId
+            ChannelId = block.ChannelId,
+            TimestampUnixSeconds = block.TimestampUnixSeconds
         };
     }
 }

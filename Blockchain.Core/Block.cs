@@ -15,6 +15,7 @@ namespace Blockchain.Core
         public string Signature { get; set; }
         public long Nonce { get; set; }
         public string ChannelId { get; set; } = "System";
+        public long TimestampUnixSeconds { get; set; }
 
         public Block()
         {
@@ -27,12 +28,20 @@ namespace Blockchain.Core
 
         private string GetSignableData()
         {
+            if (TimestampUnixSeconds > 0)
+            {
+                return $"{Index}{TimestampUnixSeconds}{Data}{PreviousHash}";
+            }
+
             return $"{Index}{Timestamp:O}{Data}{PreviousHash}";
         }
 
         public string CalculateHash()
         {
-            string rawData = $"{Index}{Timestamp:s}{Data}{PreviousHash}{ValidatorPublicKey}{Signature}{Nonce}";
+            string timestampComponent = TimestampUnixSeconds > 0
+                ? TimestampUnixSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : Timestamp.ToString("s");
+            string rawData = $"{Index}{timestampComponent}{Data}{PreviousHash}{ValidatorPublicKey}{Signature}{Nonce}";
 
             using (var sha256 = System.Security.Cryptography.SHA256.Create())
             {

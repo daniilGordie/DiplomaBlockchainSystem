@@ -46,7 +46,7 @@ public sealed class GrpcBlockProcessor
         try
         {
             var block = ToBlock(request);
-            var result = _receivePeerBlock.Execute(new ReceivePeerBlockCommand(block, request.Timestamp));
+            var result = _receivePeerBlock.Execute(new ReceivePeerBlockCommand(block));
             if (!result.Success)
             {
                 return new GrpcBlockProcessResult(false, result.Message, result.ChannelId);
@@ -109,7 +109,10 @@ public sealed class GrpcBlockProcessor
             Data = model.Data,
             PreviousHash = model.PreviousHash,
             Hash = model.Hash,
-            Timestamp = DateTime.Parse(model.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind),
+            Timestamp = model.TimestampUnixSeconds > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(model.TimestampUnixSeconds).UtcDateTime
+                : DateTime.Parse(model.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind),
+            TimestampUnixSeconds = model.TimestampUnixSeconds,
             ValidatorPublicKey = model.ValidatorPublicKey,
             Signature = model.Signature,
             Nonce = model.Nonce,

@@ -11,6 +11,7 @@ public static class GrpcProjectMapper
         {
             Index = block.Index,
             Timestamp = block.Timestamp.ToString("O"),
+            TimestampUnixSeconds = block.TimestampUnixSeconds,
             Data = block.Data,
             PreviousHash = block.PreviousHash,
             Hash = block.Hash,

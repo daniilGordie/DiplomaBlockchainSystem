@@ -89,6 +89,7 @@ namespace Blockchain.Core
                 PreviousHash = "0",
                 Data = "{\"Source\":\"System\",\"Message\":\"Nexus Genesis Block\"}",
                 Timestamp = GenesisTimestamp,
+                TimestampUnixSeconds = new DateTimeOffset(GenesisTimestamp).ToUnixTimeSeconds(),
                 ChannelId = "System"
             };
             MineBlock(genesisBlock);

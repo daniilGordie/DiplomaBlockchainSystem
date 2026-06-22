@@ -49,7 +49,7 @@ public sealed class DashboardActions
             }
             catch
             {
-                // Older nodes may not expose setup endpoints yet. Directory status is still useful.
+                
             }
 
             return UiResult<PeerNetworkOverview>.Ok(new PeerNetworkOverview(directory, setupStatus, migrationChecklist, updateCheck));

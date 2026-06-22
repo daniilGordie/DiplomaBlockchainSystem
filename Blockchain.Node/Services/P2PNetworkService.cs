@@ -249,6 +249,7 @@ namespace Blockchain.Node.Services
                 PreviousHash = block.PreviousHash,
                 Hash = block.Hash,
                 Timestamp = block.Timestamp.ToString("O"),
+                TimestampUnixSeconds = block.TimestampUnixSeconds,
                 ValidatorPublicKey = block.ValidatorPublicKey ?? "",
                 Signature = block.Signature ?? "",
                 Nonce = block.Nonce,

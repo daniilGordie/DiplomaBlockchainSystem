@@ -9,4 +9,5 @@ public sealed record BlockSnapshot(
     string ValidatorPublicKey,
     string Signature,
     long Nonce,
-    string ChannelId);
+    string ChannelId,
+    long TimestampUnixSeconds = 0);

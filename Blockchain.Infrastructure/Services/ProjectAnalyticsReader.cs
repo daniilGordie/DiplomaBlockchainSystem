@@ -34,7 +34,8 @@ public sealed class ProjectAnalyticsReader : IProjectAnalyticsReader
                 block.ValidatorPublicKey ?? string.Empty,
                 block.Signature ?? string.Empty,
                 block.Nonce,
-                block.ChannelId))
+                block.ChannelId,
+                block.TimestampUnixSeconds))
             .ToList();
     }
 

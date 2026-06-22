@@ -112,11 +112,12 @@ using System.Text.Json;
 
                     cmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS Blocks (
-                        IndexId INTEGER PRIMARY KEY, Timestamp TEXT, Data TEXT, PreviousHash TEXT, 
+                        IndexId INTEGER PRIMARY KEY, Timestamp TEXT, TimestampUnixSeconds INTEGER NOT NULL DEFAULT 0, Data TEXT, PreviousHash TEXT, 
                         Hash TEXT UNIQUE, ValidatorPublicKey TEXT, Signature TEXT, Nonce INTEGER
                     );
                     CREATE INDEX IF NOT EXISTS idx_hash ON Blocks(Hash);";
                     cmd.ExecuteNonQuery();
+                    EnsureBlockColumns(connection, "Blocks");
 
                     cmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS Tasks (
@@ -182,6 +183,7 @@ using System.Text.Json;
                         ChannelId TEXT NOT NULL,
                         IndexId INTEGER NOT NULL,
                         Timestamp TEXT NOT NULL,
+                        TimestampUnixSeconds INTEGER NOT NULL DEFAULT 0,
                         Data TEXT NOT NULL,
                         PreviousHash TEXT NOT NULL,
                         ValidatorPublicKey TEXT,
@@ -192,6 +194,7 @@ using System.Text.Json;
                     );
                     CREATE INDEX IF NOT EXISTS idx_pending_prev ON PendingBlocks(ChannelId, PreviousHash);";
                     cmd.ExecuteNonQuery();
+                    EnsureColumn(connection, "PendingBlocks", "TimestampUnixSeconds", "INTEGER NOT NULL DEFAULT 0");
 
                     cmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS Peers (
@@ -222,11 +225,12 @@ using System.Text.Json;
                 cmd.Transaction = tx;
                 cmd.CommandText = $@"
                 CREATE TABLE IF NOT EXISTS Blocks_{safeChannel} (
-                    IndexId INTEGER PRIMARY KEY, Timestamp TEXT, Data TEXT, PreviousHash TEXT, 
+                    IndexId INTEGER PRIMARY KEY, Timestamp TEXT, TimestampUnixSeconds INTEGER NOT NULL DEFAULT 0, Data TEXT, PreviousHash TEXT, 
                     Hash TEXT UNIQUE, ValidatorPublicKey TEXT, Signature TEXT, Nonce INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS idx_hash_{safeChannel} ON Blocks_{safeChannel}(Hash);";
                 cmd.ExecuteNonQuery();
+                EnsureBlockColumns(conn, tx, $"Blocks_{safeChannel}");
             }
 
             public static void EnsureInitialized(string dbName = "nexus_node.db")
@@ -254,9 +258,12 @@ using System.Text.Json;
                             var cmdBlock = connection.CreateCommand();
                             cmdBlock.Transaction = transaction;
 
-                            cmdBlock.CommandText = $"INSERT INTO {tableName} (IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce) VALUES ($idx, $time, $data, $prev, $hash, $val, $sig, $nonce)";
+                            EnsureBlockColumns(connection, transaction, tableName);
+
+                            cmdBlock.CommandText = $"INSERT INTO {tableName} (IndexId, Timestamp, TimestampUnixSeconds, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce) VALUES ($idx, $time, $timeUnix, $data, $prev, $hash, $val, $sig, $nonce)";
                             cmdBlock.Parameters.AddWithValue("$idx", block.Index);
                             cmdBlock.Parameters.AddWithValue("$time", block.Timestamp.ToString("O"));
+                            cmdBlock.Parameters.AddWithValue("$timeUnix", block.TimestampUnixSeconds);
                             cmdBlock.Parameters.AddWithValue("$data", EncryptString(block.Data));
                             cmdBlock.Parameters.AddWithValue("$prev", block.PreviousHash);
                             cmdBlock.Parameters.AddWithValue("$hash", block.Hash);
@@ -735,12 +742,13 @@ using System.Text.Json;
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = @"
                 INSERT OR REPLACE INTO PendingBlocks
-                (Hash, ChannelId, IndexId, Timestamp, Data, PreviousHash, ValidatorPublicKey, Signature, Nonce, Reason, ReceivedAt)
-                VALUES ($hash, $channel, $idx, $time, $data, $prev, $val, $sig, $nonce, $reason, $received)";
+                (Hash, ChannelId, IndexId, Timestamp, TimestampUnixSeconds, Data, PreviousHash, ValidatorPublicKey, Signature, Nonce, Reason, ReceivedAt)
+                VALUES ($hash, $channel, $idx, $time, $timeUnix, $data, $prev, $val, $sig, $nonce, $reason, $received)";
                 cmd.Parameters.AddWithValue("$hash", block.Hash);
                 cmd.Parameters.AddWithValue("$channel", SanitizeChannelName(block.ChannelId));
                 cmd.Parameters.AddWithValue("$idx", block.Index);
                 cmd.Parameters.AddWithValue("$time", block.Timestamp.ToString("O"));
+                cmd.Parameters.AddWithValue("$timeUnix", block.TimestampUnixSeconds);
                 cmd.Parameters.AddWithValue("$data", EncryptString(block.Data));
                 cmd.Parameters.AddWithValue("$prev", block.PreviousHash);
                 cmd.Parameters.AddWithValue("$val", EncryptString(block.ValidatorPublicKey ?? ""));
@@ -758,7 +766,7 @@ using System.Text.Json;
                 connection.Open();
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = @"
-                SELECT IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce, ChannelId
+                SELECT IndexId, Timestamp, TimestampUnixSeconds, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce, ChannelId
                 FROM PendingBlocks
                 WHERE ChannelId = $channel AND PreviousHash = $prev
                 ORDER BY IndexId ASC, ReceivedAt ASC";
@@ -772,13 +780,14 @@ using System.Text.Json;
                     {
                         Index = Convert.ToInt32(reader.GetValue(0)),
                         Timestamp = DateTime.Parse(reader.GetString(1), null, System.Globalization.DateTimeStyles.RoundtripKind),
-                        Data = DecryptString(reader.GetString(2)),
-                        PreviousHash = reader.GetString(3),
-                        Hash = reader.GetString(4),
-                        ValidatorPublicKey = DecryptString(reader.IsDBNull(5) ? "" : reader.GetString(5)),
-                        Signature = DecryptString(reader.IsDBNull(6) ? "" : reader.GetString(6)),
-                        Nonce = Convert.ToInt64(reader.GetValue(7)),
-                        ChannelId = reader.GetString(8)
+                        TimestampUnixSeconds = reader.IsDBNull(2) ? 0 : Convert.ToInt64(reader.GetValue(2)),
+                        Data = DecryptString(reader.GetString(3)),
+                        PreviousHash = reader.GetString(4),
+                        Hash = reader.GetString(5),
+                        ValidatorPublicKey = DecryptString(reader.IsDBNull(6) ? "" : reader.GetString(6)),
+                        Signature = DecryptString(reader.IsDBNull(7) ? "" : reader.GetString(7)),
+                        Nonce = Convert.ToInt64(reader.GetValue(8)),
+                        ChannelId = reader.GetString(9)
                     });
                 }
 
@@ -893,10 +902,26 @@ using System.Text.Json;
                 EnsureColumn(connection, "Peers", "NodePublicKey", "TEXT");
             }
 
+            private static void EnsureBlockColumns(SqliteConnection connection, string tableName)
+            {
+                EnsureColumn(connection, tableName, "TimestampUnixSeconds", "INTEGER NOT NULL DEFAULT 0");
+            }
+
+            private static void EnsureBlockColumns(SqliteConnection connection, SqliteTransaction transaction, string tableName)
+            {
+                EnsureColumn(connection, transaction, tableName, "TimestampUnixSeconds", "INTEGER NOT NULL DEFAULT 0");
+            }
+
             private static void EnsureColumn(SqliteConnection connection, string tableName, string columnName, string definition)
+            {
+                EnsureColumn(connection, null, tableName, columnName, definition);
+            }
+
+            private static void EnsureColumn(SqliteConnection connection, SqliteTransaction? transaction, string tableName, string columnName, string definition)
             {
                 using (var check = connection.CreateCommand())
                 {
+                    check.Transaction = transaction;
                     check.CommandText = $"PRAGMA table_info({tableName})";
                     using var reader = check.ExecuteReader();
                     while (reader.Read())
@@ -909,6 +934,7 @@ using System.Text.Json;
                 }
 
                 using var alter = connection.CreateCommand();
+                alter.Transaction = transaction;
                 alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}";
                 alter.ExecuteNonQuery();
             }
@@ -985,11 +1011,12 @@ using System.Text.Json;
                     connection.Open();
 
                     using var cmdInit = connection.CreateCommand();
-                    cmdInit.CommandText = $"CREATE TABLE IF NOT EXISTS {tableName} (IndexId INTEGER PRIMARY KEY, Timestamp TEXT, Data TEXT, PreviousHash TEXT, Hash TEXT, ValidatorPublicKey TEXT, Signature TEXT, Nonce INTEGER)";
+                    cmdInit.CommandText = $"CREATE TABLE IF NOT EXISTS {tableName} (IndexId INTEGER PRIMARY KEY, Timestamp TEXT, TimestampUnixSeconds INTEGER NOT NULL DEFAULT 0, Data TEXT, PreviousHash TEXT, Hash TEXT, ValidatorPublicKey TEXT, Signature TEXT, Nonce INTEGER)";
                     cmdInit.ExecuteNonQuery();
+                    EnsureBlockColumns(connection, tableName);
 
                     using var cmd = connection.CreateCommand();
-                    cmd.CommandText = $"SELECT IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId ASC";
+                    cmd.CommandText = $"SELECT IndexId, Timestamp, TimestampUnixSeconds, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId ASC";
 
                     using var reader = cmd.ExecuteReader();
                     while (reader.Read())
@@ -1025,7 +1052,7 @@ using System.Text.Json;
                     EnsureBlockTable(connection, tableName);
 
                     using var cmd = connection.CreateCommand();
-                    cmd.CommandText = $"SELECT IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId DESC LIMIT 1";
+                    cmd.CommandText = $"SELECT IndexId, Timestamp, TimestampUnixSeconds, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId DESC LIMIT 1";
 
                     using var reader = cmd.ExecuteReader();
                     return reader.Read() ? ReadBlock(reader, safeChannel) : null;
@@ -1052,7 +1079,7 @@ using System.Text.Json;
                     EnsureBlockTable(connection, tableName);
 
                     using var cmd = connection.CreateCommand();
-                    cmd.CommandText = $"SELECT IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId DESC LIMIT $limit";
+                    cmd.CommandText = $"SELECT IndexId, Timestamp, TimestampUnixSeconds, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce FROM {tableName} ORDER BY IndexId DESC LIMIT $limit";
                     cmd.Parameters.AddWithValue("$limit", limit);
 
                     using var reader = cmd.ExecuteReader();
@@ -1103,8 +1130,9 @@ using System.Text.Json;
             private void EnsureBlockTable(SqliteConnection connection, string tableName)
             {
                 using var cmdInit = connection.CreateCommand();
-                cmdInit.CommandText = $"CREATE TABLE IF NOT EXISTS {tableName} (IndexId INTEGER PRIMARY KEY, Timestamp TEXT, Data TEXT, PreviousHash TEXT, Hash TEXT, ValidatorPublicKey TEXT, Signature TEXT, Nonce INTEGER)";
+                cmdInit.CommandText = $"CREATE TABLE IF NOT EXISTS {tableName} (IndexId INTEGER PRIMARY KEY, Timestamp TEXT, TimestampUnixSeconds INTEGER NOT NULL DEFAULT 0, Data TEXT, PreviousHash TEXT, Hash TEXT, ValidatorPublicKey TEXT, Signature TEXT, Nonce INTEGER)";
                 cmdInit.ExecuteNonQuery();
+                EnsureBlockColumns(connection, tableName);
             }
 
             private Block ReadBlock(SqliteDataReader reader, string safeChannel)
@@ -1121,12 +1149,13 @@ using System.Text.Json;
                             out var ts)
                             ? ts
                             : DateTime.MinValue),
-                    Data = DecryptString(reader.IsDBNull(2) ? "" : (reader.GetValue(2)?.ToString() ?? "")),
-                    PreviousHash = reader.IsDBNull(3) ? "" : (reader.GetValue(3)?.ToString() ?? ""),
-                    Hash = reader.IsDBNull(4) ? "" : (reader.GetValue(4)?.ToString() ?? ""),
-                    ValidatorPublicKey = DecryptString(reader.IsDBNull(5) ? "" : (reader.GetValue(5)?.ToString() ?? "")),
-                    Signature = DecryptString(reader.IsDBNull(6) ? "" : (reader.GetValue(6)?.ToString() ?? "")),
-                    Nonce = reader.IsDBNull(7) ? 0 : Convert.ToInt64(reader.GetValue(7)),
+                    TimestampUnixSeconds = reader.IsDBNull(2) ? 0 : Convert.ToInt64(reader.GetValue(2)),
+                    Data = DecryptString(reader.IsDBNull(3) ? "" : (reader.GetValue(3)?.ToString() ?? "")),
+                    PreviousHash = reader.IsDBNull(4) ? "" : (reader.GetValue(4)?.ToString() ?? ""),
+                    Hash = reader.IsDBNull(5) ? "" : (reader.GetValue(5)?.ToString() ?? ""),
+                    ValidatorPublicKey = DecryptString(reader.IsDBNull(6) ? "" : (reader.GetValue(6)?.ToString() ?? "")),
+                    Signature = DecryptString(reader.IsDBNull(7) ? "" : (reader.GetValue(7)?.ToString() ?? "")),
+                    Nonce = reader.IsDBNull(8) ? 0 : Convert.ToInt64(reader.GetValue(8)),
                     ChannelId = safeChannel
                 };
             }
@@ -1206,9 +1235,12 @@ using System.Text.Json;
                 var cmdBlock = connection.CreateCommand();
                 cmdBlock.Transaction = transaction;
 
-                cmdBlock.CommandText = $"INSERT OR IGNORE INTO {tableName} (IndexId, Timestamp, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce) VALUES ($idx, $time, $data, $prev, $hash, $val, $sig, $nonce)";
+                EnsureBlockColumns(connection, transaction, tableName);
+
+                cmdBlock.CommandText = $"INSERT OR IGNORE INTO {tableName} (IndexId, Timestamp, TimestampUnixSeconds, Data, PreviousHash, Hash, ValidatorPublicKey, Signature, Nonce) VALUES ($idx, $time, $timeUnix, $data, $prev, $hash, $val, $sig, $nonce)";
                 cmdBlock.Parameters.AddWithValue("$idx", block.Index);
                 cmdBlock.Parameters.AddWithValue("$time", block.Timestamp.ToString("O"));
+                cmdBlock.Parameters.AddWithValue("$timeUnix", block.TimestampUnixSeconds);
                 cmdBlock.Parameters.AddWithValue("$data", EncryptString(block.Data));
                 cmdBlock.Parameters.AddWithValue("$prev", block.PreviousHash);
                 cmdBlock.Parameters.AddWithValue("$hash", block.Hash);

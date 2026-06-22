@@ -33,13 +33,16 @@ public sealed class ProjectEventAnchorService
         int nextIndex = latest != null ? latest.Index + 1 : 0;
         string previousHash = latest != null ? latest.Hash : "0";
         string blockData = JsonSerializer.Serialize(payload);
-        string signableData = $"{nextIndex}{timestamp}{blockData}{previousHash}";
+        var blockTimestamp = DateTimeOffset.Parse(timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind);
+        long timestampUnixSeconds = blockTimestamp.ToUnixTimeSeconds();
+        string signableData = $"{nextIndex}{timestampUnixSeconds}{blockData}{previousHash}";
         string oracleSignature = _oracleIdentity.SignData(signableData);
 
         var block = new Block
         {
             Index = nextIndex,
-            Timestamp = DateTime.Parse(timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind),
+            Timestamp = blockTimestamp.UtcDateTime,
+            TimestampUnixSeconds = timestampUnixSeconds,
             Data = blockData,
             PreviousHash = previousHash,
             ValidatorPublicKey = _oracleIdentity.PublicKey,
@@ -66,6 +69,7 @@ public sealed class ProjectEventAnchorService
         {
             Index = block.Index,
             Timestamp = block.Timestamp.ToString("O"),
+            TimestampUnixSeconds = block.TimestampUnixSeconds,
             Data = block.Data,
             PreviousHash = block.PreviousHash,
             Hash = block.Hash,

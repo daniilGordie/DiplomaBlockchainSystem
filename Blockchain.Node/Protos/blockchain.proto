@@ -38,6 +38,7 @@ message BlockModel {
   string signature = 7;
   int64 nonce = 8;
   string channel_id = 9; 
+  int64 timestamp_unix_seconds = 10;
 }
 
 message PeerRequest {

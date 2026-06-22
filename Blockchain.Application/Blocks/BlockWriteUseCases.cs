@@ -36,12 +36,6 @@ public sealed class ReceivePeerBlockUseCase
 
     public BlockWriteResult Execute(ReceivePeerBlockCommand command)
     {
-        string signableData = $"{command.Block.Index}{command.TimestampText}{command.Block.Data}{command.Block.PreviousHash}";
-        if (!VerifySignature(signableData, command.Block.Signature, command.Block.ValidatorPublicKey))
-        {
-            return new BlockWriteResult(false, "Crypto Fraud Detected: Invalid Signature", command.Block.ChannelId);
-        }
-
         var contract = new TaskContract();
         if (!contract.Validate(command.Block.Data, command.Block.ValidatorPublicKey, _smartContractState))
         {
@@ -55,30 +49,6 @@ public sealed class ReceivePeerBlockUseCase
             command.Block.ChannelId);
     }
 
-    private static bool VerifySignature(string data, string signatureBase64, string publicKeyBase64)
-    {
-        try
-        {
-            byte[] signatureBytes = Convert.FromBase64String(signatureBase64);
-            if (signatureBytes.Length != 64)
-            {
-                return false;
-            }
-
-            using var ecdsa = ECDsa.Create();
-            ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(publicKeyBase64), out _);
-
-            return ecdsa.VerifyData(
-                Encoding.UTF8.GetBytes(data),
-                signatureBytes,
-                HashAlgorithmName.SHA256,
-                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-        }
-        catch
-        {
-            return false;
-        }
-    }
 }
 
 public sealed class AdoptPeerChainUseCase
@@ -111,6 +81,6 @@ public sealed class MineAndAppendBlockUseCase
     }
 }
 
-public sealed record ReceivePeerBlockCommand(Block Block, string TimestampText);
+public sealed record ReceivePeerBlockCommand(Block Block);
 
 public sealed record BlockWriteResult(bool Success, string Message, string ChannelId);

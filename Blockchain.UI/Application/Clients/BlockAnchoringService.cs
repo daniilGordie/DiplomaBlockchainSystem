@@ -85,9 +85,10 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         var latestBlock = await LoadLatestAnchorBlockAsync(targetChannel);
         string prevHash = latestBlock != null ? latestBlock.Hash : "0";
         int expectedIndex = latestBlock != null ? latestBlock.Index + 1 : 0;
-        string timestamp = DateTime.UtcNow.ToString("O");
+        long timestampUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string timestamp = DateTimeOffset.FromUnixTimeSeconds(timestampUnixSeconds).UtcDateTime.ToString("O");
         string publicKey = _keyService.PublicKey ?? "";
-        string signableData = $"{expectedIndex}{timestamp}{json}{prevHash}";
+        string signableData = $"{expectedIndex}{timestampUnixSeconds}{json}{prevHash}";
         string signature = await signAsync(signableData);
 
         var block = new BlockModel
@@ -95,6 +96,7 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
             Index = expectedIndex,
             Data = json,
             Timestamp = timestamp,
+            TimestampUnixSeconds = timestampUnixSeconds,
             PreviousHash = prevHash,
             Hash = ComputeSimpleHash(signableData),
             ValidatorPublicKey = publicKey,
@@ -155,12 +157,13 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
     {
         await Task.Delay(10);
 
-        DateTime timestamp = DateTime.Parse(block.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind);
-        string timeStringS = timestamp.ToString("s");
+        string timestampComponent = block.TimestampUnixSeconds > 0
+            ? block.TimestampUnixSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : DateTime.Parse(block.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind).ToString("s");
 
         block.Nonce = 0;
         using var sha256 = SHA256.Create();
-        string baseData = $"{block.Index}{timeStringS}{block.Data}{block.PreviousHash}{block.ValidatorPublicKey}{block.Signature}";
+        string baseData = $"{block.Index}{timestampComponent}{block.Data}{block.PreviousHash}{block.ValidatorPublicKey}{block.Signature}";
 
         while (true)
         {
