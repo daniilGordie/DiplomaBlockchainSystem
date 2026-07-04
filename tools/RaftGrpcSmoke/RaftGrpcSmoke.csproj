@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.57.0" />
+    <PackageReference Include="Grpc.Net.Client.Web" Version="2.57.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Blockchain.Core\Blockchain.Core.csproj" />
+    <ProjectReference Include="..\..\Blockchain.Infrastructure\Blockchain.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Blockchain.Node\Blockchain.Node.csproj" />
+  </ItemGroup>
+
+</Project>

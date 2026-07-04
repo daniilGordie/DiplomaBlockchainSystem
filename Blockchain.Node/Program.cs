@@ -7,6 +7,10 @@ using System.Threading.RateLimiting;
 using Blockchain.Node.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
 
 string oraclePublicKeyConfig = GetRequiredConfiguration(builder.Configuration, "OraclePublicKey");
 bool autoOraclePublicKey = string.Equals(oraclePublicKeyConfig, "auto", StringComparison.OrdinalIgnoreCase);
@@ -16,6 +20,8 @@ if (!autoOraclePublicKey)
 }
 
 string webhookSecret = GetRequiredConfiguration(builder.Configuration, "WebhookSecret");
+Blockchain.Core.Constants.NetworkParameters.RequireProofOfWork =
+    builder.Configuration.GetValue("Consensus:RequireProofOfWork", true);
 
 builder.Services.AddCors(o => o.AddPolicy("AllowAll", policy =>
 {
@@ -89,6 +95,7 @@ app.MapArtifactIntegrationEndpoints();
 app.MapIpfsIntegrationEndpoints();
 app.MapIrohP2PEndpoints();
 app.MapSetupStatusEndpoints();
+app.MapConsensusEndpoints();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/", () => "Nexus P2P Node is running. Use gRPC-Web to connect.");

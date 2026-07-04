@@ -1,41 +1,55 @@
-using System.Text.Json;
 using Blockchain.Application.Blocks;
 using Blockchain.Core;
-using Blockchain.Node.Hubs;
-using Microsoft.AspNetCore.SignalR;
+using Blockchain.Core.Consensus;
+using Microsoft.Extensions.Options;
 
 namespace Blockchain.Node.Services;
 
 public sealed class GrpcBlockProcessor
 {
     private readonly BroadcastLocalBlockUseCase _broadcastLocalBlock;
-    private readonly ReceivePeerBlockUseCase _receivePeerBlock;
-    private readonly P2PNetworkService _p2pService;
-    private readonly IHubContext<BlockchainHub> _hubContext;
+    private readonly CommittedBlockApplier _committedBlockApplier;
+    private readonly IBlockFinalitySubmitter _blockFinalitySubmitter;
+    private readonly BlockNotificationService _notifications;
+    private readonly VerifyBlockProposalUseCase _verifyBlockProposal;
+    private readonly BlockProposalFactory _blockProposalFactory;
+    private readonly ConsensusOptions _consensusOptions;
     private readonly ILogger<GrpcBlockProcessor> _logger;
 
     public GrpcBlockProcessor(
         BroadcastLocalBlockUseCase broadcastLocalBlock,
-        ReceivePeerBlockUseCase receivePeerBlock,
-        P2PNetworkService p2pService,
-        IHubContext<BlockchainHub> hubContext,
+        CommittedBlockApplier committedBlockApplier,
+        IBlockFinalitySubmitter blockFinalitySubmitter,
+        BlockNotificationService notifications,
+        VerifyBlockProposalUseCase verifyBlockProposal,
+        BlockProposalFactory blockProposalFactory,
+        IOptions<ConsensusOptions> consensusOptions,
         ILogger<GrpcBlockProcessor> logger)
     {
         _broadcastLocalBlock = broadcastLocalBlock;
-        _receivePeerBlock = receivePeerBlock;
-        _p2pService = p2pService;
-        _hubContext = hubContext;
+        _committedBlockApplier = committedBlockApplier;
+        _blockFinalitySubmitter = blockFinalitySubmitter;
+        _notifications = notifications;
+        _verifyBlockProposal = verifyBlockProposal;
+        _blockProposalFactory = blockProposalFactory;
+        _consensusOptions = consensusOptions.Value;
         _logger = logger;
     }
 
     public async Task<GrpcBlockProcessResult> ProcessBroadcastAsync(BlockModel request)
     {
+        if (!_consensusOptions.AcceptP2PBlocksAsFinal)
+        {
+            string channelId = string.IsNullOrWhiteSpace(request.ChannelId) ? "System" : request.ChannelId;
+            return new GrpcBlockProcessResult(false, "P2P block finality is disabled on this node", channelId);
+        }
+
         var peerBlock = ToBlock(request);
         var result = _broadcastLocalBlock.Execute(peerBlock);
 
         if (result.Success)
         {
-            await NotifyClientsAsync(request);
+            await _notifications.NotifyClientsAsync(request);
         }
 
         return new GrpcBlockProcessResult(result.Success, result.Message, result.ChannelId);
@@ -46,14 +60,29 @@ public sealed class GrpcBlockProcessor
         try
         {
             var block = ToBlock(request);
-            var result = _receivePeerBlock.Execute(new ReceivePeerBlockCommand(block));
+            if (_consensusOptions.EnableProofOfContributionValidation)
+            {
+                var proposal = BuildProposal(request, block);
+                if (!proposal.Accepted || proposal.Proposal == null)
+                {
+                    return new GrpcBlockProcessResult(false, $"PoC proposal rejected: {proposal.Reason}", block.ChannelId);
+                }
+
+                var verification = _verifyBlockProposal.Execute(proposal.Proposal);
+                if (!verification.Accepted)
+                {
+                    return new GrpcBlockProcessResult(false, $"PoC verification rejected: {verification.Reason}", block.ChannelId);
+                }
+
+                var committed = await _blockFinalitySubmitter.SubmitAsync(proposal.Proposal, request);
+                return new GrpcBlockProcessResult(committed.Success, committed.Message, committed.ChannelId);
+            }
+
+            var result = await _committedBlockApplier.ApplyAsync(block, request, broadcastToPeers: true);
             if (!result.Success)
             {
                 return new GrpcBlockProcessResult(false, result.Message, result.ChannelId);
             }
-
-            await NotifyClientsAsync(request);
-            await _p2pService.BroadcastBlockAsync(block);
 
             return new GrpcBlockProcessResult(true, result.Message, result.ChannelId);
         }
@@ -64,41 +93,17 @@ public sealed class GrpcBlockProcessor
         }
     }
 
-    private async Task NotifyClientsAsync(BlockModel block)
+    private BlockProposalBuildResult BuildProposal(BlockModel request, Block block)
     {
-        string channelId = string.IsNullOrWhiteSpace(block.ChannelId) ? "System" : block.ChannelId;
-        await _hubContext.Clients.Group(channelId).SendAsync("NewBlockBroadcast", block);
-
-        if (string.IsNullOrWhiteSpace(block.Data) || !block.Data.TrimStart().StartsWith("{", StringComparison.Ordinal))
+        if (request.ContributionProof != null)
         {
-            return;
+            return BlockProposalBuildResult.Accept(new BlockProposal(
+                block,
+                GrpcProjectMapper.ToContributionProof(request.ContributionProof),
+                DateTime.UtcNow));
         }
 
-        using var doc = JsonDocument.Parse(block.Data);
-        var root = doc.RootElement;
-        string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
-
-        if (string.Equals(type, "AssignRole", StringComparison.Ordinal) &&
-            root.TryGetProperty("TargetUser", out var assignedUserProp))
-        {
-            string assignedUser = assignedUserProp.GetString() ?? "";
-            if (!string.IsNullOrWhiteSpace(assignedUser))
-            {
-                await _hubContext.Clients.Group($"USER_{assignedUser}").SendAsync("NewBlockBroadcast", block);
-            }
-        }
-
-        if (string.Equals(type, "Transfer", StringComparison.Ordinal) &&
-            root.TryGetProperty("TargetUser", out var targetUserProp) &&
-            root.TryGetProperty("Amount", out var amountProp) &&
-            root.TryGetProperty("User", out var senderProp))
-        {
-            string targetUser = targetUserProp.GetString() ?? "";
-            int amount = amountProp.GetInt32();
-            string sender = senderProp.GetString() ?? "Unknown";
-
-            await _hubContext.Clients.Group($"USER_{targetUser}").SendAsync("FinancialTransferReceived", sender, amount);
-        }
+        return _blockProposalFactory.BuildImplicitProposal(block);
     }
 
     public static Block ToBlock(BlockModel model)

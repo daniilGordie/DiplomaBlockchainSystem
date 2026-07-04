@@ -10,4 +10,7 @@ public sealed record BlockSnapshot(
     string Signature,
     long Nonce,
     string ChannelId,
-    long TimestampUnixSeconds = 0);
+    long TimestampUnixSeconds = 0,
+    string FinalityMode = "",
+    long? RaftLogIndex = null,
+    long? RaftTerm = null);

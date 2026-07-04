@@ -43,6 +43,14 @@ public class BlockchainManagerPortTests
         {
         }
 
+        public void SaveFinalityMetadata(BlockFinalityMetadata metadata)
+        {
+        }
+
+        public BlockFinalityMetadata? GetFinalityMetadata(string blockHash) => null;
+
+        public bool HasFinalityMetadata(string blockHash) => false;
+
         public List<string> GetKnownChannels() => _chains.Keys.ToList();
 
         public List<Block> LoadChain(string channelId = "System")

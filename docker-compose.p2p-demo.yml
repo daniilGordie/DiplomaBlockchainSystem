@@ -90,6 +90,8 @@ services:
     build:
       context: .
       dockerfile: Blockchain.UI/Dockerfile
+      args:
+        UI_NODE_URL: http://localhost:7001
     depends_on:
       - full-node-a
     ports:

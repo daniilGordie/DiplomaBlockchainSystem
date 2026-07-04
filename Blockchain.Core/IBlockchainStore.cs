@@ -25,10 +25,26 @@ public interface IPendingBlockStore
     void RemovePendingBlock(string blockHash);
 }
 
+public sealed record BlockFinalityMetadata(
+    string BlockHash,
+    string ChannelId,
+    string FinalityMode,
+    long? RaftLogIndex,
+    long? RaftTerm,
+    DateTime CommittedAtUtc);
+
+public interface IBlockFinalityMetadataStore
+{
+    void SaveFinalityMetadata(BlockFinalityMetadata metadata);
+    BlockFinalityMetadata? GetFinalityMetadata(string blockHash);
+    bool HasFinalityMetadata(string blockHash);
+}
+
 public interface IBlockStore :
     IChainReader,
     IChainWriter,
-    IPendingBlockStore
+    IPendingBlockStore,
+    IBlockFinalityMetadataStore
 {
 }
 

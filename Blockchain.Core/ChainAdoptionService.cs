@@ -72,7 +72,7 @@ public sealed class ChainAdoptionService
 
             if (current.Index != i) return false;
             if (current.Hash != current.CalculateHash()) return false;
-            if (!current.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
+            if (NetworkParameters.RequireProofOfWork && !current.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
             if (!current.VerifySignature()) return false;
 
             if (i == 0)
@@ -173,7 +173,7 @@ public sealed class ChainAdoptionService
 
             if (current.Index != i) return false;
             if (current.Hash != current.CalculateHash()) return false;
-            if (!current.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
+            if (NetworkParameters.RequireProofOfWork && !current.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
             if (!current.VerifySignature()) return false;
 
             if (i == 0)

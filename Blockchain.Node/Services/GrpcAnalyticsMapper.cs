@@ -38,7 +38,8 @@ public static class GrpcAnalyticsMapper
             InvalidHashes = audit.InvalidHashes,
             InvalidSignatures = audit.InvalidSignatures,
             InvalidProofOfWork = audit.InvalidProofOfWork,
-            BrokenLinks = audit.BrokenLinks
+            BrokenLinks = audit.BrokenLinks,
+            InvalidFinalityMetadata = audit.InvalidFinalityMetadata
         };
 
         foreach (var item in audit.Items)

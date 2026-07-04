@@ -25,17 +25,24 @@ public sealed class ProjectAnalyticsReader : IProjectAnalyticsReader
     public IReadOnlyList<BlockSnapshot> LoadChain(string projectId)
     {
         return _database.LoadChain(projectId)
-            .Select(block => new BlockSnapshot(
-                block.Index,
-                block.Timestamp,
-                block.Data,
-                block.PreviousHash,
-                block.Hash,
-                block.ValidatorPublicKey ?? string.Empty,
-                block.Signature ?? string.Empty,
-                block.Nonce,
-                block.ChannelId,
-                block.TimestampUnixSeconds))
+            .Select(block =>
+            {
+                var finality = _database.GetFinalityMetadata(block.Hash);
+                return new BlockSnapshot(
+                    block.Index,
+                    block.Timestamp,
+                    block.Data,
+                    block.PreviousHash,
+                    block.Hash,
+                    block.ValidatorPublicKey ?? string.Empty,
+                    block.Signature ?? string.Empty,
+                    block.Nonce,
+                    block.ChannelId,
+                    block.TimestampUnixSeconds,
+                    finality?.FinalityMode ?? string.Empty,
+                    finality?.RaftLogIndex,
+                    finality?.RaftTerm);
+            })
             .ToList();
     }
 

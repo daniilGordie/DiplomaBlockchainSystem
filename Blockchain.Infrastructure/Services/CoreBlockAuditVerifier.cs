@@ -19,6 +19,11 @@ public sealed class CoreBlockAuditVerifier : IBlockAuditVerifier
 
     public bool HasValidProofOfWork(BlockSnapshot block)
     {
+        if (!NetworkParameters.RequireProofOfWork)
+        {
+            return true;
+        }
+
         return block.Hash.StartsWith(NetworkParameters.TargetPrefix, StringComparison.Ordinal);
     }
 

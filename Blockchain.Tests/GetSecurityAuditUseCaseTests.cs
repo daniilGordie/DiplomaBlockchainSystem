@@ -1,4 +1,5 @@
 using Blockchain.Application.Analytics;
+using Blockchain.Core.Constants;
 
 namespace Blockchain.Tests;
 
@@ -44,6 +45,57 @@ public class GetSecurityAuditUseCaseTests
         Assert.Equal(1, result.InvalidProofOfWork);
         Assert.Equal(1, result.BrokenLinks);
         Assert.Equal(4, result.FindingCount);
+    }
+
+    [Fact]
+    public void Build_ShouldSkipProofOfWorkFindingWhenProofOfWorkIsDisabled()
+    {
+        bool previous = NetworkParameters.RequireProofOfWork;
+        try
+        {
+            NetworkParameters.RequireProofOfWork = false;
+            var blocks = new[]
+            {
+                CreateBlock(index: 0, hash: "hash-0", previousHash: "0")
+            };
+
+            var result = GetSecurityAuditUseCase.Build(
+                blocks.Select(block => block with { FinalityMode = "Raft", RaftLogIndex = 1 }).ToArray(),
+                new FakeBlockAuditVerifier(invalidProofOfWork: new[] { "hash-0" }));
+
+            Assert.True(result.ChainValid);
+            Assert.Equal(0, result.InvalidProofOfWork);
+            Assert.Contains(result.Items, item => item.Details.Contains("PoC/Raft-ready consensus metadata", StringComparison.Ordinal));
+        }
+        finally
+        {
+            NetworkParameters.RequireProofOfWork = previous;
+        }
+    }
+
+    [Fact]
+    public void Build_ShouldReportMissingFinalityMetadataWhenProofOfWorkIsDisabled()
+    {
+        bool previous = NetworkParameters.RequireProofOfWork;
+        try
+        {
+            NetworkParameters.RequireProofOfWork = false;
+            var blocks = new[]
+            {
+                CreateBlock(index: 0, hash: "hash-0", previousHash: "0"),
+                CreateBlock(index: 1, hash: "hash-1", previousHash: "hash-0")
+            };
+
+            var result = GetSecurityAuditUseCase.Build(blocks, new FakeBlockAuditVerifier());
+
+            Assert.False(result.ChainValid);
+            Assert.Equal(1, result.InvalidFinalityMetadata);
+            Assert.Contains(result.Items, item => item.CheckName == "Finality metadata");
+        }
+        finally
+        {
+            NetworkParameters.RequireProofOfWork = previous;
+        }
     }
 
     private static BlockSnapshot CreateBlock(int index, string hash, string previousHash)

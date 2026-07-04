@@ -6,6 +6,12 @@ public sealed class BlockMiner
 {
     public void Mine(Block block)
     {
+        if (!NetworkParameters.RequireProofOfWork)
+        {
+            block.Hash = block.CalculateHash();
+            return;
+        }
+
         do
         {
             block.Nonce++;

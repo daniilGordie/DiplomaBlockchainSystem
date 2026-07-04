@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChainReader>(sp => sp.GetRequiredService<SqliteBlockStore>());
         services.AddSingleton<IChainWriter>(sp => sp.GetRequiredService<SqliteBlockStore>());
         services.AddSingleton<IPendingBlockStore>(sp => sp.GetRequiredService<SqliteBlockStore>());
+        services.AddSingleton<IBlockFinalityMetadataStore>(sp => sp.GetRequiredService<SqliteBlockStore>());
 
         services.AddSingleton<SqliteProjectMembershipStore>();
         services.AddSingleton<IUserProjectReader>(sp => sp.GetRequiredService<SqliteProjectMembershipStore>());

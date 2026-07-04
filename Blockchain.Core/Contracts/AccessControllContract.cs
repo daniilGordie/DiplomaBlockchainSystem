@@ -187,8 +187,7 @@ namespace Blockchain.Core.Contracts
 
         private static bool IsTrustedOracleFeed(string data, string senderPublicKey)
         {
-            if (string.IsNullOrWhiteSpace(NetworkParameters.TrustedOraclePublicKey) ||
-                senderPublicKey != NetworkParameters.TrustedOraclePublicKey)
+            if (string.IsNullOrWhiteSpace(NetworkParameters.TrustedOraclePublicKey))
             {
                 return false;
             }
@@ -200,8 +199,15 @@ namespace Blockchain.Core.Contracts
                 string type = root.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() ?? "" : "";
                 string source = root.TryGetProperty("Source", out var sourceProp) ? sourceProp.GetString() ?? "" : "";
 
-                return (type == "CodeCommit" || type == "Register") &&
-                       (source == "GitEvent" || source == "GitHub" || source == "ArtifactRegistry");
+                bool isOraclePayload = (type == "CodeCommit" || type == "Register") &&
+                    (source == "GitEvent" || source == "GitHub" || source == "ArtifactRegistry");
+                if (!isOraclePayload)
+                {
+                    return false;
+                }
+
+                return senderPublicKey == NetworkParameters.TrustedOraclePublicKey ||
+                    OracleAttestation.HasValidTrustedAttestation(data, NetworkParameters.TrustedOraclePublicKey);
             }
             catch
             {

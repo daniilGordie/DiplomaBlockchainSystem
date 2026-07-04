@@ -1,0 +1,124 @@
+name: nexus-raft-smoke
+
+services:
+  node-a:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: /data/node.db
+      NodeDbPassword: local-raft-db-password
+      NodeAdminToken: local-raft-admin-token
+      WebhookSecret: local-raft-webhook-secret
+      OraclePublicKey: auto
+      OraclePrivateKeyPassword: local-raft-oracle-password
+      OracleKeyPath: /keys/oracle_key.dat
+      Consensus__EnableProofOfContributionValidation: "true"
+      Consensus__RequireProofOfWork: "false"
+      Consensus__AcceptP2PBlocksAsFinal: "false"
+      Consensus__FinalityMode: Raft
+      Consensus__ProducerKeyPath: /keys/producer-key.dat
+      Consensus__ProducerPrivateKeyPassword: local-raft-producer-password
+      Raft__NodeId: node-a
+      Raft__PublicEndPoint: node-a:6041
+      Raft__LogPath: /data/raft-log
+      Raft__UsePersistentMembership: "true"
+      Raft__MembershipPath: /data/raft-membership
+      Raft__SnapshotPath: /data/raft-snapshots
+      Raft__Peers__0__Id: node-b
+      Raft__Peers__0__EndPoint: node-b:6042
+      P2P__NodeRole: Full
+      P2P__NodeId: node-a
+      P2P__PublicUrl: ""
+      P2P__SyncToken: local-raft-sync-token
+      P2P__RegistrationToken: local-raft-registration-token
+      P2P__IdentityKeyPath: /data/node-identity.p256.key
+      P2P__DiscoveryIntervalSeconds: 3600
+      P2P__AllowRegistrationTokenFallback: "false"
+      P2P__Iroh__Enabled: "false"
+      Logging__LogLevel__System.Net.Http.HttpClient: Warning
+    volumes:
+      - ../.tmp/docker-raft-smoke/node-a:/data
+      - ../.tmp/docker-raft-smoke/shared:/keys
+    ports:
+      - "7442:5041"
+      - "7542:5042"
+      - "6641:6041"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  node-b:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: /data/node.db
+      NodeDbPassword: local-raft-db-password
+      NodeAdminToken: local-raft-admin-token
+      WebhookSecret: local-raft-webhook-secret
+      OraclePublicKey: auto
+      OraclePrivateKeyPassword: local-raft-oracle-password
+      OracleKeyPath: /keys/oracle_key.dat
+      Consensus__EnableProofOfContributionValidation: "true"
+      Consensus__RequireProofOfWork: "false"
+      Consensus__AcceptP2PBlocksAsFinal: "false"
+      Consensus__FinalityMode: Raft
+      Consensus__ProducerKeyPath: /keys/producer-key.dat
+      Consensus__ProducerPrivateKeyPassword: local-raft-producer-password
+      Raft__NodeId: node-b
+      Raft__PublicEndPoint: node-b:6042
+      Raft__LogPath: /data/raft-log
+      Raft__UsePersistentMembership: "true"
+      Raft__MembershipPath: /data/raft-membership
+      Raft__SnapshotPath: /data/raft-snapshots
+      Raft__Peers__0__Id: node-a
+      Raft__Peers__0__EndPoint: node-a:6041
+      P2P__NodeRole: Full
+      P2P__NodeId: node-b
+      P2P__PublicUrl: ""
+      P2P__SyncToken: local-raft-sync-token
+      P2P__RegistrationToken: local-raft-registration-token
+      P2P__IdentityKeyPath: /data/node-identity.p256.key
+      P2P__DiscoveryIntervalSeconds: 3600
+      P2P__AllowRegistrationTokenFallback: "false"
+      P2P__Iroh__Enabled: "false"
+      Logging__LogLevel__System.Net.Http.HttpClient: Warning
+    volumes:
+      - ../.tmp/docker-raft-smoke/node-b:/data
+      - ../.tmp/docker-raft-smoke/shared:/keys
+    ports:
+      - "7443:5041"
+      - "7543:5042"
+      - "6642:6042"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  ui:
+    build:
+      context: ..
+      dockerfile: Blockchain.UI/Dockerfile
+      args:
+        UI_NODE_URL: http://localhost:7442
+    depends_on:
+      node-a:
+        condition: service_healthy
+    ports:
+      - "7480:80"

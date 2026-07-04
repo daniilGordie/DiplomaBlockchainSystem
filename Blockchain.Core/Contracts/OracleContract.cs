@@ -26,7 +26,11 @@ namespace Blockchain.Core.Contracts
                         return false;
                     }
 
-                    if (senderPublicKey != NetworkParameters.TrustedOraclePublicKey)
+                    bool hasTrustedSender = senderPublicKey == NetworkParameters.TrustedOraclePublicKey;
+                    bool hasTrustedAttestation = OracleAttestation.HasValidTrustedAttestation(
+                        data,
+                        NetworkParameters.TrustedOraclePublicKey);
+                    if (!hasTrustedSender && !hasTrustedAttestation)
                     {
                         Console.WriteLine($"[OracleContract] Rejected: Attempted to spoof oracle data from key: {senderPublicKey}");
                         return false;

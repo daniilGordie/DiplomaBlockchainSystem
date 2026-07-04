@@ -18,6 +18,8 @@ namespace Blockchain.UI.Components.Pages;
 
 public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
 {
+    private static readonly TimeSpan WorkspaceRefreshInterval = TimeSpan.FromSeconds(30);
+
     [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private KeyService MyKeyService { get; set; } = default!;
     [Inject] private IpfsService Ipfs { get; set; } = default!;
@@ -1146,7 +1148,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
 
     private async Task RefreshWorkspacePeriodically(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        using var timer = new PeriodicTimer(WorkspaceRefreshInterval);
         try
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))

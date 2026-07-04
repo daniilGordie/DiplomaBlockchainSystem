@@ -1,5 +1,6 @@
 using Blockchain.Application.Blocks;
 using Blockchain.Core;
+using Microsoft.Extensions.Options;
 
 namespace Blockchain.Node.Services;
 
@@ -10,6 +11,7 @@ public sealed class PeerChainSyncService
     private readonly BlockchainManager _blockchainManager;
     private readonly IChainReader _chainReader;
     private readonly IPeerStore _peerStore;
+    private readonly ConsensusOptions _consensusOptions;
     private readonly ILogger<PeerChainSyncService> _logger;
 
     public PeerChainSyncService(
@@ -18,6 +20,7 @@ public sealed class PeerChainSyncService
         BlockchainManager blockchainManager,
         IChainReader chainReader,
         IPeerStore peerStore,
+        IOptions<ConsensusOptions> consensusOptions,
         ILogger<PeerChainSyncService> logger)
     {
         _p2pService = p2pService;
@@ -25,6 +28,7 @@ public sealed class PeerChainSyncService
         _blockchainManager = blockchainManager;
         _chainReader = chainReader;
         _peerStore = peerStore;
+        _consensusOptions = consensusOptions.Value;
         _logger = logger;
     }
 
@@ -35,6 +39,13 @@ public sealed class PeerChainSyncService
 
         try
         {
+            if (!_consensusOptions.AcceptP2PBlocksAsFinal)
+            {
+                _peerStore.SavePeer(peerUrl);
+                _logger.LogInformation("[P2P] Skipped chain sync from {PeerUrl}: P2P block finality is disabled.", peerUrl);
+                return new PeerChainSyncResult(0, Array.Empty<string>());
+            }
+
             var channels = await _p2pService.FetchKnownChannelsAsync(peerUrl);
             if (!channels.Contains("System", StringComparer.OrdinalIgnoreCase))
             {

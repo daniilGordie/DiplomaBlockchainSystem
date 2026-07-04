@@ -1,5 +1,6 @@
 using Blockchain.Application.Projects;
 using Blockchain.Core;
+using Blockchain.Core.Consensus;
 
 namespace Blockchain.Node.Services;
 
@@ -20,6 +21,31 @@ public static class GrpcProjectMapper
             Nonce = block.Nonce,
             ChannelId = block.ChannelId
         };
+    }
+
+    public static ContributionProofModel ToContributionProofModel(ContributionProof proof)
+    {
+        var model = new ContributionProofModel
+        {
+            ProjectId = proof.ProjectId,
+            Epoch = proof.Epoch,
+            ProducerPublicKey = proof.ProducerPublicKey,
+            ProducerScore = proof.ProducerScore,
+            ScoreSnapshotHash = proof.ScoreSnapshotHash
+        };
+        model.EvidenceBlockHashes.AddRange(proof.EvidenceBlockHashes);
+        return model;
+    }
+
+    public static ContributionProof ToContributionProof(ContributionProofModel proof)
+    {
+        return new ContributionProof(
+            proof.ProjectId,
+            proof.Epoch,
+            proof.ProducerPublicKey,
+            proof.ProducerScore,
+            proof.ScoreSnapshotHash,
+            proof.EvidenceBlockHashes.ToArray());
     }
 
     public static TaskItem ToTaskItem(ProjectTaskDto task)

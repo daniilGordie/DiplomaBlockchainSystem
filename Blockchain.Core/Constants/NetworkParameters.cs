@@ -4,6 +4,7 @@
     {
         public static int TargetDifficulty { get; set; } = 3;
         public static string TargetPrefix => new string('0', TargetDifficulty);
+        public static bool RequireProofOfWork { get; set; } = true;
 
         public static bool IsGenesisModeEnabled { get; set; } = false;
         public static int MinimumReputationThreshold { get; set; } = 10;

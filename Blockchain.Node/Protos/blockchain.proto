@@ -39,6 +39,16 @@ message BlockModel {
   int64 nonce = 8;
   string channel_id = 9; 
   int64 timestamp_unix_seconds = 10;
+  ContributionProofModel contribution_proof = 11;
+}
+
+message ContributionProofModel {
+  string project_id = 1;
+  int64 epoch = 2;
+  string producer_public_key = 3;
+  int32 producer_score = 4;
+  string score_snapshot_hash = 5;
+  repeated string evidence_block_hashes = 6;
 }
 
 message PeerRequest {
@@ -257,6 +267,7 @@ message SecurityAuditResponse {
   int32 invalid_proof_of_work = 5;
   int32 broken_links = 6;
   repeated SecurityAuditItem items = 7;
+  int32 invalid_finality_metadata = 8;
 }
 
 message SecurityAuditItem {

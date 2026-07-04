@@ -1,7 +1,9 @@
 using System.Text.Json;
+using Blockchain.Application.Blocks;
 using Blockchain.Core;
-using Blockchain.Node.Hubs;
-using Microsoft.AspNetCore.SignalR;
+using Blockchain.Core.Contracts;
+using Blockchain.Core.Consensus;
+using Microsoft.Extensions.Options;
 
 namespace Blockchain.Node.Services;
 
@@ -9,19 +11,31 @@ public sealed class ProjectEventAnchorService
 {
     private readonly BlockchainManager _blockchainManager;
     private readonly OracleIdentity _oracleIdentity;
-    private readonly P2PNetworkService _p2pService;
-    private readonly IHubContext<BlockchainHub> _hubContext;
+    private readonly ProducerIdentity _producerIdentity;
+    private readonly ConsensusOptions _consensusOptions;
+    private readonly BlockProposalFactory _blockProposalFactory;
+    private readonly VerifyBlockProposalUseCase _verifyBlockProposal;
+    private readonly IBlockFinalitySubmitter _blockFinalitySubmitter;
+    private readonly CommittedBlockApplier _committedBlockApplier;
 
     public ProjectEventAnchorService(
         BlockchainManager blockchainManager,
         OracleIdentity oracleIdentity,
-        P2PNetworkService p2pService,
-        IHubContext<BlockchainHub> hubContext)
+        ProducerIdentity producerIdentity,
+        IOptions<ConsensusOptions> consensusOptions,
+        BlockProposalFactory blockProposalFactory,
+        VerifyBlockProposalUseCase verifyBlockProposal,
+        IBlockFinalitySubmitter blockFinalitySubmitter,
+        CommittedBlockApplier committedBlockApplier)
     {
         _blockchainManager = blockchainManager;
         _oracleIdentity = oracleIdentity;
-        _p2pService = p2pService;
-        _hubContext = hubContext;
+        _producerIdentity = producerIdentity;
+        _consensusOptions = consensusOptions.Value;
+        _blockProposalFactory = blockProposalFactory;
+        _verifyBlockProposal = verifyBlockProposal;
+        _blockFinalitySubmitter = blockFinalitySubmitter;
+        _committedBlockApplier = committedBlockApplier;
     }
 
     public async Task<ProjectEventAnchorResult> AnchorAsync<TPayload>(
@@ -32,11 +46,13 @@ public sealed class ProjectEventAnchorService
         var latest = _blockchainManager.GetLatestBlock(channelId);
         int nextIndex = latest != null ? latest.Index + 1 : 0;
         string previousHash = latest != null ? latest.Hash : "0";
-        string blockData = JsonSerializer.Serialize(payload);
+        string sourcePayloadData = JsonSerializer.Serialize(payload);
+        string blockData = AddOracleAttestation(sourcePayloadData);
         var blockTimestamp = DateTimeOffset.Parse(timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind);
         long timestampUnixSeconds = blockTimestamp.ToUnixTimeSeconds();
         string signableData = $"{nextIndex}{timestampUnixSeconds}{blockData}{previousHash}";
-        string oracleSignature = _oracleIdentity.SignData(signableData);
+        string blockSignerPublicKey = _oracleIdentity.PublicKey;
+        string blockSignature = _oracleIdentity.SignData(signableData);
 
         var block = new Block
         {
@@ -45,39 +61,110 @@ public sealed class ProjectEventAnchorService
             TimestampUnixSeconds = timestampUnixSeconds,
             Data = blockData,
             PreviousHash = previousHash,
-            ValidatorPublicKey = _oracleIdentity.PublicKey,
-            Signature = oracleSignature,
+            ValidatorPublicKey = blockSignerPublicKey,
+            Signature = blockSignature,
             ChannelId = channelId
         };
 
-        _blockchainManager.MineBlock(block);
-        bool accepted = _blockchainManager.ProcessPeerBlock(block);
-        if (!accepted)
+        BlockWriteResult result;
+        if (_consensusOptions.EnableProofOfContributionValidation)
+        {
+            var proposal = _blockProposalFactory.BuildImplicitProposal(block);
+            if (!proposal.Accepted || proposal.Proposal == null)
+            {
+                return new ProjectEventAnchorResult(false, channelId, "", $"poc_proposal_rejected: {proposal.Reason}");
+            }
+
+            if (!_producerIdentity.IsConfigured)
+            {
+                return new ProjectEventAnchorResult(
+                    false,
+                    channelId,
+                    "",
+                    "poc_producer_key_unavailable: Consensus:ProducerKeyPath must be configured on the selected producer node for oracle/Git/IPFS events");
+            }
+
+            if (!string.Equals(_producerIdentity.PublicKey, proposal.Proposal.ContributionProof.ProducerPublicKey, StringComparison.Ordinal))
+            {
+                return new ProjectEventAnchorResult(
+                    false,
+                    channelId,
+                    "",
+                    "poc_producer_key_mismatch: local producer key does not match the deterministic PoC producer for this proposal");
+            }
+
+            block.ValidatorPublicKey = _producerIdentity.PublicKey;
+            block.Signature = _producerIdentity.SignData(signableData);
+            _blockchainManager.MineBlock(block);
+            var producerSignedProposal = new BlockProposal(
+                block,
+                proposal.Proposal.ContributionProof,
+                DateTime.UtcNow);
+            var blockModel = GrpcProjectMapper.ToBlockModel(block);
+            blockModel.ContributionProof = GrpcProjectMapper.ToContributionProofModel(producerSignedProposal.ContributionProof);
+
+            var verification = _verifyBlockProposal.Execute(producerSignedProposal);
+            if (!verification.Accepted)
+            {
+                return new ProjectEventAnchorResult(false, channelId, "", $"poc_verification_rejected: {verification.Reason}");
+            }
+
+            result = await _blockFinalitySubmitter.SubmitAsync(producerSignedProposal, blockModel);
+        }
+        else
+        {
+            _blockchainManager.MineBlock(block);
+            var blockModel = GrpcProjectMapper.ToBlockModel(block);
+            result = await _committedBlockApplier.ApplyAsync(block, blockModel, broadcastToPeers: true);
+        }
+
+        if (!result.Success)
         {
             return new ProjectEventAnchorResult(false, channelId, "", "blockchain_validation_failed");
         }
 
-        await _hubContext.Clients.Group(channelId).SendAsync("NewBlockBroadcast", ToBlockModel(block));
-        await _p2pService.BroadcastBlockAsync(block);
-
         return new ProjectEventAnchorResult(true, channelId, block.Hash, "");
     }
 
-    private static BlockModel ToBlockModel(Block block)
+    private string AddOracleAttestation(string sourcePayloadData)
     {
-        return new BlockModel
+        string signedPayloadBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(sourcePayloadData));
+        string oracleSignature = _oracleIdentity.SignData(signedPayloadBase64);
+
+        try
         {
-            Index = block.Index,
-            Timestamp = block.Timestamp.ToString("O"),
-            TimestampUnixSeconds = block.TimestampUnixSeconds,
-            Data = block.Data,
-            PreviousHash = block.PreviousHash,
-            Hash = block.Hash,
-            ValidatorPublicKey = block.ValidatorPublicKey ?? string.Empty,
-            Signature = block.Signature ?? string.Empty,
-            Nonce = block.Nonce,
-            ChannelId = block.ChannelId
-        };
+            using var doc = JsonDocument.Parse(sourcePayloadData);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                using var stream = new MemoryStream();
+                using (var writer = new Utf8JsonWriter(stream))
+                {
+                    writer.WriteStartObject();
+                    foreach (var property in doc.RootElement.EnumerateObject())
+                    {
+                        property.WriteTo(writer);
+                    }
+
+                    writer.WriteString(OracleAttestation.PublicKeyProperty, _oracleIdentity.PublicKey);
+                    writer.WriteString(OracleAttestation.SignatureProperty, oracleSignature);
+                    writer.WriteString(OracleAttestation.SignedPayloadProperty, signedPayloadBase64);
+                    writer.WriteEndObject();
+                }
+
+                return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            Payload = sourcePayloadData,
+            OraclePublicKey = _oracleIdentity.PublicKey,
+            OracleSignature = oracleSignature,
+            OracleSignedPayloadBase64 = signedPayloadBase64
+        });
     }
 }
 

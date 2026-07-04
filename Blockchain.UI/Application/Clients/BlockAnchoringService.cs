@@ -10,15 +10,21 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
     private readonly BlockchainService.BlockchainServiceClient _blockchainClient;
     private readonly IReadRequestAuthorizer _readAuthorizer;
     private readonly KeyService _keyService;
+    private readonly IConsensusClient _consensusClient;
+    private readonly string _nodeUrl;
 
     public BlockAnchoringService(
         BlockchainService.BlockchainServiceClient blockchainClient,
         IReadRequestAuthorizer readAuthorizer,
-        KeyService keyService)
+        KeyService keyService,
+        IConsensusClient consensusClient,
+        IConfiguration configuration)
     {
         _blockchainClient = blockchainClient;
         _readAuthorizer = readAuthorizer;
         _keyService = keyService;
+        _consensusClient = consensusClient;
+        _nodeUrl = configuration["NodeUrl"] ?? "https://localhost:7066";
     }
 
     public async Task<UserNameAvailabilityResult> CheckUserNameAvailabilityAsync(string userName)
@@ -104,7 +110,12 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
             ChannelId = targetChannel
         };
 
-        await MineBlockLocal(block);
+        var consensus = await _consensusClient.GetProducerInfoAsync(_nodeUrl, targetChannel);
+        await FinalizeBlockHashLocal(block, consensus.RequireProofOfWork);
+        if (consensus.ContributionProof != null)
+        {
+            block.ContributionProof = consensus.ContributionProof;
+        }
 
         var response = await _blockchainClient.ReceiveBlockAsync(block);
         return response.Success
@@ -153,7 +164,7 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         return BitConverter.ToString(sha256.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
     }
 
-    private static async Task MineBlockLocal(BlockModel block)
+    private static async Task FinalizeBlockHashLocal(BlockModel block, bool requireProofOfWork)
     {
         await Task.Delay(10);
 
@@ -164,6 +175,13 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         block.Nonce = 0;
         using var sha256 = SHA256.Create();
         string baseData = $"{block.Index}{timestampComponent}{block.Data}{block.PreviousHash}{block.ValidatorPublicKey}{block.Signature}";
+
+        if (!requireProofOfWork)
+        {
+            byte[] hashBytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(baseData + block.Nonce));
+            block.Hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
+            return;
+        }
 
         while (true)
         {

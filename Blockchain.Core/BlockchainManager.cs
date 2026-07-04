@@ -177,7 +177,7 @@ namespace Blockchain.Core
 
                 if (currentBlock.Hash != currentBlock.CalculateHash()) return false;
                 if (currentBlock.PreviousHash != previousBlock.Hash) return false;
-                if (!currentBlock.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
+                if (NetworkParameters.RequireProofOfWork && !currentBlock.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
                 if (!currentBlock.VerifySignature()) return false;
             }
             return true;

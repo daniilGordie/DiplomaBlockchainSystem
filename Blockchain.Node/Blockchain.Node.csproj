@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="DotNext.Net.Cluster" Version="5.26.2" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.57.0" />
     <PackageReference Include="Grpc.AspNetCore.Web" Version="2.76.0" />
   </ItemGroup>

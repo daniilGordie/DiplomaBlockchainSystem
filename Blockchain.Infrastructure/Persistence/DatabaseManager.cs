@@ -15,6 +15,7 @@ using System.Text.Json;
             public string DbFileName { get; private set; }
             private readonly string _dbPassword;
             private readonly byte[]? _fieldEncryptionKey;
+            private readonly byte[]? _legacyFieldEncryptionKey;
             private const string EncryptedPrefix = "enc:v1:";
             private const int EncryptionTagSize = 16;
 
@@ -31,9 +32,11 @@ using System.Text.Json;
 
                 DbFileName = dbName;
                 _dbPassword = dbPassword;
-                _fieldEncryptionKey = string.IsNullOrWhiteSpace(_dbPassword)
-                    ? null
-                    : SHA256.HashData(Encoding.UTF8.GetBytes($"{_dbPassword}|nexus-field-encryption|{DbFileName}"));
+                if (!string.IsNullOrWhiteSpace(_dbPassword))
+                {
+                    _fieldEncryptionKey = SHA256.HashData(Encoding.UTF8.GetBytes($"{_dbPassword}|nexus-field-encryption"));
+                    _legacyFieldEncryptionKey = SHA256.HashData(Encoding.UTF8.GetBytes($"{_dbPassword}|nexus-field-encryption|{DbFileName}"));
+                }
                 InitializeDatabase();
             }
 
@@ -82,18 +85,49 @@ using System.Text.Json;
                         return string.Empty;
                     }
 
+                    if (TryDecryptString(payload, _fieldEncryptionKey, out string plaintext))
+                    {
+                        return plaintext;
+                    }
+
+                    if (_legacyFieldEncryptionKey is not null &&
+                        !CryptographicOperations.FixedTimeEquals(_fieldEncryptionKey!, _legacyFieldEncryptionKey) &&
+                        TryDecryptString(payload, _legacyFieldEncryptionKey, out plaintext))
+                    {
+                        return plaintext;
+                    }
+
+                    return string.Empty;
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+
+            private static bool TryDecryptString(byte[] payload, byte[]? key, out string value)
+            {
+                value = string.Empty;
+                if (key is not { Length: > 0 })
+                {
+                    return false;
+                }
+
+                try
+                {
                     byte[] nonce = payload[..12];
                     byte[] tag = payload[12..28];
                     byte[] ciphertext = payload[28..];
                     byte[] plaintext = new byte[ciphertext.Length];
 
-                    using var aes = new AesGcm(_fieldEncryptionKey!, EncryptionTagSize);
+                    using var aes = new AesGcm(key, EncryptionTagSize);
                     aes.Decrypt(nonce, ciphertext, tag, plaintext);
-                    return Encoding.UTF8.GetString(plaintext);
+                    value = Encoding.UTF8.GetString(plaintext);
+                    return true;
                 }
                 catch
                 {
-                    return string.Empty;
+                    return false;
                 }
             }
 
@@ -195,6 +229,18 @@ using System.Text.Json;
                     CREATE INDEX IF NOT EXISTS idx_pending_prev ON PendingBlocks(ChannelId, PreviousHash);";
                     cmd.ExecuteNonQuery();
                     EnsureColumn(connection, "PendingBlocks", "TimestampUnixSeconds", "INTEGER NOT NULL DEFAULT 0");
+
+                    cmd.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS BlockFinalityMetadata (
+                        BlockHash TEXT PRIMARY KEY,
+                        ChannelId TEXT NOT NULL,
+                        FinalityMode TEXT NOT NULL,
+                        RaftLogIndex INTEGER,
+                        RaftTerm INTEGER,
+                        CommittedAtUtc TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_finality_channel ON BlockFinalityMetadata(ChannelId);";
+                    cmd.ExecuteNonQuery();
 
                     cmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS Peers (
@@ -1338,6 +1384,22 @@ using System.Text.Json;
                 return DecryptString(cmd.ExecuteScalar()?.ToString());
             }
 
+            public void SaveUserPublicKey(string userName, string publicKey)
+            {
+                if (string.IsNullOrWhiteSpace(userName) || string.IsNullOrWhiteSpace(publicKey))
+                {
+                    return;
+                }
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = "INSERT OR REPLACE INTO Users (UserName, PublicKey) VALUES ($user, $publicKey)";
+                cmd.Parameters.AddWithValue("$user", userName.Trim());
+                cmd.Parameters.AddWithValue("$publicKey", EncryptString(publicKey));
+                cmd.ExecuteNonQuery();
+            }
+
             public void ClearMempool()
             {
                 using var connection = new SqliteConnection(ConnectionString);
@@ -1346,6 +1408,63 @@ using System.Text.Json;
                 cmd.CommandText = "DELETE FROM Mempool";
                 cmd.ExecuteNonQuery();
             }
+
+            public void SaveFinalityMetadata(BlockFinalityMetadata metadata)
+            {
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT OR REPLACE INTO BlockFinalityMetadata
+                    (BlockHash, ChannelId, FinalityMode, RaftLogIndex, RaftTerm, CommittedAtUtc)
+                VALUES
+                    ($hash, $channel, $mode, $raftIndex, $raftTerm, $committedAt);";
+                cmd.Parameters.AddWithValue("$hash", metadata.BlockHash);
+                cmd.Parameters.AddWithValue("$channel", SanitizeChannelName(metadata.ChannelId));
+                cmd.Parameters.AddWithValue("$mode", metadata.FinalityMode);
+                cmd.Parameters.AddWithValue("$raftIndex", metadata.RaftLogIndex.HasValue ? metadata.RaftLogIndex.Value : DBNull.Value);
+                cmd.Parameters.AddWithValue("$raftTerm", metadata.RaftTerm.HasValue ? metadata.RaftTerm.Value : DBNull.Value);
+                cmd.Parameters.AddWithValue("$committedAt", metadata.CommittedAtUtc.ToUniversalTime().ToString("O"));
+                cmd.ExecuteNonQuery();
+            }
+
+            public BlockFinalityMetadata? GetFinalityMetadata(string blockHash)
+            {
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                SELECT BlockHash, ChannelId, FinalityMode, RaftLogIndex, RaftTerm, CommittedAtUtc
+                FROM BlockFinalityMetadata
+                WHERE BlockHash = $hash
+                LIMIT 1;";
+                cmd.Parameters.AddWithValue("$hash", blockHash);
+
+                using var reader = cmd.ExecuteReader();
+                if (!reader.Read())
+                {
+                    return null;
+                }
+
+                return new BlockFinalityMetadata(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                    reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                    DateTime.TryParse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var committedAt)
+                        ? committedAt.ToUniversalTime()
+                        : DateTime.MinValue);
+            }
+
+            public bool HasFinalityMetadata(string blockHash)
+            {
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = "SELECT 1 FROM BlockFinalityMetadata WHERE BlockHash = $hash LIMIT 1";
+                cmd.Parameters.AddWithValue("$hash", blockHash);
+                return cmd.ExecuteScalar() != null;
+            }
         }
     }
-

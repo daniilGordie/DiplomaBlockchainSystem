@@ -22,6 +22,9 @@ public sealed class SqliteBlockStore : IBlockchainStore
     public void SavePendingBlock(Block block, string reason) => _database.SavePendingBlock(block, reason);
     public List<Block> LoadPendingChildren(string previousHash, string channelId) => _database.LoadPendingChildren(previousHash, channelId);
     public void RemovePendingBlock(string blockHash) => _database.RemovePendingBlock(blockHash);
+    public void SaveFinalityMetadata(BlockFinalityMetadata metadata) => _database.SaveFinalityMetadata(metadata);
+    public BlockFinalityMetadata? GetFinalityMetadata(string blockHash) => _database.GetFinalityMetadata(blockHash);
+    public bool HasFinalityMetadata(string blockHash) => _database.HasFinalityMetadata(blockHash);
     public List<string> GetUserProjects(string userName) => _database.GetUserProjects(userName);
     public string? GetUserPublicKey(string userName) => _database.GetUserPublicKey(userName);
     public string GetUserRole(string projectId, string userName) => _database.GetUserRole(projectId, userName);

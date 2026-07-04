@@ -12,7 +12,8 @@ public sealed record SecurityAuditResult(
     int InvalidSignatures,
     int InvalidProofOfWork,
     int BrokenLinks,
+    int InvalidFinalityMetadata,
     IReadOnlyList<SecurityAuditFinding> Items)
 {
-    public int FindingCount => InvalidHashes + InvalidSignatures + InvalidProofOfWork + BrokenLinks;
+    public int FindingCount => InvalidHashes + InvalidSignatures + InvalidProofOfWork + BrokenLinks + InvalidFinalityMetadata;
 }

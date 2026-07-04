@@ -44,7 +44,7 @@ public sealed class PeerBlockValidator
         if (!peerBlock.VerifySignature()) return PeerBlockValidationResult.Reject("invalid signature");
         if (peerBlock.Hash != peerBlock.CalculateHash()) return PeerBlockValidationResult.Reject("invalid hash");
         if (!_executor.Execute(peerBlock.Data, peerBlock.ValidatorPublicKey, _smartContractState)) return PeerBlockValidationResult.Reject("contract rejected");
-        if (!peerBlock.Hash.StartsWith(NetworkParameters.TargetPrefix)) return PeerBlockValidationResult.Reject("proof of work rejected");
+        if (NetworkParameters.RequireProofOfWork && !peerBlock.Hash.StartsWith(NetworkParameters.TargetPrefix)) return PeerBlockValidationResult.Reject("proof of work rejected");
 
         return PeerBlockValidationResult.Accept();
     }

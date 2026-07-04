@@ -23,6 +23,7 @@ builder.Services.AddScoped<INodeClientFactory, NodeClientFactory>();
 builder.Services.AddScoped<IGitIntegrationClient, GitIntegrationClient>();
 builder.Services.AddScoped<IIpfsIntegrationClient, IpfsIntegrationClient>();
 builder.Services.AddScoped<IArtifactIntegrationClient, ArtifactIntegrationClient>();
+builder.Services.AddScoped<IConsensusClient, ConsensusClient>();
 builder.Services.AddScoped<IBlockchainRealtimeClient, BlockchainRealtimeClient>();
 builder.Services.AddScoped<IProjectRepositoryDataService, ProjectRepositoryDataService>();
 builder.Services.AddScoped<IProjectWorkspaceDataService, ProjectWorkspaceDataService>();
