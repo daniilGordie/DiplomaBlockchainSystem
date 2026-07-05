@@ -25,3 +25,18 @@ public sealed class ImmediateBlockFinalitySubmitter : IBlockFinalitySubmitter
             broadcastToPeers: true);
     }
 }
+
+public sealed class EdgeBlockFinalitySubmitter : IBlockFinalitySubmitter
+{
+    private readonly IrohProposalForwarder _forwarder;
+
+    public EdgeBlockFinalitySubmitter(IrohProposalForwarder forwarder)
+    {
+        _forwarder = forwarder;
+    }
+
+    public Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel)
+    {
+        return _forwarder.ForwardAsync(proposal, sourceModel);
+    }
+}

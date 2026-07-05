@@ -65,6 +65,12 @@ struct ChainRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct SubmitBlockRequest {
+    peer: String,
+    block: Value,
+}
+
+#[derive(Debug, Deserialize)]
 struct BroadcastRequest {
     peers: Vec<String>,
     block: Value,
@@ -165,6 +171,7 @@ async fn main() -> Result<()> {
         .route("/broadcast-block", post(broadcast_block))
         .route("/known-channels", post(known_channels))
         .route("/chain", post(chain))
+        .route("/submit-block", post(submit_block))
         .with_state(state);
 
     info!("nexus iroh sidecar node_id={}", endpoint.id());
@@ -285,6 +292,28 @@ async fn chain(
     }
 }
 
+async fn submit_block(
+    State(state): State<AppState>,
+    Json(request): Json<SubmitBlockRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let response = send_wire_message(
+        &state,
+        &request.peer,
+        &WireMessage {
+            kind: "SubmitBlock".to_string(),
+            payload: request.block,
+        },
+    )
+    .await
+    .map_err(internal_error)?;
+
+    if response.success {
+        Ok(Json(response.payload))
+    } else {
+        Err((StatusCode::BAD_GATEWAY, response.message))
+    }
+}
+
 async fn handle_iroh_connection(state: AppState, connection: iroh::endpoint::Connection) -> Result<()> {
     let (mut send, mut recv) = connection.accept_bi().await?;
     let bytes = recv.read_to_end(16 * 1024 * 1024).await?;
@@ -342,6 +371,25 @@ async fn handle_wire_message(state: AppState, message: WireMessage) -> WireRespo
                 },
             }
         }
+        "SubmitBlock" => match local_post(&state, "/api/p2p/iroh/submit-block", &message.payload).await {
+            Ok(payload) => WireResponse {
+                success: payload
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                message: payload
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("submit-block completed")
+                    .to_string(),
+                payload,
+            },
+            Err(err) => WireResponse {
+                success: false,
+                message: format!("{err:#}"),
+                payload: json!({}),
+            },
+        },
         other => WireResponse {
             success: false,
             message: format!("unsupported message kind: {other}"),
@@ -370,6 +418,25 @@ async fn local_get(state: &AppState, path: &str) -> Result<Value> {
         .http
         .get(format!("{}{}", state.node_url, path))
         .header("X-Nexus-Iroh-Token", &state.local_api_token)
+        .send()
+        .await
+        .context("local node request failed")?;
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!("local node returned HTTP {status}: {text}"));
+    }
+
+    Ok(serde_json::from_str(&text)?)
+}
+
+async fn local_post(state: &AppState, path: &str, payload: &Value) -> Result<Value> {
+    let response = state
+        .http
+        .post(format!("{}{}", state.node_url, path))
+        .header("X-Nexus-Iroh-Token", &state.local_api_token)
+        .json(payload)
         .send()
         .await
         .context("local node request failed")?;

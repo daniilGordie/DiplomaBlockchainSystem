@@ -16,14 +16,16 @@ public static class ConsensusEndpoints
             IChainReader chainReader,
             BlockProposalFactory proposalFactory,
             IOptions<ConsensusOptions> consensusOptions,
+            IOptions<NexusNodeOptions> nodeOptions,
             IOptions<RaftOptions> raftOptions,
             IServiceProvider services) =>
         {
             string channelId = ChannelName.Normalize(projectId);
             var consensus = consensusOptions.Value;
+            var node = nodeOptions.Value;
             var raft = raftOptions.Value;
-            bool raftClusterRegistered = IsRaftClusterAvailable(consensus, raft, services);
-            var raftStatus = BuildRaftStatus(consensus, raft, raftClusterRegistered);
+            bool raftClusterRegistered = IsRaftClusterAvailable(consensus, node, raft, services);
+            var raftStatus = BuildRaftStatus(consensus, node, raft, raftClusterRegistered);
             var latest = chainReader.GetLatestBlock(channelId);
             int nextIndex = latest != null ? latest.Index + 1 : 0;
 
@@ -72,14 +74,16 @@ public static class ConsensusEndpoints
 
         endpoints.MapGet("/api/consensus/raft/status", (
             IOptions<ConsensusOptions> consensusOptions,
+            IOptions<NexusNodeOptions> nodeOptions,
             IOptions<RaftOptions> raftOptions,
             IServiceProvider services) =>
         {
             var consensus = consensusOptions.Value;
+            var node = nodeOptions.Value;
             var raft = raftOptions.Value;
-            var cluster = TryGetRaftCluster(consensus, raft, services);
+            var cluster = TryGetRaftCluster(consensus, node, raft, services);
             bool clusterRegistered = cluster != null;
-            var baseStatus = BuildRaftStatus(consensus, raft, clusterRegistered);
+            var baseStatus = BuildRaftStatus(consensus, node, raft, clusterRegistered);
 
             return Results.Json(new RaftRuntimeStatusResponse(
                 baseStatus,
@@ -96,13 +100,17 @@ public static class ConsensusEndpoints
 
     private static RaftStatusResponse BuildRaftStatus(
         ConsensusOptions consensus,
+        NexusNodeOptions node,
         RaftOptions raft,
         bool raftClusterRegistered)
     {
-        bool requested = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase);
-        bool configured = raft.HasMinimumConfiguration;
+        bool raftFinality = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase);
+        bool requested = raftFinality && node.IsConsensusMember;
+        bool configured = node.IsConsensusMember && raft.HasMinimumConfiguration;
         bool ready = requested && configured && raftClusterRegistered;
-        string status = !requested
+        string status = raftFinality && node.IsEdge
+            ? "edge_node_uses_remote_consensus"
+            : !requested
             ? "not_requested"
             : !configured
                 ? "missing_configuration"
@@ -119,15 +127,18 @@ public static class ConsensusEndpoints
             raft.NodeId,
             raft.PublicEndPoint,
             raft.LogPath,
-            raft.Peers.Select(peer => new RaftPeerResponse(peer.Id, peer.EndPoint)).ToArray());
+            raft.Peers.Select(peer => new RaftPeerResponse(peer.Id, peer.EndPoint)).ToArray(),
+            node.EffectiveRole.ToString());
     }
 
     private static bool IsRaftClusterAvailable(
         ConsensusOptions consensus,
+        NexusNodeOptions node,
         RaftOptions raft,
         IServiceProvider services)
     {
-        bool requested = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase);
+        bool requested = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase)
+                         && node.IsConsensusMember;
         if (!requested || !raft.HasMinimumConfiguration)
         {
             return false;
@@ -145,10 +156,12 @@ public static class ConsensusEndpoints
 
     private static IRaftCluster? TryGetRaftCluster(
         ConsensusOptions consensus,
+        NexusNodeOptions node,
         RaftOptions raft,
         IServiceProvider services)
     {
         if (!string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase) ||
+            !node.IsConsensusMember ||
             !raft.HasMinimumConfiguration)
         {
             return null;
@@ -212,7 +225,8 @@ public sealed record RaftStatusResponse(
     string NodeId,
     string PublicEndPoint,
     string LogPath,
-    IReadOnlyList<RaftPeerResponse> Peers);
+    IReadOnlyList<RaftPeerResponse> Peers,
+    string NodeRole);
 
 public sealed record RaftRuntimeStatusResponse(
     RaftStatusResponse Configuration,

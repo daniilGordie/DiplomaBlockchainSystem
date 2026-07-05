@@ -107,6 +107,31 @@ public sealed class IrohSidecarClient
         return chain?.Blocks ?? Array.Empty<BlockModel>();
     }
 
+    public async Task<IrohSubmitBlockResponse> SubmitBlockAsync(string peerUrl, BlockModel block, CancellationToken cancellationToken = default)
+    {
+        string peer = ParseIrohPeerAddress(peerUrl);
+        if (!Enabled || string.IsNullOrWhiteSpace(peer))
+        {
+            return new IrohSubmitBlockResponse(false, "Iroh sidecar is disabled or peer URL is not an iroh:// URL.", block.ChannelId);
+        }
+
+        var response = await _httpClient.PostAsJsonAsync(
+            $"{_options.Iroh.NormalizedSidecarUrl}/submit-block",
+            new IrohSubmitBlockRequest(peer, block),
+            JsonOptions,
+            cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            string body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("[Iroh] SubmitBlock failed with HTTP {StatusCode}: {Body}", (int)response.StatusCode, body);
+            return new IrohSubmitBlockResponse(false, $"Iroh SubmitBlock failed with HTTP {(int)response.StatusCode}: {body}", block.ChannelId);
+        }
+
+        return await response.Content.ReadFromJsonAsync<IrohSubmitBlockResponse>(JsonOptions, cancellationToken)
+            ?? new IrohSubmitBlockResponse(false, "Iroh SubmitBlock returned an empty response.", block.ChannelId);
+    }
+
     public async Task<IReadOnlyList<BlockModel>> DrainEventsAsync(CancellationToken cancellationToken = default)
     {
         if (!Enabled) return Array.Empty<BlockModel>();
@@ -144,7 +169,9 @@ public sealed class IrohSidecarClient
 public sealed record IrohStatus(string NodeId, string PublicUrl, string[] DirectAddresses, string RelayUrl);
 public sealed record IrohPeerRequest(string Peer);
 public sealed record IrohChainRequest(string Peer, string ChannelId);
+public sealed record IrohSubmitBlockRequest(string Peer, BlockModel Block);
 public sealed record IrohBroadcastBlockRequest(string[] Peers, BlockModel Block);
 public sealed record IrohKnownChannelsResponse(string[] ChannelIds);
 public sealed record IrohChainResponse(BlockModel[] Blocks);
 public sealed record IrohEventsResponse(BlockModel[] Blocks);
+public sealed record IrohSubmitBlockResponse(bool Success, string Message, string ChannelId);

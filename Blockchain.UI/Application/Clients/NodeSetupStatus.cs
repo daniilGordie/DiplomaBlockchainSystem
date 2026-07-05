@@ -2,6 +2,7 @@ namespace Blockchain.UI.Application.Clients;
 
 public sealed record NodeSetupStatus(
     string NodeId,
+    string NodeRole,
     string Role,
     string PublicUrl,
     string[] BootstrapPeers,

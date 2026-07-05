@@ -43,6 +43,24 @@ public static class IrohP2PEndpoints
             return Results.Json(new IrohChainResponse(blocks));
         });
 
+        endpoints.MapPost("/api/p2p/iroh/submit-block", async (
+            BlockModel block,
+            HttpContext context,
+            GrpcBlockProcessor blockProcessor,
+            IOptions<P2POptions> options) =>
+        {
+            if (!IsAuthorized(context, options.Value))
+            {
+                return Results.Unauthorized();
+            }
+
+            var result = await blockProcessor.ProcessReceivedAsync(block);
+            return Results.Json(new IrohSubmitBlockResponse(
+                result.Success,
+                result.Message,
+                result.ChannelId));
+        });
+
         return endpoints;
     }
 

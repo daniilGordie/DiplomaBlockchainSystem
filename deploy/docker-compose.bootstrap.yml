@@ -11,6 +11,7 @@ services:
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
       Kestrel__Endpoints__P2PGrpc__Protocols: Http2
       ConnectionStrings__DefaultNodeDb: ${NODE_DB_PATH:-/data/bootstrap-node.db}
+      Node__Role: ${NODE_ROLE:-Bootstrap}
       NodeDbPassword: ${NODE_DB_PASSWORD}
       NodeAdminToken: ${NODE_ADMIN_TOKEN}
       WebhookSecret: ${WEBHOOK_SECRET}

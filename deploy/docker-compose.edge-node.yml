@@ -1,5 +1,5 @@
 services:
-  full-node:
+  edge-node:
     build:
       context: ..
       dockerfile: Blockchain.Node/Dockerfile
@@ -10,28 +10,20 @@ services:
       Kestrel__Endpoints__Public__Protocols: Http1
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
       Kestrel__Endpoints__P2PGrpc__Protocols: Http2
-      ConnectionStrings__DefaultNodeDb: ${NODE_DB_PATH:-/data/full-node.db}
-      Node__Role: ${NODE_ROLE:-Consensus}
+      ConnectionStrings__DefaultNodeDb: ${NODE_DB_PATH:-/data/edge-node.db}
+      Node__Role: ${NODE_ROLE:-Edge}
       NodeDbPassword: ${NODE_DB_PASSWORD}
       NodeAdminToken: ${NODE_ADMIN_TOKEN}
       WebhookSecret: ${WEBHOOK_SECRET}
       OraclePublicKey: ${ORACLE_PUBLIC_KEY}
       OraclePrivateKeyPassword: ${ORACLE_PRIVATE_KEY_PASSWORD}
       OracleKeyPath: ${ORACLE_KEY_PATH:-/data/oracle_key.dat}
-      Consensus__EnableProofOfContributionValidation: ${CONSENSUS_ENABLE_POC:-false}
-      Consensus__RequireProofOfWork: ${CONSENSUS_REQUIRE_PROOF_OF_WORK:-true}
-      Consensus__AcceptP2PBlocksAsFinal: ${CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL:-true}
-      Consensus__FinalityMode: ${CONSENSUS_FINALITY_MODE:-Immediate}
+      Consensus__EnableProofOfContributionValidation: ${CONSENSUS_ENABLE_POC:-true}
+      Consensus__RequireProofOfWork: ${CONSENSUS_REQUIRE_PROOF_OF_WORK:-false}
+      Consensus__AcceptP2PBlocksAsFinal: ${CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL:-false}
+      Consensus__FinalityMode: ${CONSENSUS_FINALITY_MODE:-Raft}
       Consensus__ProducerKeyPath: ${CONSENSUS_PRODUCER_KEY_PATH:-}
       Consensus__ProducerPrivateKeyPassword: ${CONSENSUS_PRODUCER_KEY_PASSWORD:-}
-      Raft__NodeId: ${RAFT_NODE_ID:-}
-      Raft__PublicEndPoint: ${RAFT_PUBLIC_ENDPOINT:-}
-      Raft__LogPath: ${RAFT_LOG_PATH:-/data/raft-log}
-      Raft__UsePersistentMembership: ${RAFT_USE_PERSISTENT_MEMBERSHIP:-true}
-      Raft__MembershipPath: ${RAFT_MEMBERSHIP_PATH:-/data/raft-membership}
-      Raft__SnapshotPath: ${RAFT_SNAPSHOT_PATH:-/data/raft-snapshots}
-      Raft__Peers__0__Id: ${RAFT_PEER_ID:-}
-      Raft__Peers__0__EndPoint: ${RAFT_PEER_ENDPOINT:-}
       P2P__NodeRole: Full
       P2P__NodeId: ${P2P_NODE_ID:-}
       P2P__PublicUrl: ""
@@ -47,14 +39,13 @@ services:
       NodeVersion__UpdateManifestUrl: ${UPDATE_MANIFEST_URL:-}
       Logging__LogLevel__System.Net.Http.HttpClient: Warning
     volumes:
-      - full-node-data:/data
+      - edge-node-data:/data
     depends_on:
       iroh-sidecar:
         condition: service_healthy
     ports:
       - "${NODE_HTTP_PORT:-7042}:5041"
       - "${NODE_GRPC_PORT:-7142}:5042"
-      - "${RAFT_PORT:-6042}:${RAFT_PORT:-6042}"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
       interval: 30s
@@ -69,7 +60,7 @@ services:
     restart: unless-stopped
     environment:
       NEXUS_IROH_LISTEN: 0.0.0.0:49152
-      NEXUS_NODE_URL: http://full-node:5041
+      NEXUS_NODE_URL: http://edge-node:5041
       NEXUS_IROH_TOKEN: ${IROH_LOCAL_API_TOKEN}
       NEXUS_IROH_SECRET_KEY_PATH: ${IROH_SECRET_KEY_PATH:-/data/iroh-secret.key}
       NEXUS_IROH_RELAY_MODE: ${IROH_RELAY_MODE:-default}
@@ -84,5 +75,5 @@ services:
       start_period: 10s
 
 volumes:
-  full-node-data:
+  edge-node-data:
   iroh-sidecar-data:

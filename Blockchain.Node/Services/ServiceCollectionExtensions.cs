@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddNexusNodeServices(this IServiceCollection services, DatabaseManager databaseManager)
     {
         services.AddOptions<P2POptions>().BindConfiguration("P2P");
+        services.AddOptions<NexusNodeOptions>().BindConfiguration("Node");
         services.AddOptions<NodeVersionOptions>().BindConfiguration("NodeVersion");
         services.AddOptions<ConsensusOptions>().BindConfiguration("Consensus");
         services.AddOptions<RaftOptions>().BindConfiguration("Raft");
@@ -51,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<NodeIdentity>();
         services.AddSingleton<PeerRegistrationSecurity>();
         services.AddHttpClient<IrohSidecarClient>();
+        services.AddSingleton<IrohProposalForwarder>();
         services.AddHostedService<NodeIdentityWarmupService>();
         services.AddHostedService<P2PBootstrapService>();
         services.AddHostedService<IrohInboundPump>();
@@ -70,6 +72,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IBlockFinalitySubmitter>(sp =>
         {
             var mode = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ConsensusOptions>>().Value.FinalityMode;
+            var nodeOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<NexusNodeOptions>>().Value;
             if (string.Equals(mode, ConsensusFinalityModes.Immediate, StringComparison.OrdinalIgnoreCase))
             {
                 return ActivatorUtilities.CreateInstance<ImmediateBlockFinalitySubmitter>(sp);
@@ -77,6 +80,16 @@ public static class ServiceCollectionExtensions
 
             if (string.Equals(mode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase))
             {
+                if (nodeOptions.IsEdge)
+                {
+                    return ActivatorUtilities.CreateInstance<EdgeBlockFinalitySubmitter>(sp);
+                }
+
+                if (!nodeOptions.IsConsensusMember)
+                {
+                    throw new InvalidOperationException($"Consensus:FinalityMode=Raft requires Node:Role=Bootstrap, Consensus, or Edge. Current role: {nodeOptions.EffectiveRole}.");
+                }
+
                 var raftOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<RaftOptions>>().Value;
                 if (!raftOptions.HasMinimumConfiguration)
                 {

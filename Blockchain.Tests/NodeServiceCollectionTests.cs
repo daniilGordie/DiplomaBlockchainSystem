@@ -146,6 +146,57 @@ public class NodeServiceCollectionTests
         }
     }
 
+    [Fact]
+    public void AddNexusNodeServices_ShouldAllowEdgeNodeWithoutLocalRaftConfiguration()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"nexus-di-edge-{Guid.NewGuid():N}.db");
+
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["NodeDbPassword"] = "test-password",
+                    ["NodeDatabase"] = dbPath,
+                    ["Node:Role"] = "Edge",
+                    ["P2P:Iroh:Enabled"] = "true",
+                    ["P2P:Iroh:LocalApiToken"] = "test-iroh-token",
+                    ["Consensus:FinalityMode"] = "Raft"
+                })
+                .Build();
+
+            var database = new DatabaseManager(dbPath, "test-password");
+            var services = new ServiceCollection();
+            services.AddSingleton<IConfiguration>(configuration);
+            services.AddSingleton<IHostApplicationLifetime, TestHostApplicationLifetime>();
+            services.AddLogging();
+            services.AddSignalR();
+            services.AddNexusNodeServices(database);
+
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateOnBuild = true,
+                ValidateScopes = true
+            });
+
+            Assert.IsType<EdgeBlockFinalitySubmitter>(provider.GetRequiredService<IBlockFinalitySubmitter>());
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(dbPath))
+                {
+                    File.Delete(dbPath);
+                }
+            }
+            catch (IOException)
+            {
+                // SQLite may keep a pooled handle briefly on Windows after DI validation.
+            }
+        }
+    }
+
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime
     {
         private readonly CancellationTokenSource _started = new();
