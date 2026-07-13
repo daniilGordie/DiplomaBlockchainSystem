@@ -244,8 +244,9 @@ namespace Blockchain.Node.Services
                 _logger.LogWarning("[Security] Accepted legacy token-based peer registration for {PublicUrl}. Configure signed node identity before production.", publicUrl);
             }
 
-            if (_peerStore.LoadPeerInfos().Count >= Math.Clamp(_p2pOptions.MaxRegisteredPeers, 1, 100000)
-                && !_peerStore.LoadPeerInfos().Any(peerInfo => string.Equals(peerInfo.Url, publicUrl, StringComparison.OrdinalIgnoreCase)))
+            var allKnownPeers = _peerStore.LoadAllPeerInfos();
+            if (allKnownPeers.Count >= Math.Clamp(_p2pOptions.MaxRegisteredPeers, 1, 100000)
+                && !allKnownPeers.Any(peerInfo => string.Equals(peerInfo.Url, publicUrl, StringComparison.OrdinalIgnoreCase)))
             {
                 return Task.FromResult(new StatusReply { Success = false, Message = "Peer directory is full" });
             }
@@ -254,12 +255,12 @@ namespace Blockchain.Node.Services
                 publicUrl,
                 request.NodeId?.Trim() ?? string.Empty,
                 role,
+                IsTrusted: false,
                 NodePublicKey: request.NodePublicKey?.Trim() ?? string.Empty);
             _peerStore.SavePeer(peer);
-            _p2pService.AddPeer(publicUrl);
 
-            _logger.LogInformation("[P2P] Registered peer {NodeId} ({Role}) at {PublicUrl}.", peer.NodeId, peer.Role, peer.Url);
-            return Task.FromResult(new StatusReply { Success = true, Message = "Peer registered" });
+            _logger.LogInformation("[P2P] Registered peer {NodeId} ({Role}) at {PublicUrl} pending approval.", peer.NodeId, peer.Role, peer.Url);
+            return Task.FromResult(new StatusReply { Success = true, Message = "Peer registered pending approval" });
         }
 
         public override Task<PeerDirectoryResponse> GetPeerDirectory(EmptyRequest request, ServerCallContext context)

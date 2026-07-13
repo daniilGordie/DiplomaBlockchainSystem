@@ -13,6 +13,7 @@ public sealed class GrpcBlockProcessor
     private readonly BlockNotificationService _notifications;
     private readonly VerifyBlockProposalUseCase _verifyBlockProposal;
     private readonly BlockProposalFactory _blockProposalFactory;
+    private readonly PeerBlockValidator _peerBlockValidator;
     private readonly ConsensusOptions _consensusOptions;
     private readonly ILogger<GrpcBlockProcessor> _logger;
 
@@ -23,6 +24,7 @@ public sealed class GrpcBlockProcessor
         BlockNotificationService notifications,
         VerifyBlockProposalUseCase verifyBlockProposal,
         BlockProposalFactory blockProposalFactory,
+        PeerBlockValidator peerBlockValidator,
         IOptions<ConsensusOptions> consensusOptions,
         ILogger<GrpcBlockProcessor> logger)
     {
@@ -32,6 +34,7 @@ public sealed class GrpcBlockProcessor
         _notifications = notifications;
         _verifyBlockProposal = verifyBlockProposal;
         _blockProposalFactory = blockProposalFactory;
+        _peerBlockValidator = peerBlockValidator;
         _consensusOptions = consensusOptions.Value;
         _logger = logger;
     }
@@ -72,6 +75,18 @@ public sealed class GrpcBlockProcessor
                 if (!verification.Accepted)
                 {
                     return new GrpcBlockProcessResult(false, $"PoC verification rejected: {verification.Reason}", block.ChannelId);
+                }
+
+                var blockValidation = _peerBlockValidator.Validate(block);
+                if (blockValidation.Status == PeerBlockValidationStatus.AlreadyAccepted)
+                {
+                    return new GrpcBlockProcessResult(true, "Block already accepted", block.ChannelId);
+                }
+
+                if (blockValidation.Status != PeerBlockValidationStatus.Accepted &&
+                    blockValidation.Status != PeerBlockValidationStatus.AlreadyAccepted)
+                {
+                    return new GrpcBlockProcessResult(false, $"Block preflight rejected: {blockValidation.Reason}", block.ChannelId);
                 }
 
                 var committed = await _blockFinalitySubmitter.SubmitAsync(proposal.Proposal, request);

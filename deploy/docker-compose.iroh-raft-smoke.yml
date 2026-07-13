@@ -1,0 +1,165 @@
+name: nexus-iroh-raft-smoke
+
+x-node-env: &node-env
+  ASPNETCORE_ENVIRONMENT: Production
+  Kestrel__Endpoints__Public__Url: http://+:5041
+  Kestrel__Endpoints__Public__Protocols: Http1
+  Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+  Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+  ConnectionStrings__DefaultNodeDb: /data/node.db
+  Node__Role: Consensus
+  NodeDbPassword: local-raft-db-password
+  NodeAdminToken: local-raft-admin-token
+  WebhookSecret: local-raft-webhook-secret
+  OraclePublicKey: auto
+  OraclePrivateKeyPassword: local-raft-oracle-password
+  OracleKeyPath: /keys/oracle_key.dat
+  Consensus__EnableProofOfContributionValidation: "true"
+  Consensus__RequireProofOfWork: "false"
+  Consensus__AcceptP2PBlocksAsFinal: "false"
+  Consensus__FinalityMode: Raft
+  Consensus__ProducerKeyPath: /keys/producer-key.dat
+  Consensus__ProducerPrivateKeyPassword: local-raft-producer-password
+  Raft__Transport: Iroh
+  Raft__LogPath: /data/raft-log
+  Raft__UsePersistentMembership: "true"
+  Raft__MembershipPath: /data/raft-membership
+  Raft__SnapshotPath: /data/raft-snapshots
+  Raft__Snapshot__Enabled: "true"
+  Raft__Snapshot__EntryThreshold: "1"
+  Raft__Snapshot__SizeThresholdBytes: "1048576"
+  Raft__Snapshot__RetainCount: "2"
+  Raft__IrohControlEndPoint: 127.0.0.1:60411
+  Raft__IrohNodeListenEndPoint: 127.0.0.1:60410
+  P2P__NodeRole: Full
+  P2P__PublicUrl: ""
+  P2P__SyncToken: local-raft-sync-token
+  P2P__RegistrationToken: local-raft-registration-token
+  P2P__IdentityKeyPath: /data/node-identity.p256.key
+  P2P__DiscoveryIntervalSeconds: 3600
+  P2P__AllowRegistrationTokenFallback: "false"
+  P2P__Iroh__Enabled: "true"
+  P2P__Iroh__SidecarUrl: http://127.0.0.1:49152
+  P2P__Iroh__LocalApiToken: local-iroh-raft-token
+  Logging__LogLevel__System.Net.Http.HttpClient: Warning
+
+x-sidecar-env: &sidecar-env
+  NEXUS_IROH_LISTEN: 127.0.0.1:49152
+  NEXUS_NODE_URL: http://127.0.0.1:5041
+  NEXUS_IROH_TOKEN: local-iroh-raft-token
+  NEXUS_IROH_RELAY_MODE: ${NEXUS_IROH_RELAY_MODE:-default}
+  NEXUS_IROH_RAFT_LISTEN: 127.0.0.1:60411
+  NEXUS_IROH_RAFT_NODE_LISTEN: 127.0.0.1:60410
+  RUST_LOG: info,nexus_iroh_sidecar=info
+
+services:
+  node-a:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    environment:
+      <<: *node-env
+      Raft__NodeId: node-a
+      Raft__IrohNodeId: ${NODE_A_IROH_ID}
+      Raft__Peers__0__Id: node-b
+      Raft__Peers__0__EndPoint: iroh://${NODE_B_IROH_ID}
+      Raft__Peers__1__Id: node-c
+      Raft__Peers__1__EndPoint: iroh://${NODE_C_IROH_ID}
+      P2P__NodeId: node-a
+    volumes:
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/node-a:/data
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/shared:/keys
+    ports:
+      - "7452:5041"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  node-b:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    environment:
+      <<: *node-env
+      Raft__NodeId: node-b
+      Raft__IrohNodeId: ${NODE_B_IROH_ID}
+      Raft__Peers__0__Id: node-a
+      Raft__Peers__0__EndPoint: iroh://${NODE_A_IROH_ID}
+      Raft__Peers__1__Id: node-c
+      Raft__Peers__1__EndPoint: iroh://${NODE_C_IROH_ID}
+      P2P__NodeId: node-b
+    volumes:
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/node-b:/data
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/shared:/keys
+    ports:
+      - "7453:5041"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  node-c:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    environment:
+      <<: *node-env
+      Raft__NodeId: node-c
+      Raft__IrohNodeId: ${NODE_C_IROH_ID}
+      Raft__Peers__0__Id: node-a
+      Raft__Peers__0__EndPoint: iroh://${NODE_A_IROH_ID}
+      Raft__Peers__1__Id: node-b
+      Raft__Peers__1__EndPoint: iroh://${NODE_B_IROH_ID}
+      P2P__NodeId: node-c
+    volumes:
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/node-c:/data
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/shared:/keys
+    ports:
+      - "7454:5041"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  sidecar-a:
+    image: nexus-iroh-sidecar-smoke:latest
+    network_mode: "service:node-a"
+    depends_on:
+      node-a:
+        condition: service_started
+    environment:
+      <<: *sidecar-env
+      NEXUS_IROH_SECRET_KEY_PATH: /iroh/node-a.key
+    volumes:
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/iroh:/iroh
+
+  sidecar-b:
+    image: nexus-iroh-sidecar-smoke:latest
+    network_mode: "service:node-b"
+    depends_on:
+      node-b:
+        condition: service_started
+    environment:
+      <<: *sidecar-env
+      NEXUS_IROH_SECRET_KEY_PATH: /iroh/node-b.key
+    volumes:
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/iroh:/iroh
+
+  sidecar-c:
+    image: nexus-iroh-sidecar-smoke:latest
+    network_mode: "service:node-c"
+    depends_on:
+      node-c:
+        condition: service_started
+    environment:
+      <<: *sidecar-env
+      NEXUS_IROH_SECRET_KEY_PATH: /iroh/node-c.key
+    volumes:
+      - ${IROH_RAFT_SMOKE_DATA_ROOT:-../.tmp/iroh-raft-smoke}/iroh:/iroh

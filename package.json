@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "e2e:headed": "playwright test -c e2e/playwright.config.ts --headed",
+    "e2e:debug": "playwright test -c e2e/playwright.config.ts --debug",
+    "e2e:report": "playwright show-report playwright-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.1.1"
+  },
+  "dependencies": {
+    "bootstrap": "^5.3.8"
+  }
+}

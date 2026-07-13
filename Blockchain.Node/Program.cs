@@ -1,4 +1,5 @@
 ﻿using Blockchain.Core;
+using Blockchain.Application.Setup;
 using Blockchain.Infrastructure.Persistence;
 using Blockchain.Node;
 using Blockchain.Node.Endpoints;
@@ -12,14 +13,22 @@ builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
 builder.Logging.AddConsole();
 builder.Logging.AddDebug();
 
-string oraclePublicKeyConfig = GetRequiredConfiguration(builder.Configuration, "OraclePublicKey");
+string setupConfigPath = GetSetupConfigPath(builder.Configuration);
+builder.Configuration.AddJsonFile(setupConfigPath, optional: true, reloadOnChange: false);
+bool fullNodeConfigured = IsFullNodeConfigured(builder.Configuration);
+builder.Services.AddSingleton<NexusSetupUseCases>();
+builder.Services.AddSingleton<NexusBackupService>();
+
+string oraclePublicKeyConfig = fullNodeConfigured
+    ? GetRequiredConfiguration(builder.Configuration, "OraclePublicKey")
+    : "auto";
 bool autoOraclePublicKey = string.Equals(oraclePublicKeyConfig, "auto", StringComparison.OrdinalIgnoreCase);
 if (!autoOraclePublicKey)
 {
     Blockchain.Core.Constants.NetworkParameters.TrustedOraclePublicKey = oraclePublicKeyConfig;
 }
 
-string webhookSecret = GetRequiredConfiguration(builder.Configuration, "WebhookSecret");
+string webhookSecret = fullNodeConfigured ? GetRequiredConfiguration(builder.Configuration, "WebhookSecret") : string.Empty;
 Blockchain.Core.Constants.NetworkParameters.RequireProofOfWork =
     builder.Configuration.GetValue("Consensus:RequireProofOfWork", true);
 
@@ -62,6 +71,20 @@ builder.Services.AddRateLimiter(options =>
     };
 });
 
+if (!fullNodeConfigured)
+{
+    Console.WriteLine($"[SYSTEM] Starting Nexus setup mode. Config path: {setupConfigPath}");
+    var setupApp = builder.Build();
+    setupApp.UseRouting();
+    setupApp.UseCors("AllowAll");
+    setupApp.UseRateLimiter();
+    setupApp.MapInAppSetupEndpoints(fullNodeConfigured: false);
+    setupApp.MapGet("/healthz", () => Results.Ok(new { status = "setup", setup = "not_configured" }));
+    setupApp.MapGet("/", () => "Nexus setup mode is running.");
+    setupApp.Run();
+    return;
+}
+
 string dbName = GetNodeDatabaseName(builder.Configuration);
 Console.WriteLine($"[SYSTEM] Starting Node. Database: {dbName}");
 
@@ -93,7 +116,9 @@ app.MapHub<BlockchainHub>("/blockchainHub").RequireCors("AllowAll");
 app.MapGitIntegrationEndpoints(webhookSecret);
 app.MapArtifactIntegrationEndpoints();
 app.MapIpfsIntegrationEndpoints();
+app.MapInAppSetupEndpoints(fullNodeConfigured: true);
 app.MapIrohP2PEndpoints();
+app.MapSignedIntentEndpoints();
 app.MapSetupStatusEndpoints();
 app.MapConsensusEndpoints();
 
@@ -112,6 +137,32 @@ static string GetRequiredConfiguration(IConfiguration configuration, string key)
     }
 
     return value;
+}
+
+static bool IsFullNodeConfigured(IConfiguration configuration)
+{
+    string[] required =
+    [
+        "OraclePublicKey",
+        "WebhookSecret",
+        "NodeDbPassword",
+        "NodeAdminToken"
+    ];
+
+    return required.All(key => !string.IsNullOrWhiteSpace(configuration[key]));
+}
+
+static string GetSetupConfigPath(IConfiguration configuration)
+{
+    string? configured = configuration["NexusSetupConfigPath"] ?? Environment.GetEnvironmentVariable("NEXUS_SETUP_CONFIG_PATH");
+    if (!string.IsNullOrWhiteSpace(configured))
+    {
+        return configured;
+    }
+
+    string data = Environment.GetEnvironmentVariable("NEXUS_DATA_PATH") ?? string.Empty;
+    string root = string.IsNullOrWhiteSpace(data) ? AppContext.BaseDirectory : data;
+    return Path.Combine(root, "nexus.setup.json");
 }
 
 static string GetNodeDatabaseName(IConfiguration configuration)

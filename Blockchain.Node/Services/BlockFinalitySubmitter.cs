@@ -29,14 +29,24 @@ public sealed class ImmediateBlockFinalitySubmitter : IBlockFinalitySubmitter
 public sealed class EdgeBlockFinalitySubmitter : IBlockFinalitySubmitter
 {
     private readonly IrohProposalForwarder _forwarder;
+    private readonly EdgeCommittedBlockSyncService _edgeSync;
 
-    public EdgeBlockFinalitySubmitter(IrohProposalForwarder forwarder)
+    public EdgeBlockFinalitySubmitter(
+        IrohProposalForwarder forwarder,
+        EdgeCommittedBlockSyncService edgeSync)
     {
         _forwarder = forwarder;
+        _edgeSync = edgeSync;
     }
 
-    public Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel)
+    public async Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel)
     {
-        return _forwarder.ForwardAsync(proposal, sourceModel);
+        var result = await _forwarder.ForwardAsync(proposal, sourceModel);
+        if (result.Success)
+        {
+            await _edgeSync.SyncOnceAsync();
+        }
+
+        return result;
     }
 }

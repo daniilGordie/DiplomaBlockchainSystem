@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Blockchain.Core;
+using Blockchain.Core.Consensus;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -37,10 +38,27 @@ using System.Text.Json;
                     _fieldEncryptionKey = SHA256.HashData(Encoding.UTF8.GetBytes($"{_dbPassword}|nexus-field-encryption"));
                     _legacyFieldEncryptionKey = SHA256.HashData(Encoding.UTF8.GetBytes($"{_dbPassword}|nexus-field-encryption|{DbFileName}"));
                 }
-                InitializeDatabase();
+                try
+                {
+                    InitializeDatabase();
+                }
+                catch (SqliteException ex) when (IsDatabaseOpenFailure(ex))
+                {
+                    throw new InvalidOperationException(
+                        $"Node database '{DbFileName}' cannot be opened. The file is not a valid Nexus SQLite database for the configured NodeDbPassword. " +
+                        "If this is a new node or disposable Docker smoke environment, recreate the node data volume. If this is an existing node, restore the original NodeDbPassword or database backup.",
+                        ex);
+                }
             }
 
             private bool IsFieldEncryptionEnabled => _fieldEncryptionKey is { Length: > 0 };
+
+            private static bool IsDatabaseOpenFailure(SqliteException ex)
+            {
+                return ex.SqliteErrorCode is 26 or 14
+                    || ex.Message.Contains("file is not a database", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("not a database", StringComparison.OrdinalIgnoreCase);
+            }
 
             private string EncryptString(string? value)
             {
@@ -243,6 +261,61 @@ using System.Text.Json;
                     cmd.ExecuteNonQuery();
 
                     cmd.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS BlockContributionProofs (
+                        BlockHash TEXT PRIMARY KEY,
+                        ProjectId TEXT NOT NULL,
+                        Epoch INTEGER NOT NULL,
+                        ProducerPublicKey TEXT NOT NULL,
+                        ProducerScore INTEGER NOT NULL,
+                        ScoreSnapshotHash TEXT NOT NULL,
+                        EvidenceBlockHashesJson TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_contribution_proofs_project ON BlockContributionProofs(ProjectId, Epoch);";
+                    cmd.ExecuteNonQuery();
+
+                    cmd.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS IntentOutbox (
+                        IntentId TEXT PRIMARY KEY,
+                        NetworkId TEXT NOT NULL,
+                        ProjectId TEXT NOT NULL,
+                        ChannelId TEXT NOT NULL,
+                        OperationType TEXT NOT NULL,
+                        CorrelationId TEXT,
+                        IntentJson TEXT NOT NULL,
+                        BlockEnvelopeJson TEXT NOT NULL,
+                        Status TEXT NOT NULL,
+                        AttemptCount INTEGER NOT NULL DEFAULT 0,
+                        CreatedAtUtc TEXT NOT NULL,
+                        UpdatedAtUtc TEXT NOT NULL,
+                        LastAttemptAtUtc TEXT,
+                        NextAttemptAtUtc TEXT,
+                        LastError TEXT,
+                        Destination TEXT,
+                        CommittedBlockHash TEXT,
+                        CommittedBlockIndex INTEGER,
+                        ProposalId TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_intent_outbox_status_next ON IntentOutbox(Status, NextAttemptAtUtc);
+                    CREATE INDEX IF NOT EXISTS idx_intent_outbox_channel ON IntentOutbox(ChannelId, UpdatedAtUtc);";
+                    cmd.ExecuteNonQuery();
+                    EnsureIntentOutboxColumns(connection);
+
+                    cmd.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS IntentStatusHistory (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        IntentId TEXT NOT NULL,
+                        Status TEXT NOT NULL,
+                        ChangedAtUtc TEXT NOT NULL,
+                        Message TEXT,
+                        Destination TEXT,
+                        ProposalId TEXT,
+                        CommittedBlockHash TEXT,
+                        CommittedBlockIndex INTEGER
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_intent_history_intent ON IntentStatusHistory(IntentId, ChangedAtUtc);";
+                    cmd.ExecuteNonQuery();
+
+                    cmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS Peers (
                         Url TEXT PRIMARY KEY,
                         NodeId TEXT,
@@ -250,10 +323,40 @@ using System.Text.Json;
                         LastSeen TEXT,
                         LastFailure TEXT,
                         IsTrusted INTEGER NOT NULL DEFAULT 1,
-                        NodePublicKey TEXT
+                        NodePublicKey TEXT,
+                        NetworkId TEXT,
+                        PublicKeyFingerprint TEXT,
+                        IrohNodeId TEXT,
+                        RequestedRole TEXT,
+                        MembershipStatus TEXT,
+                        ApprovedAt TEXT,
+                        ApprovedBy TEXT,
+                        RejectedAt TEXT,
+                        RejectedBy TEXT,
+                        RevokedAt TEXT,
+                        RevokedBy TEXT,
+                        Reason TEXT,
+                        AppVersion TEXT,
+                        ProtocolVersion TEXT,
+                        Capabilities TEXT
                     );";
                     cmd.ExecuteNonQuery();
                     EnsurePeerColumns(connection);
+
+                    cmd.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS PeerAuditLog (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        Url TEXT NOT NULL,
+                        Actor TEXT,
+                        Action TEXT NOT NULL,
+                        OldValue TEXT,
+                        NewValue TEXT,
+                        Reason TEXT,
+                        CorrelationId TEXT,
+                        TimestampUtc TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_peer_audit_url ON PeerAuditLog(Url, TimestampUtc);";
+                    cmd.ExecuteNonQuery();
                 }
             }
 
@@ -282,6 +385,280 @@ using System.Text.Json;
             public static void EnsureInitialized(string dbName = "nexus_node.db")
             {
                 new DatabaseManager(dbName);
+            }
+
+            public void SaveIntent(IntentOutboxRecord record)
+            {
+                if (record == null || string.IsNullOrWhiteSpace(record.Intent.IntentId)) return;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO IntentOutbox
+                (IntentId, NetworkId, ProjectId, ChannelId, OperationType, CorrelationId, IntentJson, BlockEnvelopeJson, Status, AttemptCount, CreatedAtUtc, UpdatedAtUtc, LastAttemptAtUtc, NextAttemptAtUtc, LastError, Destination, CommittedBlockHash, CommittedBlockIndex, ProposalId)
+                VALUES ($intentId, $networkId, $projectId, $channelId, $operationType, $correlationId, $intentJson, $blockJson, $status, $attempts, $created, $updated, $lastAttempt, $nextAttempt, $lastError, $destination, $committedHash, $committedIndex, $proposalId)
+                ON CONFLICT(IntentId) DO UPDATE SET
+                    IntentJson = excluded.IntentJson,
+                    BlockEnvelopeJson = excluded.BlockEnvelopeJson,
+                    Status = excluded.Status,
+                    AttemptCount = excluded.AttemptCount,
+                    UpdatedAtUtc = excluded.UpdatedAtUtc,
+                    LastAttemptAtUtc = excluded.LastAttemptAtUtc,
+                    NextAttemptAtUtc = excluded.NextAttemptAtUtc,
+                    LastError = excluded.LastError,
+                    Destination = excluded.Destination,
+                    CommittedBlockHash = excluded.CommittedBlockHash,
+                    CommittedBlockIndex = excluded.CommittedBlockIndex,
+                    ProposalId = excluded.ProposalId";
+                cmd.Parameters.AddWithValue("$intentId", record.Intent.IntentId);
+                cmd.Parameters.AddWithValue("$networkId", record.Intent.NetworkId);
+                cmd.Parameters.AddWithValue("$projectId", record.Intent.ProjectId);
+                cmd.Parameters.AddWithValue("$channelId", ChannelName.Normalize(record.Intent.ChannelId));
+                cmd.Parameters.AddWithValue("$operationType", record.Intent.OperationType);
+                cmd.Parameters.AddWithValue("$correlationId", record.Intent.CorrelationId ?? string.Empty);
+                cmd.Parameters.AddWithValue("$intentJson", EncryptString(JsonSerializer.Serialize(record.Intent)));
+                cmd.Parameters.AddWithValue("$blockJson", EncryptString(record.BlockEnvelopeJson ?? string.Empty));
+                cmd.Parameters.AddWithValue("$status", record.Status.ToString());
+                cmd.Parameters.AddWithValue("$attempts", record.AttemptCount);
+                cmd.Parameters.AddWithValue("$created", record.CreatedAtUtc.ToString("O"));
+                cmd.Parameters.AddWithValue("$updated", record.UpdatedAtUtc.ToString("O"));
+                cmd.Parameters.AddWithValue("$lastAttempt", record.LastAttemptAtUtc?.ToString("O") ?? string.Empty);
+                cmd.Parameters.AddWithValue("$nextAttempt", record.NextAttemptAtUtc?.ToString("O") ?? string.Empty);
+                cmd.Parameters.AddWithValue("$lastError", EncryptString(record.LastError ?? string.Empty));
+                cmd.Parameters.AddWithValue("$destination", record.Destination ?? string.Empty);
+                cmd.Parameters.AddWithValue("$committedHash", record.CommittedBlockHash ?? string.Empty);
+                cmd.Parameters.AddWithValue("$committedIndex", record.CommittedBlockIndex.HasValue ? record.CommittedBlockIndex.Value : DBNull.Value);
+                cmd.Parameters.AddWithValue("$proposalId", record.ProposalId ?? string.Empty);
+                cmd.ExecuteNonQuery();
+                AppendIntentHistory(connection, record.Intent.IntentId, record.Status, record.UpdatedAtUtc, record.LastError ?? string.Empty, record.Destination ?? string.Empty, record.ProposalId, record.CommittedBlockHash, record.CommittedBlockIndex);
+            }
+
+            public IntentOutboxRecord? GetIntent(string intentId)
+            {
+                if (string.IsNullOrWhiteSpace(intentId)) return null;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                SELECT IntentJson, BlockEnvelopeJson, Status, AttemptCount, CreatedAtUtc, UpdatedAtUtc, LastAttemptAtUtc, NextAttemptAtUtc, LastError, Destination, CommittedBlockHash, CommittedBlockIndex, ProposalId
+                FROM IntentOutbox
+                WHERE IntentId = $intentId
+                LIMIT 1";
+                cmd.Parameters.AddWithValue("$intentId", intentId);
+                using var reader = cmd.ExecuteReader();
+                return reader.Read() ? ReadIntentOutboxRecord(reader) : null;
+            }
+
+            public List<IntentOutboxRecord> LoadRetryableIntents(DateTime nowUtc, int limit)
+            {
+                var records = new List<IntentOutboxRecord>();
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                SELECT IntentJson, BlockEnvelopeJson, Status, AttemptCount, CreatedAtUtc, UpdatedAtUtc, LastAttemptAtUtc, NextAttemptAtUtc, LastError, Destination, CommittedBlockHash, CommittedBlockIndex, ProposalId
+                FROM IntentOutbox
+                WHERE Status IN ('Created', 'QueuedOffline', 'Submitted', 'Accepted', 'FailedRetryable')
+                  AND (NextAttemptAtUtc IS NULL OR NextAttemptAtUtc = '' OR NextAttemptAtUtc <= $now)
+                ORDER BY UpdatedAtUtc ASC
+                LIMIT $limit";
+                cmd.Parameters.AddWithValue("$now", nowUtc.ToString("O"));
+                cmd.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 500));
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var record = ReadIntentOutboxRecord(reader);
+                    if (record != null)
+                    {
+                        records.Add(record);
+                    }
+                }
+
+                return records;
+            }
+
+            public List<IntentOutboxRecord> LoadRecentIntents(int limit)
+            {
+                var records = new List<IntentOutboxRecord>();
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                SELECT IntentJson, BlockEnvelopeJson, Status, AttemptCount, CreatedAtUtc, UpdatedAtUtc, LastAttemptAtUtc, NextAttemptAtUtc, LastError, Destination, CommittedBlockHash, CommittedBlockIndex, ProposalId
+                FROM IntentOutbox
+                ORDER BY UpdatedAtUtc DESC
+                LIMIT $limit";
+                cmd.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 500));
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var record = ReadIntentOutboxRecord(reader);
+                    if (record != null)
+                    {
+                        records.Add(record);
+                    }
+                }
+
+                return records;
+            }
+
+            public void UpdateIntentStatus(
+                string intentId,
+                IntentStatus status,
+                int attemptCount,
+                DateTime updatedAtUtc,
+                DateTime? lastAttemptAtUtc,
+                DateTime? nextAttemptAtUtc,
+                string lastError,
+                string destination,
+                string? committedBlockHash,
+                long? committedBlockIndex = null,
+                string? proposalId = null)
+            {
+                if (string.IsNullOrWhiteSpace(intentId)) return;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                UPDATE IntentOutbox
+                SET Status = $status,
+                    AttemptCount = $attempts,
+                    UpdatedAtUtc = $updated,
+                    LastAttemptAtUtc = $lastAttempt,
+                    NextAttemptAtUtc = $nextAttempt,
+                    LastError = $lastError,
+                    Destination = $destination,
+                    CommittedBlockHash = $committedHash,
+                    CommittedBlockIndex = $committedIndex,
+                    ProposalId = $proposalId
+                WHERE IntentId = $intentId";
+                cmd.Parameters.AddWithValue("$intentId", intentId);
+                cmd.Parameters.AddWithValue("$status", status.ToString());
+                cmd.Parameters.AddWithValue("$attempts", attemptCount);
+                cmd.Parameters.AddWithValue("$updated", updatedAtUtc.ToString("O"));
+                cmd.Parameters.AddWithValue("$lastAttempt", lastAttemptAtUtc?.ToString("O") ?? string.Empty);
+                cmd.Parameters.AddWithValue("$nextAttempt", nextAttemptAtUtc?.ToString("O") ?? string.Empty);
+                cmd.Parameters.AddWithValue("$lastError", EncryptString(lastError ?? string.Empty));
+                cmd.Parameters.AddWithValue("$destination", destination ?? string.Empty);
+                cmd.Parameters.AddWithValue("$committedHash", committedBlockHash ?? string.Empty);
+                cmd.Parameters.AddWithValue("$committedIndex", committedBlockIndex.HasValue ? committedBlockIndex.Value : DBNull.Value);
+                cmd.Parameters.AddWithValue("$proposalId", proposalId ?? string.Empty);
+                cmd.ExecuteNonQuery();
+                AppendIntentHistory(connection, intentId, status, updatedAtUtc, lastError ?? string.Empty, destination ?? string.Empty, proposalId, committedBlockHash, committedBlockIndex);
+            }
+
+            public List<IntentStatusTransition> LoadIntentHistory(string intentId)
+            {
+                var history = new List<IntentStatusTransition>();
+                if (string.IsNullOrWhiteSpace(intentId)) return history;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                SELECT IntentId, Status, ChangedAtUtc, Message, Destination, ProposalId, CommittedBlockHash, CommittedBlockIndex
+                FROM IntentStatusHistory
+                WHERE IntentId = $intentId
+                ORDER BY ChangedAtUtc ASC, Id ASC";
+                cmd.Parameters.AddWithValue("$intentId", intentId);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var status = Enum.TryParse<IntentStatus>(reader.GetString(1), true, out var parsed)
+                        ? parsed
+                        : IntentStatus.FailedRetryable;
+                    history.Add(new IntentStatusTransition(
+                        reader.GetString(0),
+                        status,
+                        ParseUtc(reader.GetString(2)) ?? DateTime.UtcNow,
+                        DecryptString(reader.IsDBNull(3) ? string.Empty : reader.GetString(3)),
+                        reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                        reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+                        reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
+                        reader.IsDBNull(7) ? null : reader.GetInt64(7)));
+                }
+
+                return history;
+            }
+
+            private IntentOutboxRecord? ReadIntentOutboxRecord(SqliteDataReader reader)
+            {
+                try
+                {
+                    string intentJson = DecryptString(reader.GetString(0));
+                    var intent = JsonSerializer.Deserialize<SignedIntent>(intentJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (intent == null)
+                    {
+                        return null;
+                    }
+
+                    string statusRaw = reader.GetString(2);
+                    var status = Enum.TryParse<IntentStatus>(statusRaw, true, out var parsedStatus)
+                        ? parsedStatus
+                        : IntentStatus.FailedRetryable;
+                    return new IntentOutboxRecord(
+                        intent,
+                        DecryptString(reader.GetString(1)),
+                        status,
+                        Convert.ToInt32(reader.GetValue(3)),
+                        ParseUtc(reader.GetString(4)) ?? DateTime.UtcNow,
+                        ParseUtc(reader.GetString(5)) ?? DateTime.UtcNow,
+                        ParseUtc(reader.IsDBNull(6) ? string.Empty : reader.GetString(6)),
+                        ParseUtc(reader.IsDBNull(7) ? string.Empty : reader.GetString(7)),
+                        DecryptString(reader.IsDBNull(8) ? string.Empty : reader.GetString(8)),
+                        reader.IsDBNull(9) ? string.Empty : reader.GetString(9),
+                        reader.IsDBNull(10) ? string.Empty : reader.GetString(10),
+                        reader.IsDBNull(11) ? null : reader.GetInt64(11),
+                        reader.IsDBNull(12) ? string.Empty : reader.GetString(12));
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            private void AppendIntentHistory(
+                SqliteConnection connection,
+                string intentId,
+                IntentStatus status,
+                DateTime changedAtUtc,
+                string message,
+                string destination,
+                string? proposalId,
+                string? committedBlockHash,
+                long? committedBlockIndex)
+            {
+                if (string.IsNullOrWhiteSpace(intentId)) return;
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO IntentStatusHistory
+                (IntentId, Status, ChangedAtUtc, Message, Destination, ProposalId, CommittedBlockHash, CommittedBlockIndex)
+                VALUES ($intentId, $status, $changedAt, $message, $destination, $proposalId, $committedHash, $committedIndex)";
+                cmd.Parameters.AddWithValue("$intentId", intentId);
+                cmd.Parameters.AddWithValue("$status", status.ToString());
+                cmd.Parameters.AddWithValue("$changedAt", changedAtUtc.ToUniversalTime().ToString("O"));
+                cmd.Parameters.AddWithValue("$message", EncryptString(message ?? string.Empty));
+                cmd.Parameters.AddWithValue("$destination", destination ?? string.Empty);
+                cmd.Parameters.AddWithValue("$proposalId", proposalId ?? string.Empty);
+                cmd.Parameters.AddWithValue("$committedHash", committedBlockHash ?? string.Empty);
+                cmd.Parameters.AddWithValue("$committedIndex", committedBlockIndex.HasValue ? committedBlockIndex.Value : DBNull.Value);
+                cmd.ExecuteNonQuery();
+            }
+
+            private static DateTime? ParseUtc(string? value)
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    return null;
+                }
+
+                return DateTime.TryParse(value, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+                    ? parsed.ToUniversalTime()
+                    : null;
             }
 
             public void SaveBlock(Block block, string channelId = "System")
@@ -859,12 +1236,20 @@ using System.Text.Json;
                 EnsurePeerColumns(connection);
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = @"
-                INSERT INTO Peers (Url, NodeId, Role, LastSeen, IsTrusted, NodePublicKey)
-                VALUES ($url, $nodeId, $role, $seen, $trusted, $nodePublicKey)
+                INSERT INTO Peers (Url, NodeId, Role, LastSeen, IsTrusted, NodePublicKey, NetworkId, PublicKeyFingerprint, IrohNodeId, RequestedRole, MembershipStatus, AppVersion, ProtocolVersion, Capabilities)
+                VALUES ($url, $nodeId, $role, $seen, $trusted, $nodePublicKey, $networkId, $fingerprint, $irohNodeId, $requestedRole, $membershipStatus, $appVersion, $protocolVersion, $capabilities)
                 ON CONFLICT(Url) DO UPDATE SET
                     NodeId = CASE WHEN excluded.NodeId = '' THEN Peers.NodeId ELSE excluded.NodeId END,
                     Role = CASE WHEN excluded.Role = '' THEN Peers.Role ELSE excluded.Role END,
                     NodePublicKey = CASE WHEN excluded.NodePublicKey = '' THEN Peers.NodePublicKey ELSE excluded.NodePublicKey END,
+                    NetworkId = CASE WHEN excluded.NetworkId = '' THEN Peers.NetworkId ELSE excluded.NetworkId END,
+                    PublicKeyFingerprint = CASE WHEN excluded.PublicKeyFingerprint = '' THEN Peers.PublicKeyFingerprint ELSE excluded.PublicKeyFingerprint END,
+                    IrohNodeId = CASE WHEN excluded.IrohNodeId = '' THEN Peers.IrohNodeId ELSE excluded.IrohNodeId END,
+                    RequestedRole = CASE WHEN excluded.RequestedRole = '' THEN Peers.RequestedRole ELSE excluded.RequestedRole END,
+                    MembershipStatus = CASE WHEN excluded.MembershipStatus = '' THEN Peers.MembershipStatus ELSE excluded.MembershipStatus END,
+                    AppVersion = CASE WHEN excluded.AppVersion = '' THEN Peers.AppVersion ELSE excluded.AppVersion END,
+                    ProtocolVersion = CASE WHEN excluded.ProtocolVersion = '' THEN Peers.ProtocolVersion ELSE excluded.ProtocolVersion END,
+                    Capabilities = CASE WHEN excluded.Capabilities = '' THEN Peers.Capabilities ELSE excluded.Capabilities END,
                     LastSeen = excluded.LastSeen,
                     IsTrusted = excluded.IsTrusted";
                 cmd.Parameters.AddWithValue("$url", peer.Url);
@@ -873,10 +1258,115 @@ using System.Text.Json;
                 cmd.Parameters.AddWithValue("$seen", DateTime.UtcNow.ToString("O"));
                 cmd.Parameters.AddWithValue("$trusted", peer.IsTrusted ? 1 : 0);
                 cmd.Parameters.AddWithValue("$nodePublicKey", peer.NodePublicKey ?? string.Empty);
+                cmd.Parameters.AddWithValue("$networkId", peer.NetworkId ?? string.Empty);
+                cmd.Parameters.AddWithValue("$fingerprint", peer.PublicKeyFingerprint ?? Fingerprint(peer.NodePublicKey));
+                cmd.Parameters.AddWithValue("$irohNodeId", peer.IrohNodeId ?? string.Empty);
+                cmd.Parameters.AddWithValue("$requestedRole", peer.RequestedRole ?? peer.Role ?? string.Empty);
+                cmd.Parameters.AddWithValue("$membershipStatus", string.IsNullOrWhiteSpace(peer.MembershipStatus)
+                    ? (peer.IsTrusted ? PeerMembershipStatuses.Approved : PeerMembershipStatuses.PendingApproval)
+                    : peer.MembershipStatus);
+                cmd.Parameters.AddWithValue("$appVersion", peer.AppVersion ?? string.Empty);
+                cmd.Parameters.AddWithValue("$protocolVersion", peer.ProtocolVersion ?? string.Empty);
+                cmd.Parameters.AddWithValue("$capabilities", peer.Capabilities ?? string.Empty);
                 cmd.ExecuteNonQuery();
             }
 
             public void SavePeer(string url) => SavePeer(PeerInfo.FromUrl(url));
+
+            public void SetPeerTrust(string url, bool isTrusted)
+            {
+                if (string.IsNullOrWhiteSpace(url)) return;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                EnsurePeerColumns(connection);
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO Peers (Url, Role, LastSeen, IsTrusted)
+                VALUES ($url, 'Full', $seen, $trusted)
+                ON CONFLICT(Url) DO UPDATE SET
+                    IsTrusted = excluded.IsTrusted,
+                    MembershipStatus = CASE WHEN excluded.IsTrusted = 1 THEN 'Approved' ELSE 'Revoked' END,
+                    ApprovedAt = CASE WHEN excluded.IsTrusted = 1 THEN excluded.LastSeen ELSE Peers.ApprovedAt END,
+                    RevokedAt = CASE WHEN excluded.IsTrusted = 0 THEN excluded.LastSeen ELSE Peers.RevokedAt END";
+                cmd.Parameters.AddWithValue("$url", url);
+                cmd.Parameters.AddWithValue("$seen", DateTime.UtcNow.ToString("O"));
+                cmd.Parameters.AddWithValue("$trusted", isTrusted ? 1 : 0);
+                cmd.ExecuteNonQuery();
+                AppendPeerAudit(connection, url, "system", isTrusted ? "Approve" : "Revoke", "", isTrusted ? PeerMembershipStatuses.Approved : PeerMembershipStatuses.Revoked, "", Guid.NewGuid().ToString("N"));
+            }
+
+            public void SetPeerRole(string url, string role)
+            {
+                if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(role)) return;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                EnsurePeerColumns(connection);
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO Peers (Url, Role, LastSeen, IsTrusted)
+                VALUES ($url, $role, $seen, 0)
+                ON CONFLICT(Url) DO UPDATE SET Role = excluded.Role";
+                cmd.Parameters.AddWithValue("$url", url);
+                cmd.Parameters.AddWithValue("$role", role.Trim());
+                cmd.Parameters.AddWithValue("$seen", DateTime.UtcNow.ToString("O"));
+                cmd.ExecuteNonQuery();
+                AppendPeerAudit(connection, url, "system", "SetRole", "", role.Trim(), "", Guid.NewGuid().ToString("N"));
+            }
+
+            public void SetPeerMembership(string url, string status, string actor, string reason)
+            {
+                if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(status)) return;
+
+                string normalized = NormalizeMembershipStatus(status);
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                EnsurePeerColumns(connection);
+                string oldValue = LoadPeerStatus(connection, url);
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO Peers (Url, Role, LastSeen, IsTrusted, MembershipStatus, Reason)
+                VALUES ($url, 'Edge', $now, $trusted, $status, $reason)
+                ON CONFLICT(Url) DO UPDATE SET
+                    IsTrusted = $trusted,
+                    MembershipStatus = $status,
+                    Reason = $reason,
+                    ApprovedAt = CASE WHEN $status = 'Approved' THEN $now ELSE Peers.ApprovedAt END,
+                    ApprovedBy = CASE WHEN $status = 'Approved' THEN $actor ELSE Peers.ApprovedBy END,
+                    RejectedAt = CASE WHEN $status = 'Rejected' THEN $now ELSE Peers.RejectedAt END,
+                    RejectedBy = CASE WHEN $status = 'Rejected' THEN $actor ELSE Peers.RejectedBy END,
+                    RevokedAt = CASE WHEN $status = 'Revoked' THEN $now ELSE Peers.RevokedAt END,
+                    RevokedBy = CASE WHEN $status = 'Revoked' THEN $actor ELSE Peers.RevokedBy END";
+                cmd.Parameters.AddWithValue("$url", url);
+                cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+                cmd.Parameters.AddWithValue("$trusted", normalized == PeerMembershipStatuses.Approved || normalized == PeerMembershipStatuses.ConsensusCandidate ? 1 : 0);
+                cmd.Parameters.AddWithValue("$status", normalized);
+                cmd.Parameters.AddWithValue("$actor", actor ?? string.Empty);
+                cmd.Parameters.AddWithValue("$reason", reason ?? string.Empty);
+                cmd.ExecuteNonQuery();
+                AppendPeerAudit(connection, url, actor, "SetMembership", oldValue, normalized, reason, Guid.NewGuid().ToString("N"));
+            }
+
+            public void SetPeerCapabilities(string url, string capabilities, string actor, string reason)
+            {
+                if (string.IsNullOrWhiteSpace(url)) return;
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                EnsurePeerColumns(connection);
+                string oldValue = LoadPeerCapabilities(connection, url);
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO Peers (Url, Role, LastSeen, IsTrusted, Capabilities)
+                VALUES ($url, 'Edge', $now, 0, $capabilities)
+                ON CONFLICT(Url) DO UPDATE SET Capabilities = excluded.Capabilities";
+                cmd.Parameters.AddWithValue("$url", url);
+                cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+                cmd.Parameters.AddWithValue("$capabilities", capabilities ?? string.Empty);
+                cmd.ExecuteNonQuery();
+                AppendPeerAudit(connection, url, actor, "SetCapabilities", oldValue, capabilities ?? string.Empty, reason, Guid.NewGuid().ToString("N"));
+            }
 
             public void MarkPeerSeen(string url)
             {
@@ -912,14 +1402,22 @@ using System.Text.Json;
                 cmd.ExecuteNonQuery();
             }
 
-            public List<PeerInfo> LoadPeerInfos()
+            public List<PeerInfo> LoadAllPeerInfos()
             {
                 var peers = new List<PeerInfo>();
                 using var connection = new SqliteConnection(ConnectionString);
                 connection.Open();
                 EnsurePeerColumns(connection);
                 using var cmd = connection.CreateCommand();
-                cmd.CommandText = "SELECT Url, COALESCE(NodeId, ''), COALESCE(Role, 'Full'), LastSeen, LastFailure, IsTrusted, COALESCE(NodePublicKey, '') FROM Peers WHERE IsTrusted = 1 ORDER BY Url";
+                cmd.CommandText = @"
+                SELECT Url, COALESCE(NodeId, ''), COALESCE(Role, 'Full'), LastSeen, LastFailure, IsTrusted, COALESCE(NodePublicKey, ''),
+                       COALESCE(NetworkId, ''), COALESCE(PublicKeyFingerprint, ''), COALESCE(IrohNodeId, ''), COALESCE(RequestedRole, ''),
+                       COALESCE(MembershipStatus, CASE WHEN IsTrusted = 1 THEN 'Approved' ELSE 'PendingApproval' END),
+                       COALESCE(ApprovedAt, ''), COALESCE(ApprovedBy, ''), COALESCE(RejectedAt, ''), COALESCE(RejectedBy, ''),
+                       COALESCE(RevokedAt, ''), COALESCE(RevokedBy, ''), COALESCE(Reason, ''), COALESCE(AppVersion, ''),
+                       COALESCE(ProtocolVersion, ''), COALESCE(Capabilities, '')
+                FROM Peers
+                ORDER BY Url";
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -930,10 +1428,32 @@ using System.Text.Json;
                         reader.IsDBNull(3) ? null : reader.GetString(3),
                         reader.IsDBNull(4) ? null : reader.GetString(4),
                         !reader.IsDBNull(5) && reader.GetInt32(5) != 0,
-                        reader.GetString(6)));
+                        reader.GetString(6),
+                        reader.GetString(7),
+                        string.IsNullOrWhiteSpace(reader.GetString(8)) ? Fingerprint(reader.GetString(6)) : reader.GetString(8),
+                        reader.GetString(9),
+                        reader.GetString(10),
+                        reader.GetString(11),
+                        reader.GetString(12),
+                        reader.GetString(13),
+                        reader.GetString(14),
+                        reader.GetString(15),
+                        reader.GetString(16),
+                        reader.GetString(17),
+                        reader.GetString(18),
+                        reader.GetString(19),
+                        reader.GetString(20),
+                        reader.GetString(21)));
                 }
 
                 return peers;
+            }
+
+            public List<PeerInfo> LoadPeerInfos()
+            {
+                return LoadAllPeerInfos()
+                    .Where(peer => peer.IsTrusted)
+                    .ToList();
             }
 
             public List<string> LoadPeers()
@@ -946,6 +1466,117 @@ using System.Text.Json;
                 EnsureColumn(connection, "Peers", "NodeId", "TEXT");
                 EnsureColumn(connection, "Peers", "Role", "TEXT");
                 EnsureColumn(connection, "Peers", "NodePublicKey", "TEXT");
+                EnsureColumn(connection, "Peers", "NetworkId", "TEXT");
+                EnsureColumn(connection, "Peers", "PublicKeyFingerprint", "TEXT");
+                EnsureColumn(connection, "Peers", "IrohNodeId", "TEXT");
+                EnsureColumn(connection, "Peers", "RequestedRole", "TEXT");
+                EnsureColumn(connection, "Peers", "MembershipStatus", "TEXT");
+                EnsureColumn(connection, "Peers", "ApprovedAt", "TEXT");
+                EnsureColumn(connection, "Peers", "ApprovedBy", "TEXT");
+                EnsureColumn(connection, "Peers", "RejectedAt", "TEXT");
+                EnsureColumn(connection, "Peers", "RejectedBy", "TEXT");
+                EnsureColumn(connection, "Peers", "RevokedAt", "TEXT");
+                EnsureColumn(connection, "Peers", "RevokedBy", "TEXT");
+                EnsureColumn(connection, "Peers", "Reason", "TEXT");
+                EnsureColumn(connection, "Peers", "AppVersion", "TEXT");
+                EnsureColumn(connection, "Peers", "ProtocolVersion", "TEXT");
+                EnsureColumn(connection, "Peers", "Capabilities", "TEXT");
+            }
+
+            public List<PeerAuditEvent> LoadPeerAudit(string url, int limit = 100)
+            {
+                var events = new List<PeerAuditEvent>();
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                SELECT Url, COALESCE(Actor, ''), Action, COALESCE(OldValue, ''), COALESCE(NewValue, ''),
+                       COALESCE(Reason, ''), COALESCE(CorrelationId, ''), TimestampUtc
+                FROM PeerAuditLog
+                WHERE Url = $url
+                ORDER BY TimestampUtc DESC, Id DESC
+                LIMIT $limit";
+                cmd.Parameters.AddWithValue("$url", url);
+                cmd.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 500));
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    events.Add(new PeerAuditEvent(
+                        reader.GetString(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.GetString(3),
+                        reader.GetString(4),
+                        reader.GetString(5),
+                        reader.GetString(6),
+                        reader.GetString(7)));
+                }
+
+                return events;
+            }
+
+            private void AppendPeerAudit(SqliteConnection connection, string url, string? actor, string action, string oldValue, string newValue, string? reason, string correlationId)
+            {
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT INTO PeerAuditLog (Url, Actor, Action, OldValue, NewValue, Reason, CorrelationId, TimestampUtc)
+                VALUES ($url, $actor, $action, $oldValue, $newValue, $reason, $correlationId, $timestamp)";
+                cmd.Parameters.AddWithValue("$url", url);
+                cmd.Parameters.AddWithValue("$actor", actor ?? string.Empty);
+                cmd.Parameters.AddWithValue("$action", action);
+                cmd.Parameters.AddWithValue("$oldValue", oldValue ?? string.Empty);
+                cmd.Parameters.AddWithValue("$newValue", newValue ?? string.Empty);
+                cmd.Parameters.AddWithValue("$reason", reason ?? string.Empty);
+                cmd.Parameters.AddWithValue("$correlationId", correlationId);
+                cmd.Parameters.AddWithValue("$timestamp", DateTime.UtcNow.ToString("O"));
+                cmd.ExecuteNonQuery();
+            }
+
+            private static string NormalizeMembershipStatus(string status)
+            {
+                string trimmed = status.Trim();
+                string[] allowed =
+                [
+                    PeerMembershipStatuses.PendingApproval,
+                    PeerMembershipStatuses.Approved,
+                    PeerMembershipStatuses.Rejected,
+                    PeerMembershipStatuses.Revoked,
+                    PeerMembershipStatuses.Offline,
+                    PeerMembershipStatuses.Stale,
+                    PeerMembershipStatuses.Incompatible,
+                    PeerMembershipStatuses.ConsensusCandidate
+                ];
+                return allowed.FirstOrDefault(value => string.Equals(value, trimmed, StringComparison.OrdinalIgnoreCase))
+                    ?? PeerMembershipStatuses.PendingApproval;
+            }
+
+            private static string Fingerprint(string? publicKey)
+            {
+                if (string.IsNullOrWhiteSpace(publicKey)) return string.Empty;
+                byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(publicKey));
+                return Convert.ToHexString(hash[..8]).ToLowerInvariant();
+            }
+
+            private static string LoadPeerStatus(SqliteConnection connection, string url)
+            {
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = "SELECT COALESCE(MembershipStatus, '') FROM Peers WHERE Url = $url LIMIT 1";
+                cmd.Parameters.AddWithValue("$url", url);
+                return cmd.ExecuteScalar()?.ToString() ?? string.Empty;
+            }
+
+            private static string LoadPeerCapabilities(SqliteConnection connection, string url)
+            {
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = "SELECT COALESCE(Capabilities, '') FROM Peers WHERE Url = $url LIMIT 1";
+                cmd.Parameters.AddWithValue("$url", url);
+                return cmd.ExecuteScalar()?.ToString() ?? string.Empty;
+            }
+
+            private static void EnsureIntentOutboxColumns(SqliteConnection connection)
+            {
+                EnsureColumn(connection, "IntentOutbox", "CommittedBlockIndex", "INTEGER");
+                EnsureColumn(connection, "IntentOutbox", "ProposalId", "TEXT");
             }
 
             private static void EnsureBlockColumns(SqliteConnection connection, string tableName)
@@ -1033,14 +1664,26 @@ using System.Text.Json;
 
             public string GetUserRole(string projectId, string userName)
             {
-                using var connection = new SqliteConnection(ConnectionString);
-                connection.Open();
-                var cmd = connection.CreateCommand();
-                cmd.CommandText = "SELECT Role FROM ProjectMembers WHERE ProjectId = $proj AND UserName = $user";
-                cmd.Parameters.AddWithValue("$proj", projectId);
-                cmd.Parameters.AddWithValue("$user", userName);
-                string role = DecryptString(cmd.ExecuteScalar()?.ToString());
-                return string.IsNullOrWhiteSpace(role) ? "None" : role;
+                for (int attempt = 1; attempt <= 3; attempt++)
+                {
+                    try
+                    {
+                        using var connection = new SqliteConnection(ConnectionString);
+                        connection.Open();
+                        var cmd = connection.CreateCommand();
+                        cmd.CommandText = "SELECT Role FROM ProjectMembers WHERE ProjectId = $proj AND UserName = $user";
+                        cmd.Parameters.AddWithValue("$proj", projectId);
+                        cmd.Parameters.AddWithValue("$user", userName);
+                        string role = DecryptString(cmd.ExecuteScalar()?.ToString());
+                        return string.IsNullOrWhiteSpace(role) ? "None" : role;
+                    }
+                    catch (SqliteException ex) when (IsDatabaseOpenFailure(ex) && attempt < 3)
+                    {
+                        Thread.Sleep(50 * attempt);
+                    }
+                }
+
+                return "None";
             }
 
             public List<Block> LoadChain(string channelId = "System")
@@ -1465,6 +2108,74 @@ using System.Text.Json;
                 cmd.CommandText = "SELECT 1 FROM BlockFinalityMetadata WHERE BlockHash = $hash LIMIT 1";
                 cmd.Parameters.AddWithValue("$hash", blockHash);
                 return cmd.ExecuteScalar() != null;
+            }
+
+            public void SaveContributionProof(string blockHash, ContributionProof proof)
+            {
+                if (string.IsNullOrWhiteSpace(blockHash))
+                {
+                    return;
+                }
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                INSERT OR REPLACE INTO BlockContributionProofs
+                    (BlockHash, ProjectId, Epoch, ProducerPublicKey, ProducerScore, ScoreSnapshotHash, EvidenceBlockHashesJson)
+                VALUES
+                    ($hash, $project, $epoch, $producer, $score, $snapshot, $evidence);";
+                cmd.Parameters.AddWithValue("$hash", blockHash);
+                cmd.Parameters.AddWithValue("$project", ChannelName.Normalize(proof.ProjectId));
+                cmd.Parameters.AddWithValue("$epoch", proof.Epoch);
+                cmd.Parameters.AddWithValue("$producer", EncryptString(proof.ProducerPublicKey));
+                cmd.Parameters.AddWithValue("$score", proof.ProducerScore);
+                cmd.Parameters.AddWithValue("$snapshot", proof.ScoreSnapshotHash);
+                cmd.Parameters.AddWithValue("$evidence", JsonSerializer.Serialize(proof.EvidenceBlockHashes));
+                cmd.ExecuteNonQuery();
+            }
+
+            public ContributionProof? GetContributionProof(string blockHash)
+            {
+                if (string.IsNullOrWhiteSpace(blockHash))
+                {
+                    return null;
+                }
+
+                using var connection = new SqliteConnection(ConnectionString);
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                SELECT ProjectId, Epoch, ProducerPublicKey, ProducerScore, ScoreSnapshotHash, EvidenceBlockHashesJson
+                FROM BlockContributionProofs
+                WHERE BlockHash = $hash
+                LIMIT 1;";
+                cmd.Parameters.AddWithValue("$hash", blockHash);
+
+                using var reader = cmd.ExecuteReader();
+                if (!reader.Read())
+                {
+                    return null;
+                }
+
+                string evidenceJson = reader.GetString(5);
+                string[] evidence = Array.Empty<string>();
+                try
+                {
+                    evidence = JsonSerializer.Deserialize<string[]>(evidenceJson) ?? Array.Empty<string>();
+                }
+                catch
+                {
+                    evidence = Array.Empty<string>();
+                }
+
+                return new ContributionProof(
+                    reader.GetString(0),
+                    reader.GetInt64(1),
+                    DecryptString(reader.GetString(2)),
+                    reader.GetInt32(3),
+                    reader.GetString(4),
+                    evidence);
             }
         }
     }

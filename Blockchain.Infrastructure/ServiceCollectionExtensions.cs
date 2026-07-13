@@ -2,6 +2,7 @@ using Blockchain.Application.Analytics;
 using Blockchain.Application.Git;
 using Blockchain.Application.Projects;
 using Blockchain.Core;
+using Blockchain.Core.Consensus;
 using Blockchain.Core.Contracts;
 using Blockchain.Infrastructure.Persistence;
 using Blockchain.Infrastructure.Services;
@@ -22,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChainWriter>(sp => sp.GetRequiredService<SqliteBlockStore>());
         services.AddSingleton<IPendingBlockStore>(sp => sp.GetRequiredService<SqliteBlockStore>());
         services.AddSingleton<IBlockFinalityMetadataStore>(sp => sp.GetRequiredService<SqliteBlockStore>());
+        services.AddSingleton<IIntentStore>(sp => sp.GetRequiredService<SqliteBlockStore>());
 
         services.AddSingleton<SqliteProjectMembershipStore>();
         services.AddSingleton<IUserProjectReader>(sp => sp.GetRequiredService<SqliteProjectMembershipStore>());

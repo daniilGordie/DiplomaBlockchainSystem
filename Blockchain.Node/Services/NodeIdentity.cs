@@ -21,19 +21,25 @@ public sealed class NodeIdentity
 
     public string PublicKey => _publicKey.Value;
 
-    public SignedNodeRegistration CreateRegistration(string nodeId, string publicUrl, string role)
+    public string SignPayload(string payload)
     {
-        string signedAt = DateTimeOffset.UtcNow.ToString("O");
-        string nonce = Guid.NewGuid().ToString("N");
-        string payload = BuildRegistrationPayload(nodeId, publicUrl, role, signedAt, nonce);
         byte[] signature = _key.Value.SignData(
             Encoding.UTF8.GetBytes(payload),
             HashAlgorithmName.SHA256,
             DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
 
+        return Convert.ToBase64String(signature);
+    }
+
+    public SignedNodeRegistration CreateRegistration(string nodeId, string publicUrl, string role)
+    {
+        string signedAt = DateTimeOffset.UtcNow.ToString("O");
+        string nonce = Guid.NewGuid().ToString("N");
+        string payload = BuildRegistrationPayload(nodeId, publicUrl, role, signedAt, nonce);
+
         return new SignedNodeRegistration(
             PublicKey,
-            Convert.ToBase64String(signature),
+            SignPayload(payload),
             signedAt,
             nonce);
     }
@@ -54,11 +60,20 @@ public sealed class NodeIdentity
         string path = _options.EffectiveIdentityKeyPath;
         if (File.Exists(path))
         {
-            string stored = File.ReadAllText(path).Trim();
-            byte[] privateKey = Convert.FromBase64String(stored);
-            var key = ECDsa.Create();
-            key.ImportPkcs8PrivateKey(privateKey, out _);
-            return key;
+            try
+            {
+                string stored = File.ReadAllText(path).Trim();
+                byte[] privateKey = Convert.FromBase64String(stored);
+                var key = ECDsa.Create();
+                key.ImportPkcs8PrivateKey(privateKey, out _);
+                return key;
+            }
+            catch (Exception ex) when (ex is FormatException or CryptographicException)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot load node identity key '{path}'. Restore a valid node identity backup or move the damaged key file aside to create a new identity.",
+                    ex);
+            }
         }
 
         string? directory = Path.GetDirectoryName(path);

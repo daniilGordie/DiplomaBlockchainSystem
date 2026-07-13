@@ -12,6 +12,7 @@ services:
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
       Kestrel__Endpoints__P2PGrpc__Protocols: Http2
       ConnectionStrings__DefaultNodeDb: /data/node.db
+      Node__Role: Consensus
       NodeDbPassword: local-raft-db-password
       NodeAdminToken: local-raft-admin-token
       WebhookSecret: local-raft-webhook-secret
@@ -24,6 +25,7 @@ services:
       Consensus__FinalityMode: Raft
       Consensus__ProducerKeyPath: /keys/producer-key.dat
       Consensus__ProducerPrivateKeyPassword: local-raft-producer-password
+      Raft__Transport: Tcp
       Raft__NodeId: node-a
       Raft__PublicEndPoint: node-a:6041
       Raft__LogPath: /data/raft-log
@@ -43,8 +45,8 @@ services:
       P2P__Iroh__Enabled: "false"
       Logging__LogLevel__System.Net.Http.HttpClient: Warning
     volumes:
-      - ../.tmp/docker-raft-smoke/node-a:/data
-      - ../.tmp/docker-raft-smoke/shared:/keys
+      - ${RAFT_SMOKE_DATA_ROOT:-../.tmp/docker-raft-smoke}/node-a:/data
+      - ${RAFT_SMOKE_DATA_ROOT:-../.tmp/docker-raft-smoke}/shared:/keys
     ports:
       - "7442:5041"
       - "7542:5042"
@@ -67,6 +69,7 @@ services:
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
       Kestrel__Endpoints__P2PGrpc__Protocols: Http2
       ConnectionStrings__DefaultNodeDb: /data/node.db
+      Node__Role: Consensus
       NodeDbPassword: local-raft-db-password
       NodeAdminToken: local-raft-admin-token
       WebhookSecret: local-raft-webhook-secret
@@ -79,6 +82,7 @@ services:
       Consensus__FinalityMode: Raft
       Consensus__ProducerKeyPath: /keys/producer-key.dat
       Consensus__ProducerPrivateKeyPassword: local-raft-producer-password
+      Raft__Transport: Tcp
       Raft__NodeId: node-b
       Raft__PublicEndPoint: node-b:6042
       Raft__LogPath: /data/raft-log
@@ -98,8 +102,8 @@ services:
       P2P__Iroh__Enabled: "false"
       Logging__LogLevel__System.Net.Http.HttpClient: Warning
     volumes:
-      - ../.tmp/docker-raft-smoke/node-b:/data
-      - ../.tmp/docker-raft-smoke/shared:/keys
+      - ${RAFT_SMOKE_DATA_ROOT:-../.tmp/docker-raft-smoke}/node-b:/data
+      - ${RAFT_SMOKE_DATA_ROOT:-../.tmp/docker-raft-smoke}/shared:/keys
     ports:
       - "7443:5041"
       - "7543:5042"

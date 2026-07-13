@@ -42,6 +42,13 @@ public sealed class CommittedBlockApplier
             null,
             DateTime.UtcNow));
 
+        if (sourceModel.ContributionProof != null)
+        {
+            _finalityMetadata.SaveContributionProof(
+                block.Hash,
+                GrpcProjectMapper.ToContributionProof(sourceModel.ContributionProof));
+        }
+
         await _notifications.NotifyClientsAsync(sourceModel);
 
         if (broadcastToPeers)

@@ -14,3 +14,7 @@
 **/coverage/
 **/.pytest_cache/
 **/.DS_Store
+.tmp/
+.agents/
+.codex/
+iroh-sidecar/target/

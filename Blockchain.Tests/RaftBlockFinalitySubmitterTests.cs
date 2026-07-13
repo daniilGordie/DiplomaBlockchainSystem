@@ -168,7 +168,7 @@ public sealed class RaftBlockFinalitySubmitterTests
             var database = new DatabaseManager(dbPath);
             services.AddNexusNodeServices(database);
 
-            using var provider = services.BuildServiceProvider();
+            await using var provider = services.BuildServiceProvider();
             var manager = provider.GetRequiredService<BlockchainManager>();
             var latest = manager.GetLatestBlock("System");
             Assert.NotNull(latest);

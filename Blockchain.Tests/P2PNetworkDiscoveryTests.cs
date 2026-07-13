@@ -30,13 +30,15 @@ public class P2PNetworkDiscoveryTests
                 "Full"), null!);
 
             var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
+            var registry = new DatabaseManager(dbPath, "").LoadAllPeerInfos();
 
             Assert.True(result.Success);
-            var peer = Assert.Single(directory.Peers);
+            Assert.Empty(directory.Peers);
+            var peer = Assert.Single(registry);
             Assert.Equal("node-a", peer.NodeId);
-            Assert.Equal("https://node-a.example.test", peer.PublicUrl);
+            Assert.Equal("https://node-a.example.test", peer.Url);
             Assert.Equal("Full", peer.Role);
-            Assert.True(peer.IsTrusted);
+            Assert.False(peer.IsTrusted);
             Assert.False(string.IsNullOrWhiteSpace(peer.NodePublicKey));
             Assert.False(string.IsNullOrWhiteSpace(peer.LastSeen));
         }
@@ -67,10 +69,13 @@ public class P2PNetworkDiscoveryTests
                 "Full"), null!);
 
             var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
+            var registry = new DatabaseManager(dbPath, "").LoadAllPeerInfos();
 
             Assert.True(result.Success);
-            var peer = Assert.Single(directory.Peers);
-            Assert.Equal("iroh://2jc4u57t7y4wuwcany4oa7enrhnnj3cfom3t7fhrc27fdvxfpv3q", peer.PublicUrl);
+            Assert.Empty(directory.Peers);
+            var peer = Assert.Single(registry);
+            Assert.Equal("iroh://2jc4u57t7y4wuwcany4oa7enrhnnj3cfom3t7fhrc27fdvxfpv3q", peer.Url);
+            Assert.False(peer.IsTrusted);
         }
         finally
         {
@@ -163,9 +168,12 @@ public class P2PNetworkDiscoveryTests
             }, null!);
 
             var directory = await service.GetPeerDirectory(new EmptyRequest(), null!);
+            var registry = new DatabaseManager(dbPath, "").LoadAllPeerInfos();
 
             Assert.True(result.Success);
-            Assert.Single(directory.Peers);
+            Assert.Empty(directory.Peers);
+            var peer = Assert.Single(registry);
+            Assert.False(peer.IsTrusted);
         }
         finally
         {
@@ -218,6 +226,39 @@ public class P2PNetworkDiscoveryTests
             Assert.False(string.IsNullOrWhiteSpace(peer.LastSeen));
             Assert.False(string.IsNullOrWhiteSpace(peer.LastFailure));
             Assert.True(peer.IsTrusted);
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void PeerStore_ShouldFilterUntrustedPeersUntilApproved()
+    {
+        string dbPath = TempDbPath("p2p-peer-trust");
+        try
+        {
+            var database = new DatabaseManager(dbPath, "");
+            database.SavePeer(new PeerInfo("https://node-a.example.test", "node-a", "Full", IsTrusted: false));
+
+            Assert.Empty(database.LoadPeerInfos());
+            var pending = Assert.Single(database.LoadAllPeerInfos());
+            Assert.False(pending.IsTrusted);
+
+            database.SetPeerTrust("https://node-a.example.test", true);
+            var trusted = Assert.Single(database.LoadPeerInfos());
+            Assert.True(trusted.IsTrusted);
+
+            database.SetPeerRole("https://node-a.example.test", "Consensus");
+            trusted = Assert.Single(database.LoadPeerInfos());
+            Assert.Equal("Consensus", trusted.Role);
+
+            database.SetPeerTrust("https://node-a.example.test", false);
+            Assert.Empty(database.LoadPeerInfos());
+            var revoked = Assert.Single(database.LoadAllPeerInfos());
+            Assert.False(revoked.IsTrusted);
+            Assert.Equal("Consensus", revoked.Role);
         }
         finally
         {

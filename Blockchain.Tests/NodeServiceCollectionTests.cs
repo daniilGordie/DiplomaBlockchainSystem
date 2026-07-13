@@ -15,7 +15,7 @@ using Microsoft.Extensions.Hosting;
 public class NodeServiceCollectionTests
 {
     [Fact]
-    public void AddNexusNodeServices_RegistersApplicationPorts()
+    public async Task AddNexusNodeServices_RegistersApplicationPorts()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"nexus-di-{Guid.NewGuid():N}.db");
 
@@ -38,7 +38,7 @@ public class NodeServiceCollectionTests
             services.AddSignalR();
             services.AddNexusNodeServices(database);
 
-            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
             {
                 ValidateOnBuild = true,
                 ValidateScopes = true
@@ -87,7 +87,7 @@ public class NodeServiceCollectionTests
     }
 
     [Fact]
-    public void AddNexusNodeServices_ShouldResolveRaftClusterWhenRaftModeIsConfigured()
+    public async Task AddNexusNodeServices_ShouldResolveRaftClusterWhenRaftModeIsConfigured()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"nexus-di-raft-{Guid.NewGuid():N}.db");
         var raftLogPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-{Guid.NewGuid():N}");
@@ -116,13 +116,14 @@ public class NodeServiceCollectionTests
             services.AddSignalR();
             services.AddNexusNodeServices(database);
 
-            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
             {
                 ValidateOnBuild = true,
                 ValidateScopes = true
             });
 
             Assert.NotNull(provider.GetRequiredService<DotNext.Net.Cluster.Consensus.Raft.IRaftCluster>());
+            Assert.IsAssignableFrom<SimpleStateMachine>(provider.GetRequiredService<IStateMachine>());
             Assert.IsType<RaftBlockFinalitySubmitter>(provider.GetRequiredService<IBlockFinalitySubmitter>());
         }
         finally
@@ -147,7 +148,7 @@ public class NodeServiceCollectionTests
     }
 
     [Fact]
-    public void AddNexusNodeServices_ShouldAllowEdgeNodeWithoutLocalRaftConfiguration()
+    public async Task AddNexusNodeServices_ShouldAllowEdgeNodeWithoutLocalRaftConfiguration()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"nexus-di-edge-{Guid.NewGuid():N}.db");
 
@@ -173,7 +174,7 @@ public class NodeServiceCollectionTests
             services.AddSignalR();
             services.AddNexusNodeServices(database);
 
-            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
             {
                 ValidateOnBuild = true,
                 ValidateScopes = true

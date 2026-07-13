@@ -3,6 +3,8 @@ using Blockchain.Node.Services;
 using Microsoft.Extensions.Options;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace Blockchain.Node.Endpoints;
 
@@ -37,6 +39,9 @@ public static class SetupStatusEndpoints
                 irohStatus != null,
                 irohStatus?.NodeId ?? string.Empty,
                 irohStatus?.RelayUrl ?? string.Empty,
+                irohStatus?.ConnectionPath ?? string.Empty,
+                irohStatus?.TransportMode ?? string.Empty,
+                irohStatus?.DirectAddresses?.Length ?? 0,
                 Math.Clamp(options.DiscoveryIntervalSeconds, 10, 3600),
                 versionOptions.Value.NodeVersion,
                 versionOptions.Value.ProtocolVersion));
@@ -75,11 +80,15 @@ public static class SetupStatusEndpoints
                 irohStatus?.NodeId ?? string.Empty,
                 irohStatus?.PublicUrl ?? string.Empty,
                 irohStatus?.RelayUrl ?? string.Empty,
+                irohStatus?.ConnectionPath ?? string.Empty,
+                irohStatus?.TransportMode ?? string.Empty,
+                irohStatus?.DirectAddresses?.Length ?? 0,
                 consensusValue.FinalityMode,
                 consensusValue.EnableProofOfContributionValidation,
                 consensusValue.RequireProofOfWork,
                 consensusValue.AcceptP2PBlocksAsFinal,
                 string.Equals(consensusValue.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase) && nodeValue.IsConsensusMember,
+                raftValue.Transport,
                 raftValue.HasMinimumConfiguration,
                 raftValue.NodeId,
                 raftValue.PublicEndPoint,
@@ -96,6 +105,8 @@ public static class SetupStatusEndpoints
             IOptions<RaftOptions> raft,
             NodeIdentity nodeIdentity,
             IrohSidecarClient irohSidecar,
+            EdgeCommittedBlockSyncService edgeSync,
+            IrohProposalForwarder proposalForwarder,
             IPeerStore peerStore,
             IBlockStore blockStore) =>
         {
@@ -107,7 +118,7 @@ public static class SetupStatusEndpoints
                 ? await irohSidecar.GetStatusAsync()
                 : null;
             var diagnostics = BuildNodeDiagnostics(configuration, nodeValue, p2pValue, consensusValue, raftValue);
-            var peers = peerStore.LoadPeerInfos()
+            var peers = peerStore.LoadAllPeerInfos()
                 .Select(peer => new NetworkPeerResponse(
                     peer.Url,
                     peer.NodeId,
@@ -115,7 +126,22 @@ public static class SetupStatusEndpoints
                     IrohSidecarClient.IsIrohPeerUrl(peer.Url) ? "Iroh" : "HttpGrpc",
                     peer.LastSeen ?? string.Empty,
                     peer.LastFailure ?? string.Empty,
-                    peer.IsTrusted))
+                    peer.IsTrusted,
+                    peer.NetworkId,
+                    peer.PublicKeyFingerprint,
+                    peer.IrohNodeId,
+                    peer.RequestedRole,
+                    peer.MembershipStatus,
+                    peer.ApprovedAt,
+                    peer.ApprovedBy,
+                    peer.RejectedAt,
+                    peer.RejectedBy,
+                    peer.RevokedAt,
+                    peer.RevokedBy,
+                    peer.Reason,
+                    peer.AppVersion,
+                    peer.ProtocolVersion,
+                    peer.Capabilities))
                 .ToArray();
             var channels = blockStore.GetKnownChannels()
                 .Select(channelId =>
@@ -138,21 +164,353 @@ public static class SetupStatusEndpoints
                 nodeValue.IsEdge,
                 p2pValue.EffectiveNodeId,
                 Fingerprint(nodeIdentity.PublicKey),
+                FirstNonEmpty(configuration["Network:Id"], configuration["NetworkId"], "nexus-main"),
+                configuration["Network:TrustedBootstrapFingerprint"] ?? string.Empty,
                 p2pValue.Iroh.Enabled,
                 irohStatus != null,
                 irohStatus?.PublicUrl ?? string.Empty,
+                irohStatus?.ConnectionPath ?? string.Empty,
+                irohStatus?.TransportMode ?? string.Empty,
+                irohStatus?.DirectAddresses?.Length ?? 0,
                 p2pValue.NormalizedBootstrapPeers.ToArray(),
                 peers,
                 consensusValue.FinalityMode,
                 consensusValue.EnableProofOfContributionValidation,
                 string.Equals(consensusValue.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase) && nodeValue.IsConsensusMember,
+                raftValue.Transport,
                 raftValue.HasMinimumConfiguration,
                 raftValue.NodeId,
                 raftValue.PublicEndPoint,
                 channels,
-                0,
+                ToEdgeSyncResponse(edgeSync.GetStatus()),
+                ToEdgeProposalForwardingResponse(proposalForwarder.GetStatus()),
                 diagnostics.Errors,
                 diagnostics.Warnings));
+        });
+
+        endpoints.MapGet("/api/network/peers", (
+            IPeerStore peerStore) =>
+        {
+            var peers = peerStore.LoadAllPeerInfos()
+                .Select(peer => new NetworkPeerResponse(
+                    peer.Url,
+                    peer.NodeId,
+                    peer.Role,
+                    IrohSidecarClient.IsIrohPeerUrl(peer.Url) ? "Iroh" : "HttpGrpc",
+                    peer.LastSeen ?? string.Empty,
+                    peer.LastFailure ?? string.Empty,
+                    peer.IsTrusted))
+                .ToArray();
+
+            return Results.Json(new NetworkPeersResponse(peers));
+        });
+
+        endpoints.MapGet("/api/network/invite", async (
+            HttpContext httpContext,
+            IConfiguration configuration,
+            IOptions<NexusNodeOptions> node,
+            IOptions<P2POptions> p2p,
+            NodeIdentity nodeIdentity,
+            IrohSidecarClient irohSidecar) =>
+        {
+            var p2pValue = p2p.Value;
+            string fallbackHttpUrl = $"{httpContext.Request.Scheme}://{httpContext.Request.Host}";
+            string bootstrapHttpUrl = FirstNonEmpty(
+                p2pValue.NormalizedPublicUrl,
+                configuration["Network:BootstrapHttpUrl"],
+                configuration["BootstrapHttpUrl"],
+                fallbackHttpUrl);
+            string bootstrapGrpcUrl = FirstNonEmpty(
+                configuration["Network:BootstrapGrpcUrl"],
+                configuration["BootstrapGrpcUrl"],
+                bootstrapHttpUrl);
+            string irohUrl = string.Empty;
+            if (p2pValue.Iroh.Enabled)
+            {
+                irohUrl = await irohSidecar.GetPublicUrlAsync();
+            }
+
+            var invite = new NetworkInviteResponse(
+                FirstNonEmpty(configuration["Network:Id"], configuration["NetworkId"], "nexus-main"),
+                bootstrapHttpUrl,
+                bootstrapGrpcUrl,
+                irohUrl,
+                p2pValue.EffectiveNodeId,
+                node.Value.EffectiveRole.ToString(),
+                Fingerprint(nodeIdentity.PublicKey),
+                "Edge",
+                DateTime.UtcNow,
+                string.Empty);
+            invite = invite with { Token = EncodeInvite(invite) };
+            return Results.Json(invite);
+        });
+
+        endpoints.MapPost("/api/network/peers/trust", (
+            PeerTrustRequest request,
+            IConfiguration configuration,
+            IPeerStore peerStore,
+            P2PNetworkService p2pNetwork) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            string url = P2POptions.NormalizeUrl(request.Url);
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return Results.BadRequest(new PeerTrustResponse(false, "Peer URL is required."));
+            }
+
+            peerStore.SetPeerTrust(url, request.IsTrusted);
+            if (request.IsTrusted)
+            {
+                p2pNetwork.AddPeer(url);
+            }
+            else
+            {
+                p2pNetwork.RemovePeer(url);
+            }
+
+            return Results.Json(new PeerTrustResponse(true, request.IsTrusted ? "Peer approved." : "Peer revoked."));
+        });
+
+        endpoints.MapPost("/api/network/peers/role", (
+            PeerRoleRequest request,
+            IConfiguration configuration,
+            IPeerStore peerStore,
+            P2PNetworkService p2pNetwork) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            string url = P2POptions.NormalizeUrl(request.Url);
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return Results.BadRequest(new PeerRoleResponse(false, "Peer URL is required.", string.Empty));
+            }
+
+            string role = NormalizePeerRole(request.Role);
+            if (string.IsNullOrWhiteSpace(role))
+            {
+                return Results.BadRequest(new PeerRoleResponse(false, "Peer role must be Edge, Consensus, Bootstrap, or Full.", string.Empty));
+            }
+
+            peerStore.SetPeerRole(url, role);
+            var peer = peerStore.LoadAllPeerInfos()
+                .FirstOrDefault(peer => string.Equals(peer.Url, url, StringComparison.OrdinalIgnoreCase));
+            if (peer?.IsTrusted == true)
+            {
+                p2pNetwork.AddPeer(url);
+            }
+
+            return Results.Json(new PeerRoleResponse(true, $"Peer role updated to {role}.", role));
+        });
+
+        endpoints.MapPost("/api/network/membership/join", (
+            MembershipJoinRequest request,
+            IConfiguration configuration,
+            IPeerStore peerStore) =>
+        {
+            string networkId = FirstNonEmpty(configuration["Network:Id"], configuration["NetworkId"], "nexus-main");
+            if (!string.Equals(request.NetworkId, networkId, StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.BadRequest(new MembershipActionResponse(false, "Node network id is incompatible with this network."));
+            }
+
+            string url = P2POptions.NormalizeUrl(FirstNonEmpty(request.IrohUrl, request.PublicEndpoint));
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return Results.BadRequest(new MembershipActionResponse(false, "Join request requires an Iroh URL or public endpoint."));
+            }
+
+            string role = NormalizePeerRole(FirstNonEmpty(request.RequestedRole, "Edge"));
+            if (string.IsNullOrWhiteSpace(role))
+            {
+                return Results.BadRequest(new MembershipActionResponse(false, "Requested role must be Edge, Consensus, Bootstrap, or Full."));
+            }
+
+            var peer = new PeerInfo(
+                url,
+                request.NodeId,
+                "Edge",
+                DateTime.UtcNow.ToString("O"),
+                null,
+                false,
+                request.NodePublicKey,
+                request.NetworkId,
+                Fingerprint(request.NodePublicKey),
+                request.IrohNodeId,
+                role,
+                PeerMembershipStatuses.PendingApproval,
+                AppVersion: request.AppVersion,
+                ProtocolVersion: request.ProtocolVersion,
+                Capabilities: NormalizeCapabilities(request.Capabilities));
+            peerStore.SavePeer(peer);
+            peerStore.SetPeerMembership(url, PeerMembershipStatuses.PendingApproval, request.NodeId, "join request submitted");
+            return Results.Json(new MembershipActionResponse(true, "Join request is awaiting administrator approval."));
+        });
+
+        endpoints.MapGet("/api/network/membership", (
+            IPeerStore peerStore,
+            string? status) =>
+        {
+            var peers = peerStore.LoadAllPeerInfos()
+                .Where(peer => string.IsNullOrWhiteSpace(status) || string.Equals(peer.MembershipStatus, status, StringComparison.OrdinalIgnoreCase))
+                .Select(ToMembershipResponse)
+                .ToArray();
+            return Results.Json(new MembershipListResponse(peers));
+        });
+
+        endpoints.MapGet("/api/network/membership/{nodeIdOrUrl}", (
+            string nodeIdOrUrl,
+            IPeerStore peerStore) =>
+        {
+            var peer = peerStore.LoadAllPeerInfos()
+                .FirstOrDefault(item =>
+                    string.Equals(item.NodeId, nodeIdOrUrl, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(item.Url, nodeIdOrUrl, StringComparison.OrdinalIgnoreCase));
+            return peer == null
+                ? Results.NotFound(new MembershipActionResponse(false, "Node not found."))
+                : Results.Json(ToMembershipResponse(peer));
+        });
+
+        endpoints.MapPost("/api/network/membership/{nodeIdOrUrl}/status", (
+            string nodeIdOrUrl,
+            MembershipStatusChangeRequest request,
+            IConfiguration configuration,
+            IPeerStore peerStore,
+            P2PNetworkService p2pNetwork) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            var peer = FindPeer(peerStore, nodeIdOrUrl);
+            if (peer == null)
+            {
+                return Results.NotFound(new MembershipActionResponse(false, "Node not found."));
+            }
+
+            string status = NormalizeMembershipStatus(request.Status);
+            peerStore.SetPeerMembership(peer.Url, status, request.Actor, request.Reason);
+            if (status == PeerMembershipStatuses.Approved || status == PeerMembershipStatuses.ConsensusCandidate)
+            {
+                p2pNetwork.AddPeer(peer.Url);
+            }
+            else if (status == PeerMembershipStatuses.Revoked || status == PeerMembershipStatuses.Rejected)
+            {
+                p2pNetwork.RemovePeer(peer.Url);
+            }
+
+            return Results.Json(new MembershipActionResponse(true, $"Membership status updated to {status}."));
+        });
+
+        endpoints.MapPost("/api/network/membership/{nodeIdOrUrl}/capabilities", (
+            string nodeIdOrUrl,
+            MembershipCapabilitiesRequest request,
+            IConfiguration configuration,
+            IPeerStore peerStore) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            var peer = FindPeer(peerStore, nodeIdOrUrl);
+            if (peer == null)
+            {
+                return Results.NotFound(new MembershipActionResponse(false, "Node not found."));
+            }
+
+            peerStore.SetPeerCapabilities(peer.Url, NormalizeCapabilities(request.Capabilities), request.Actor, request.Reason);
+            return Results.Json(new MembershipActionResponse(true, "Capabilities updated."));
+        });
+
+        endpoints.MapPost("/api/network/membership/{nodeIdOrUrl}/promotion", (
+            string nodeIdOrUrl,
+            MembershipPromotionRequest request,
+            IConfiguration configuration,
+            IPeerStore peerStore) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            var peer = FindPeer(peerStore, nodeIdOrUrl);
+            if (peer == null)
+            {
+                return Results.NotFound(new MembershipActionResponse(false, "Node not found."));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.PublicConsensusEndpoint))
+            {
+                return Results.BadRequest(new MembershipActionResponse(false, "Promotion requires a public consensus endpoint. The node was not added to Raft."));
+            }
+
+            var capabilities = new HashSet<string>(request.Capabilities ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase)
+            {
+                "Consensus"
+            };
+            peerStore.SetPeerRole(peer.Url, "Consensus");
+            peerStore.SetPeerMembership(peer.Url, PeerMembershipStatuses.ConsensusCandidate, request.Actor, "promotion requested; operator must apply generated consensus config");
+            peerStore.SetPeerCapabilities(peer.Url, NormalizeCapabilities(capabilities), request.Actor, request.Reason);
+            return Results.Json(new MembershipActionResponse(true, "Node marked as ConsensusCandidate. Apply generated consensus config before treating it as a Raft voter."));
+        });
+
+        endpoints.MapPost("/api/network/membership/{nodeIdOrUrl}/demote", (
+            string nodeIdOrUrl,
+            MembershipStatusChangeRequest request,
+            IConfiguration configuration,
+            IPeerStore peerStore) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            var peer = FindPeer(peerStore, nodeIdOrUrl);
+            if (peer == null)
+            {
+                return Results.NotFound(new MembershipActionResponse(false, "Node not found."));
+            }
+
+            peerStore.SetPeerRole(peer.Url, "Edge");
+            peerStore.SetPeerMembership(peer.Url, PeerMembershipStatuses.Approved, request.Actor, "demoted to Edge");
+            return Results.Json(new MembershipActionResponse(true, "Node demoted to Edge."));
+        });
+
+        endpoints.MapGet("/api/network/membership/{nodeIdOrUrl}/audit", (
+            string nodeIdOrUrl,
+            IPeerStore peerStore,
+            int? limit) =>
+        {
+            var peer = FindPeer(peerStore, nodeIdOrUrl);
+            if (peer == null)
+            {
+                return Results.NotFound(new MembershipActionResponse(false, "Node not found."));
+            }
+
+            return Results.Json(new MembershipAuditResponse(peerStore.LoadPeerAudit(peer.Url, Math.Clamp(limit ?? 100, 1, 500))));
+        });
+
+        endpoints.MapPost("/api/network/sync", async (
+            NetworkSyncRequest request,
+            IConfiguration configuration,
+            EdgeCommittedBlockSyncService edgeSync,
+            CancellationToken cancellationToken) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            var status = await edgeSync.SyncOnceAsync(cancellationToken);
+            return Results.Json(ToEdgeSyncResponse(status));
         });
 
         endpoints.MapGet("/api/setup/diagnostics", (
@@ -270,6 +628,8 @@ public static class SetupStatusEndpoints
     {
         var errors = new List<string>();
         string mode = NormalizeMode(request.Mode);
+        var invite = ParseInvite(request.ConnectionInvite);
+        string bootstrapGrpcUrl = ResolveBootstrapGrpcUrl(request, invite);
         if (mode is not ("local" or "edge" or "consensus" or "bootstrap"))
         {
             errors.Add("Choose Local node, Join network, Consensus node, or Bootstrap node.");
@@ -280,9 +640,9 @@ public static class SetupStatusEndpoints
             errors.Add("Bootstrap mode requires a public HTTP or HTTPS URL.");
         }
 
-        if ((mode == "edge" || mode == "consensus") && !IsHttpUrl(request.BootstrapGrpcUrl))
+        if ((mode == "edge" || mode == "consensus") && !IsHttpUrl(bootstrapGrpcUrl))
         {
-            errors.Add("Join network mode requires a bootstrap gRPC HTTP or HTTPS URL.");
+            errors.Add("Join network mode requires a bootstrap HTTP/gRPC URL or a valid connection invite.");
         }
 
         string relayMode = NormalizeRelayMode(request.RelayMode);
@@ -306,11 +666,22 @@ public static class SetupStatusEndpoints
         bool raftFinality = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase);
 
         AddValueDiagnostics(configuration, "Node:Role", errors, warnings);
+        AddValueDiagnostics(configuration, "NodeDbPassword", errors, warnings);
+        AddValueDiagnostics(configuration, "NodeAdminToken", errors, warnings);
+        AddValueDiagnostics(configuration, "WebhookSecret", errors, warnings);
         AddValueDiagnostics(configuration, "Consensus:FinalityMode", errors, warnings);
         AddValueDiagnostics(configuration, "Consensus:ProducerPrivateKeyPassword", errors, warnings);
         AddValueDiagnostics(configuration, "OraclePrivateKeyPassword", errors, warnings);
+        AddValueDiagnostics(configuration, "Network:Id", errors, warnings);
+        AddValueDiagnostics(configuration, "Network:BootstrapHttpUrl", errors, warnings);
+        AddValueDiagnostics(configuration, "Network:BootstrapGrpcUrl", errors, warnings);
+        AddValueDiagnostics(configuration, "Network:BootstrapIrohUrl", errors, warnings);
+        AddValueDiagnostics(configuration, "Network:TrustedBootstrapNodeId", errors, warnings);
+        AddValueDiagnostics(configuration, "Network:TrustedBootstrapFingerprint", errors, warnings);
+        AddValueDiagnostics(configuration, "P2P:SyncToken", errors, warnings);
         AddValueDiagnostics(configuration, "P2P:Iroh:LocalApiToken", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:NodeId", errors, warnings);
+        AddValueDiagnostics(configuration, "Raft:Transport", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:PublicEndPoint", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:Peers:0:Id", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:Peers:0:EndPoint", errors, warnings);
@@ -320,6 +691,16 @@ public static class SetupStatusEndpoints
             errors.Add("Node:Role=Edge requires P2P:Iroh:Enabled=true.");
         }
 
+        if ((node.IsEdge || node.EffectiveRole == NexusNodeRole.Consensus) && p2p.NormalizedBootstrapPeers.Count == 0)
+        {
+            errors.Add("Edge/Consensus nodes require at least one P2P bootstrap peer.");
+        }
+
+        if (node.IsEdge && string.IsNullOrWhiteSpace(configuration["Network:TrustedBootstrapFingerprint"]))
+        {
+            warnings.Add("Edge node has no trusted bootstrap fingerprint. Use a connection invite from the bootstrap node.");
+        }
+
         if (node.IsEdge && raftFinality && raft.HasMinimumConfiguration)
         {
             warnings.Add("Edge nodes ignore local Raft configuration. Use Consensus or Bootstrap role for Raft membership.");
@@ -327,7 +708,35 @@ public static class SetupStatusEndpoints
 
         if (node.IsConsensusMember && raftFinality && !raft.HasMinimumConfiguration)
         {
-            errors.Add("Consensus/Bootstrap nodes with Consensus:FinalityMode=Raft require Raft:NodeId, Raft:PublicEndPoint, and at least one peer.");
+            errors.Add("Consensus/Bootstrap nodes with Consensus:FinalityMode=Raft require Raft:NodeId and Raft:PublicEndPoint.");
+        }
+
+        if (node.IsConsensusMember && raftFinality && !raft.UsesSupportedTransport)
+        {
+            errors.Add($"Raft:Transport={raft.Transport} is not supported. Use Tcp or Iroh.");
+        }
+
+        if (node.IsConsensusMember && raftFinality && raft.UsesIrohTransport)
+        {
+            if (!p2p.Iroh.Enabled)
+            {
+                errors.Add("Raft:Transport=Iroh requires P2P:Iroh:Enabled=true.");
+            }
+
+            if (string.IsNullOrWhiteSpace(raft.IrohNodeId))
+            {
+                errors.Add("Raft:Transport=Iroh requires Raft:IrohNodeId.");
+            }
+
+            if (raft.Peers.Any(peer => !string.IsNullOrWhiteSpace(peer.EndPoint) && !IrohSidecarClient.IsIrohPeerUrl(peer.EndPoint)))
+            {
+                errors.Add("Raft:Transport=Iroh requires all Raft peer endpoints to use iroh://<node-id>.");
+            }
+        }
+
+        if (node.IsConsensusMember && raftFinality && raft.HasMinimumConfiguration && !raft.HasRemotePeers)
+        {
+            warnings.Add("Raft is configured as a single-member cluster. Blocks can be finalized, but add consensus peers for fault tolerance.");
         }
 
         if (node.IsLocal && raftFinality)
@@ -371,6 +780,7 @@ public static class SetupStatusEndpoints
     {
         var warnings = new List<string>();
         string relayMode = NormalizeRelayMode(request.RelayMode);
+        var invite = ParseInvite(request.ConnectionInvite);
         if (mode == "local")
         {
             warnings.Add("Local mode is isolated and will not join the shared blockchain network.");
@@ -386,6 +796,11 @@ public static class SetupStatusEndpoints
             warnings.Add("Public bootstrap nodes should use HTTPS in production.");
         }
 
+        if (invite != null && string.IsNullOrWhiteSpace(invite.TrustedBootstrapFingerprint))
+        {
+            warnings.Add("Connection invite does not include a trusted bootstrap fingerprint.");
+        }
+
         return warnings;
     }
 
@@ -393,9 +808,12 @@ public static class SetupStatusEndpoints
     {
         string nodeId = string.IsNullOrWhiteSpace(request.NodeId) ? NewNodeId(mode) : request.NodeId.Trim();
         string relayMode = NormalizeRelayMode(request.RelayMode);
+        var invite = ParseInvite(request.ConnectionInvite);
+        string bootstrapGrpcUrl = ResolveBootstrapGrpcUrl(request, invite);
         var lines = new List<string>
         {
             "ASPNETCORE_ENVIRONMENT=Production",
+            "NETWORK_ID=" + (invite?.NetworkId ?? (mode == "local" ? "nexus-local" : "nexus-main")),
             "NODE_DB_PASSWORD=" + NewSecret(),
             "NODE_ROLE=" + (mode switch
             {
@@ -410,8 +828,8 @@ public static class SetupStatusEndpoints
             "ORACLE_PRIVATE_KEY_PASSWORD=" + NewSecret(),
             "ORACLE_KEY_PATH=/data/oracle_key.dat",
             "CONSENSUS_ENABLE_POC=" + (mode == "local" ? "false" : "true"),
-            "CONSENSUS_REQUIRE_PROOF_OF_WORK=" + (mode == "local" ? "true" : "false"),
-            "CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL=" + (mode == "local" ? "true" : "false"),
+            "CONSENSUS_REQUIRE_PROOF_OF_WORK=false",
+            "CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL=false",
             "CONSENSUS_FINALITY_MODE=" + (mode == "local" ? ConsensusFinalityModes.Immediate : ConsensusFinalityModes.Raft),
             "CONSENSUS_PRODUCER_KEY_PATH=/data/producer-key.dat",
             "CONSENSUS_PRODUCER_KEY_PASSWORD=" + NewSecret(),
@@ -428,8 +846,9 @@ public static class SetupStatusEndpoints
             lines.Add("NODE_HTTP_PORT=7041");
             lines.Add("NODE_GRPC_PORT=7141");
             lines.Add("RAFT_PORT=6041");
+            lines.Add("RAFT_TRANSPORT=Tcp");
             lines.Add("RAFT_NODE_ID=" + nodeId);
-            lines.Add("RAFT_PUBLIC_ENDPOINT=bootstrap-node:6041");
+            lines.Add("RAFT_PUBLIC_ENDPOINT=" + DeriveHostPort(request.PublicUrl.Trim(), 6041));
             lines.Add("RAFT_LOG_PATH=/data/raft-log");
             lines.Add("RAFT_USE_PERSISTENT_MEMBERSHIP=true");
             lines.Add("RAFT_MEMBERSHIP_PATH=/data/raft-membership");
@@ -437,21 +856,39 @@ public static class SetupStatusEndpoints
             lines.Add("RAFT_PEER_ID=");
             lines.Add("RAFT_PEER_ENDPOINT=");
             lines.Add("P2P_PUBLIC_URL=" + request.PublicUrl.Trim());
+            lines.Add("NETWORK_BOOTSTRAP_HTTP_URL=" + request.PublicUrl.Trim());
+            lines.Add("NETWORK_BOOTSTRAP_GRPC_URL=" + request.PublicUrl.Trim());
+            lines.Add("NETWORK_BOOTSTRAP_IROH_URL=");
+            lines.Add("NETWORK_TRUSTED_BOOTSTRAP_NODE_ID=" + nodeId);
+            lines.Add("NETWORK_TRUSTED_BOOTSTRAP_FINGERPRINT=");
             lines.Add("P2P_MAX_REGISTERED_PEERS=5000");
             lines.Add("P2P_MAX_REGISTRATIONS_PER_MINUTE_PER_ADDRESS=30");
         }
         else
         {
-            lines.Add("NODE_HTTP_PORT=7042");
-            lines.Add("NODE_GRPC_PORT=7142");
-            lines.Add("P2P_BOOTSTRAP_GRPC_URL=" + (mode == "local" ? "" : request.BootstrapGrpcUrl.Trim()));
-            lines.Add("IROH_LOCAL_API_TOKEN=" + NewSecret());
-            lines.Add("IROH_SECRET_KEY_PATH=/data/iroh-secret.key");
-            lines.Add("IROH_RELAY_MODE=" + relayMode);
+            lines.Add("NODE_HTTP_PORT=" + (mode == "local" ? "7040" : "7042"));
+            lines.Add("NODE_GRPC_PORT=" + (mode == "local" ? "7140" : "7142"));
+            if (mode == "local")
+            {
+                lines.Add("UI_HTTP_PORT=7080");
+            }
+            lines.Add("P2P_BOOTSTRAP_GRPC_URL=" + (mode == "local" ? "" : bootstrapGrpcUrl));
+            lines.Add("NETWORK_BOOTSTRAP_HTTP_URL=" + (mode == "local" ? "" : (invite?.BootstrapHttpUrl ?? "")));
+            lines.Add("NETWORK_BOOTSTRAP_GRPC_URL=" + (mode == "local" ? "" : bootstrapGrpcUrl));
+            lines.Add("NETWORK_BOOTSTRAP_IROH_URL=" + (mode == "local" ? "" : (invite?.BootstrapIrohUrl ?? "")));
+            lines.Add("NETWORK_TRUSTED_BOOTSTRAP_NODE_ID=" + (mode == "local" ? "" : (invite?.TrustedBootstrapNodeId ?? "")));
+            lines.Add("NETWORK_TRUSTED_BOOTSTRAP_FINGERPRINT=" + (mode == "local" ? "" : (invite?.TrustedBootstrapFingerprint ?? "")));
+            if (mode != "local")
+            {
+                lines.Add("IROH_LOCAL_API_TOKEN=" + NewSecret());
+                lines.Add("IROH_SECRET_KEY_PATH=/data/iroh-secret.key");
+                lines.Add("IROH_RELAY_MODE=" + relayMode);
+            }
 
             if (mode == "consensus")
             {
                 lines.Add("RAFT_PORT=6042");
+                lines.Add("RAFT_TRANSPORT=Tcp");
                 lines.Add("RAFT_NODE_ID=" + nodeId);
                 lines.Add("RAFT_PUBLIC_ENDPOINT=consensus-node:6042");
                 lines.Add("RAFT_LOG_PATH=/data/raft-log");
@@ -466,9 +903,98 @@ public static class SetupStatusEndpoints
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
+    private static NetworkInviteResponse? ParseInvite(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        string trimmed = value.Trim();
+        try
+        {
+            string json = trimmed.StartsWith('{')
+                ? trimmed
+                : Encoding.UTF8.GetString(DecodeBase64Url(trimmed));
+            return JsonSerializer.Deserialize<NetworkInviteResponse>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string ResolveBootstrapGrpcUrl(SetupPlanRequest request, NetworkInviteResponse? invite) =>
+        FirstNonEmpty(invite?.BootstrapGrpcUrl, request.BootstrapGrpcUrl);
+
+    private static string EncodeInvite(NetworkInviteResponse invite)
+    {
+        var payload = invite with { Token = string.Empty };
+        string json = JsonSerializer.Serialize(payload);
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(json))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static byte[] DecodeBase64Url(string value)
+    {
+        string padded = value.Replace('-', '+').Replace('_', '/');
+        int padding = padded.Length % 4;
+        if (padding > 0)
+        {
+            padded = padded.PadRight(padded.Length + 4 - padding, '=');
+        }
+
+        return Convert.FromBase64String(padded);
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (string? value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string DeriveHostPort(string url, int port)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return url;
+        }
+
+        string host = uri.Host.Contains(":", StringComparison.Ordinal) && !uri.Host.StartsWith("[", StringComparison.Ordinal)
+            ? $"[{uri.Host}]"
+            : uri.Host;
+        return $"{host}:{port}";
+    }
+
     private static bool IsHttpUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    private static bool IsValidAdminToken(IConfiguration configuration, string suppliedToken)
+    {
+        string configuredToken = configuration["NodeAdminToken"] ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(configuredToken) || string.IsNullOrWhiteSpace(suppliedToken))
+        {
+            return false;
+        }
+
+        byte[] expected = Encoding.UTF8.GetBytes(configuredToken);
+        byte[] actual = Encoding.UTF8.GetBytes(suppliedToken);
+        return expected.Length == actual.Length &&
+               CryptographicOperations.FixedTimeEquals(expected, actual);
+    }
 
     private static string NormalizeMode(string? mode) =>
         (mode ?? "").Trim().ToLowerInvariant() switch
@@ -483,6 +1009,86 @@ public static class SetupStatusEndpoints
     private static string NormalizeRelayMode(string? relayMode) =>
         string.IsNullOrWhiteSpace(relayMode) ? "default" : relayMode.Trim().ToLowerInvariant();
 
+    private static string NormalizePeerRole(string? role) =>
+        (role ?? "").Trim().ToLowerInvariant() switch
+        {
+            "bootstrap" or "bootstrap-node" => "Bootstrap",
+            "consensus" or "consensus-node" or "raft" or "raft-member" => "Consensus",
+            "edge" or "edge-node" or "full" or "fullnode" or "full-node" => "Edge",
+            "legacy-full" => "Full",
+            _ => string.Empty
+        };
+
+    private static string NormalizeMembershipStatus(string? status)
+    {
+        string value = (status ?? "").Trim().ToLowerInvariant();
+        return value switch
+        {
+            "pending" or "pendingapproval" or "pending-approval" => PeerMembershipStatuses.PendingApproval,
+            "approved" or "approve" => PeerMembershipStatuses.Approved,
+            "rejected" or "reject" => PeerMembershipStatuses.Rejected,
+            "revoked" or "revoke" => PeerMembershipStatuses.Revoked,
+            "offline" => PeerMembershipStatuses.Offline,
+            "stale" => PeerMembershipStatuses.Stale,
+            "incompatible" => PeerMembershipStatuses.Incompatible,
+            "candidate" or "consensuscandidate" or "consensus-candidate" => PeerMembershipStatuses.ConsensusCandidate,
+            _ => PeerMembershipStatuses.PendingApproval
+        };
+    }
+
+    private static string NormalizeCapabilities(IEnumerable<string>? capabilities)
+    {
+        if (capabilities == null) return "Edge";
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Edge",
+            "Consensus",
+            "Storage",
+            "Oracle",
+            "Producer",
+            "Bootstrap"
+        };
+        var normalized = capabilities
+            .Select(item => item?.Trim())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => allowed.FirstOrDefault(value => string.Equals(value, item, StringComparison.OrdinalIgnoreCase)) ?? string.Empty)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return normalized.Length == 0 ? "Edge" : string.Join(",", normalized);
+    }
+
+    private static PeerInfo? FindPeer(IPeerStore peerStore, string nodeIdOrUrl) =>
+        peerStore.LoadAllPeerInfos()
+            .FirstOrDefault(item =>
+                string.Equals(item.NodeId, nodeIdOrUrl, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(item.Url, nodeIdOrUrl, StringComparison.OrdinalIgnoreCase));
+
+    private static MembershipNodeResponse ToMembershipResponse(PeerInfo peer) =>
+        new(
+            peer.Url,
+            peer.NodeId,
+            peer.NetworkId,
+            peer.NodePublicKey,
+            peer.PublicKeyFingerprint,
+            peer.IrohNodeId,
+            peer.Role,
+            peer.RequestedRole,
+            peer.MembershipStatus,
+            peer.IsTrusted,
+            peer.LastSeen ?? string.Empty,
+            peer.ApprovedAt,
+            peer.ApprovedBy,
+            peer.RejectedAt,
+            peer.RejectedBy,
+            peer.RevokedAt,
+            peer.RevokedBy,
+            peer.Reason,
+            peer.AppVersion,
+            peer.ProtocolVersion,
+            peer.Capabilities);
+
     private static string NewNodeId(string mode)
     {
         string value = $"{mode}-{Guid.NewGuid():N}";
@@ -496,15 +1102,46 @@ public static class SetupStatusEndpoints
         return Convert.ToBase64String(bytes);
     }
 
+    private static EdgeSyncStatusResponse ToEdgeSyncResponse(EdgeCommittedBlockSyncStatus status) =>
+        new(
+            status.Enabled,
+            status.State,
+            status.LastAppliedBlocks,
+            status.LastChangedChannels,
+            status.LastSyncUtc,
+            status.LastPeer,
+            status.LastError);
+
+    private static EdgeProposalForwardingStatusResponse ToEdgeProposalForwardingResponse(EdgeProposalForwardingStatus status) =>
+        new(
+            status.Enabled,
+            status.PendingCount,
+            status.State,
+            status.LastChannelId,
+            status.LastPeer,
+            status.LastMessage,
+            status.LastAttemptUtc,
+            status.SuccessCount,
+            status.FailureCount);
+
     private static bool IsDifferent(string current, string latest) =>
         !string.IsNullOrWhiteSpace(latest)
         && !string.Equals(current, latest, StringComparison.OrdinalIgnoreCase);
 
     private static string Fingerprint(string publicKey)
     {
-        byte[] raw = Convert.FromBase64String(publicKey);
-        byte[] hash = System.Security.Cryptography.SHA256.HashData(raw);
-        return Convert.ToHexString(hash).ToLowerInvariant()[..16];
+        if (string.IsNullOrWhiteSpace(publicKey)) return string.Empty;
+        try
+        {
+            byte[] raw = Convert.FromBase64String(publicKey);
+            byte[] hash = System.Security.Cryptography.SHA256.HashData(raw);
+            return Convert.ToHexString(hash).ToLowerInvariant()[..16];
+        }
+        catch
+        {
+            byte[] hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(publicKey));
+            return Convert.ToHexString(hash).ToLowerInvariant()[..16];
+        }
     }
 }
 
@@ -523,6 +1160,9 @@ public sealed record SetupStatusResponse(
     bool IrohSidecarHealthy,
     string IrohNodeId,
     string IrohRelayUrl,
+    string IrohConnectionPath,
+    string IrohTransportMode,
+    int IrohDirectAddressCount,
     int DiscoveryIntervalSeconds,
     string NodeVersion,
     string ProtocolVersion);
@@ -542,11 +1182,15 @@ public sealed record NodeStatusResponse(
     string IrohNodeId,
     string IrohPublicUrl,
     string IrohRelayUrl,
+    string IrohConnectionPath,
+    string IrohTransportMode,
+    int IrohDirectAddressCount,
     string FinalityMode,
     bool ProofOfContributionValidationEnabled,
     bool RequireProofOfWork,
     bool AcceptP2PBlocksAsFinal,
     bool LocalRaftRequested,
+    string RaftTransport,
     bool LocalRaftConfigured,
     string RaftNodeId,
     string RaftPublicEndPoint,
@@ -564,21 +1208,48 @@ public sealed record NetworkStatusResponse(
     bool IsEdge,
     string NodeId,
     string NodeIdentityFingerprint,
+    string NetworkId,
+    string TrustedBootstrapFingerprint,
     bool IrohEnabled,
     bool IrohSidecarHealthy,
     string IrohPublicUrl,
+    string IrohConnectionPath,
+    string IrohTransportMode,
+    int IrohDirectAddressCount,
     string[] BootstrapPeers,
     IReadOnlyList<NetworkPeerResponse> KnownPeers,
     string FinalityMode,
     bool ProofOfContributionValidationEnabled,
     bool LocalRaftRequested,
+    string RaftTransport,
     bool LocalRaftConfigured,
     string RaftNodeId,
     string RaftPublicEndPoint,
     IReadOnlyList<NetworkChannelStatusResponse> Channels,
-    int PendingProposalCount,
+    EdgeSyncStatusResponse EdgeSync,
+    EdgeProposalForwardingStatusResponse EdgeProposalForwarding,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings);
+
+public sealed record EdgeSyncStatusResponse(
+    bool Enabled,
+    string State,
+    int LastAppliedBlocks,
+    int LastChangedChannels,
+    DateTime? LastSyncUtc,
+    string LastPeer,
+    string LastError);
+
+public sealed record EdgeProposalForwardingStatusResponse(
+    bool Enabled,
+    int PendingCount,
+    string State,
+    string LastChannelId,
+    string LastPeer,
+    string LastMessage,
+    DateTime? LastAttemptUtc,
+    long SuccessCount,
+    long FailureCount);
 
 public sealed record NetworkPeerResponse(
     string Url,
@@ -587,7 +1258,119 @@ public sealed record NetworkPeerResponse(
     string Transport,
     string LastSeen,
     string LastFailure,
-    bool IsTrusted);
+    bool IsTrusted,
+    string NetworkId = "",
+    string PublicKeyFingerprint = "",
+    string IrohNodeId = "",
+    string RequestedRole = "",
+    string MembershipStatus = "",
+    string ApprovedAt = "",
+    string ApprovedBy = "",
+    string RejectedAt = "",
+    string RejectedBy = "",
+    string RevokedAt = "",
+    string RevokedBy = "",
+    string Reason = "",
+    string AppVersion = "",
+    string ProtocolVersion = "",
+    string Capabilities = "");
+
+public sealed record NetworkPeersResponse(IReadOnlyList<NetworkPeerResponse> Peers);
+
+public sealed record NetworkInviteResponse(
+    string NetworkId,
+    string BootstrapHttpUrl,
+    string BootstrapGrpcUrl,
+    string BootstrapIrohUrl,
+    string TrustedBootstrapNodeId,
+    string TrustedBootstrapRole,
+    string TrustedBootstrapFingerprint,
+    string SuggestedRole,
+    DateTime CreatedAtUtc,
+    string Token);
+
+public sealed record PeerTrustRequest(
+    string Url,
+    bool IsTrusted,
+    string AdminToken);
+
+public sealed record PeerTrustResponse(
+    bool Success,
+    string Message);
+
+public sealed record PeerRoleRequest(
+    string Url,
+    string Role,
+    string AdminToken);
+
+public sealed record PeerRoleResponse(
+    bool Success,
+    string Message,
+    string Role);
+
+public sealed record MembershipJoinRequest(
+    string NetworkId,
+    string NodeId,
+    string NodePublicKey,
+    string IrohUrl,
+    string IrohNodeId,
+    string PublicEndpoint,
+    string RequestedRole,
+    string AppVersion,
+    string ProtocolVersion,
+    IReadOnlyList<string> Capabilities);
+
+public sealed record MembershipStatusChangeRequest(
+    string Status,
+    string AdminToken,
+    string Actor = "admin",
+    string Reason = "");
+
+public sealed record MembershipCapabilitiesRequest(
+    IReadOnlyList<string> Capabilities,
+    string AdminToken,
+    string Actor = "admin",
+    string Reason = "");
+
+public sealed record MembershipPromotionRequest(
+    string PublicConsensusEndpoint,
+    IReadOnlyList<string> Capabilities,
+    string AdminToken,
+    string Actor = "admin",
+    string Reason = "");
+
+public sealed record MembershipActionResponse(
+    bool Success,
+    string Message);
+
+public sealed record MembershipNodeResponse(
+    string Url,
+    string NodeId,
+    string NetworkId,
+    string NodePublicKey,
+    string PublicKeyFingerprint,
+    string IrohNodeId,
+    string Role,
+    string RequestedRole,
+    string MembershipStatus,
+    bool IsTrusted,
+    string LastSeen,
+    string ApprovedAt,
+    string ApprovedBy,
+    string RejectedAt,
+    string RejectedBy,
+    string RevokedAt,
+    string RevokedBy,
+    string Reason,
+    string AppVersion,
+    string ProtocolVersion,
+    string Capabilities);
+
+public sealed record MembershipListResponse(IReadOnlyList<MembershipNodeResponse> Nodes);
+
+public sealed record MembershipAuditResponse(IReadOnlyList<PeerAuditEvent> Events);
+
+public sealed record NetworkSyncRequest(string AdminToken);
 
 public sealed record NetworkChannelStatusResponse(
     string ChannelId,
@@ -612,7 +1395,8 @@ public sealed record SetupPlanRequest(
     string BootstrapGrpcUrl,
     string NodeId,
     string RelayMode,
-    string OraclePublicKey);
+    string OraclePublicKey,
+    string ConnectionInvite = "");
 
 public sealed record SetupPlanResponse(
     bool Valid,

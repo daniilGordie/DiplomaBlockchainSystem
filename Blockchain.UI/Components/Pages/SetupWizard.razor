@@ -1,0 +1,387 @@
+@page "/setup"
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using Blockchain.UI.Application.Clients
+@using Blockchain.UI.Application.Security
+@inject IPeerNetworkClient PeerNetwork
+@inject IConfiguration Configuration
+@inject HttpClient Http
+@inject IClipboardService Clipboard
+@inject NavigationManager Navigation
+
+<PageTitle>Nexus Setup</PageTitle>
+
+<div class="dashboard-container">
+    <section class="workspace-overview glass-card mb-4">
+        <div class="workspace-overview__copy">
+            <span class="workspace-overview__eyebrow">First run</span>
+            <h1 class="workspace-overview__title">Nexus setup</h1>
+            <p class="workspace-overview__description">Create a network, join an existing network, start a local private node, or restore a saved node identity.</p>
+            <div class="workspace-overview__meta">
+                <span class="workspace-pill">State @(setupState?.State ?? "detecting")</span>
+                <span class="workspace-pill">Node @(string.IsNullOrWhiteSpace(setupState?.NodeId) ? "not configured" : setupState.NodeId)</span>
+                <span class="workspace-pill">Network @(string.IsNullOrWhiteSpace(setupState?.NetworkId) ? "not configured" : setupState.NetworkId)</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="section-shell">
+        <div class="row g-3 align-items-end mb-4">
+            <div class="col-md-8">
+                <label class="form-label text-white" for="setupNodeUrl">Node API endpoint</label>
+                <input id="setupNodeUrl" class="form-control bg-dark text-white border-secondary" @bind="nodeUrl" placeholder="http://127.0.0.1:7042" />
+                <div class="form-text text-muted">Use the local node endpoint shown by the installer or container logs.</div>
+            </div>
+            <div class="col-md-4 d-flex gap-2">
+                <button class="btn btn-outline-light" @onclick="RefreshState" disabled="@busy">Refresh state</button>
+                <a class="btn btn-outline-light" href="@DiagnosticsHref" target="_blank">Diagnostics</a>
+            </div>
+        </div>
+
+        <div class="dashboard-tabs mb-4">
+            <button class="dashboard-tab @(mode == "create" ? "is-active" : "")" @onclick="@(() => mode = "create")">
+                <span>Create network</span>
+                <small>Bootstrap or all-in-one</small>
+            </button>
+            <button class="dashboard-tab @(mode == "join" ? "is-active" : "")" @onclick="@(() => mode = "join")">
+                <span>Join network</span>
+                <small>Use invite</small>
+            </button>
+            <button class="dashboard-tab @(mode == "local" ? "is-active" : "")" @onclick="@(() => mode = "local")">
+                <span>Local private node</span>
+                <small>No external sync</small>
+            </button>
+            <button class="dashboard-tab @(mode == "restore" ? "is-active" : "")" @onclick="@(() => mode = "restore")">
+                <span>Restore node</span>
+                <small>Encrypted backup</small>
+            </button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(message))
+        {
+            <div class="alert @(lastSuccess ? "alert-success" : "alert-warning")">@message</div>
+        }
+
+        @if (mode == "create")
+        {
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label text-white" for="setupNetworkName">Network name</label>
+                    <input id="setupNetworkName" class="form-control bg-dark text-white border-secondary" @bind="networkName" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label text-white" for="setupCreateMode">Mode</label>
+                    <select id="setupCreateMode" class="form-select bg-dark text-white border-secondary" @bind="createMode">
+                        <option value="bootstrap">Bootstrap</option>
+                        <option value="all-in-one">Bootstrap + Consensus</option>
+                        <option value="local">Local private</option>
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label text-white" for="setupRaftTransport">Raft transport</label>
+                    <select id="setupRaftTransport" class="form-select bg-dark text-white border-secondary" @bind="raftTransport">
+                        <option value="Tcp">TCP</option>
+                        <option value="Iroh">Iroh</option>
+                    </select>
+                    @if (raftTransport == "Iroh")
+                    {
+                        <div class="form-text text-muted">Iroh transport does not require a public Raft TCP endpoint.</div>
+                    }
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label text-white" for="setupPublicHttpUrl">Public HTTP URL</label>
+                    <input id="setupPublicHttpUrl" class="form-control bg-dark text-white border-secondary" @bind="publicHttpUrl" placeholder="https://node.example.com" />
+                </div>
+                @if (raftTransport == "Tcp")
+                {
+                    <div class="col-md-6">
+                        <label class="form-label text-white" for="setupRaftEndpoint">Raft public endpoint</label>
+                        <input id="setupRaftEndpoint" class="form-control bg-dark text-white border-secondary" @bind="raftEndpoint" placeholder="node.example.com:6041" />
+                    </div>
+                }
+                else
+                {
+                    <div class="col-md-6">
+                        <label class="form-label text-white" for="setupIrohNodeId">Local Iroh node id</label>
+                        <input id="setupIrohNodeId" class="form-control bg-dark text-white border-secondary" @bind="irohNodeId" placeholder="sidecar node id" />
+                    </div>
+                }
+                <div class="col-12">
+                    <div class="alert alert-info py-2">The network is operational but has no consensus fault tolerance until additional consensus nodes are added.</div>
+                    <button class="btn btn-primary" @onclick="CreateNetwork" disabled="@busy">Create network</button>
+                </div>
+            </div>
+        }
+        else if (mode == "join")
+        {
+            <div class="mb-3">
+                <label class="form-label text-white" for="setupInviteText">Connection invite</label>
+                <textarea id="setupInviteText" class="form-control bg-dark text-white border-secondary font-monospace" rows="8" @bind="inviteText"></textarea>
+            </div>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-light" @onclick="ValidateInvite" disabled="@busy">Validate invite</button>
+                <button class="btn btn-primary" @onclick="JoinNetwork" disabled="@busy">Join as Edge</button>
+            </div>
+            @if (validatedInvite?.Invite != null)
+            {
+                <div class="glass-card p-3 mt-3">
+                    <div class="text-white">Network: @validatedInvite.Invite.NetworkName (@validatedInvite.Invite.NetworkId)</div>
+                    <div class="text-muted small">Bootstrap: @validatedInvite.Invite.BootstrapNodeId</div>
+                    <div class="text-muted small">Iroh: @validatedInvite.Invite.BootstrapIrohUrl</div>
+                </div>
+            }
+        }
+        else if (mode == "local")
+        {
+            <div class="mb-3">
+                <label class="form-label text-white" for="setupLocalNodeName">Local node name</label>
+                <input id="setupLocalNodeName" class="form-control bg-dark text-white border-secondary" @bind="networkName" />
+                <div class="form-text text-muted">Local private node stores data locally and does not sync with an external network.</div>
+            </div>
+            <button class="btn btn-primary" @onclick="CreateLocal" disabled="@busy">Create local node</button>
+        }
+        else
+        {
+            <div class="glass-card p-3 mb-3">
+                <h2 class="h6 text-white mb-2">Create encrypted backup</h2>
+                <form method="post" action="@BackupHref" target="_blank">
+                    <label class="form-label text-white" for="setupBackupPassword">Backup password</label>
+                    <input id="setupBackupPassword" class="form-control bg-dark text-white border-secondary" type="password" name="password" value="@backupPassword" @oninput="OnBackupPasswordChanged" autocomplete="new-password" />
+                    <div class="form-text text-muted">Use a password with at least 12 characters. Private keys are never downloaded in plaintext.</div>
+                    <button class="btn btn-outline-info mt-3" type="submit" disabled="@(!CanCreateBackup)">Download encrypted backup</button>
+                </form>
+            </div>
+            <div class="mb-3">
+                <label class="form-label text-white" for="setupRestoreFile">Encrypted backup file</label>
+                <InputFile id="setupRestoreFile" class="form-control bg-dark text-white border-secondary" OnChange="OnRestoreFileChanged" />
+                <div class="form-text text-muted">Private keys stay encrypted in the backup. Restore is activated only after password and integrity validation.</div>
+            </div>
+            <div class="row g-3 mb-3">
+                <div class="col-md-8">
+                    <label class="form-label text-white" for="setupRestorePassword">Backup password</label>
+                    <input id="setupRestorePassword" class="form-control bg-dark text-white border-secondary" type="password" @bind="restorePassword" @bind:event="oninput" autocomplete="current-password" />
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <div class="form-check text-white">
+                        <input class="form-check-input" type="checkbox" id="forceRestore" @bind="forceRestore" />
+                        <label class="form-check-label" for="forceRestore">Replace existing node after safety backup</label>
+                    </div>
+                </div>
+            </div>
+            <button class="btn btn-primary" @onclick="UploadRestore" disabled="@(busy || restoreFile == null || string.IsNullOrWhiteSpace(restorePassword))">Restore backup</button>
+        }
+
+        @if (lastApply?.Invite != null)
+        {
+            <div class="mt-4">
+                <div class="d-flex justify-content-between align-items-center">
+                    <label class="form-label text-white">Connection invite</label>
+                    <button class="btn btn-sm btn-outline-info mb-2" @onclick="CopyInvite">Copy invite</button>
+                </div>
+                <textarea class="form-control bg-dark text-info border-secondary font-monospace" rows="8" readonly>@JsonSerializer.Serialize(lastApply.Invite, new JsonSerializerOptions { WriteIndented = true })</textarea>
+            </div>
+        }
+
+        @if (setupState?.FullNodeConfigured == true)
+        {
+            <a class="btn btn-outline-light mt-4" href="">Open Network UI</a>
+        }
+    </section>
+</div>
+
+@code {
+    private string nodeUrl = "";
+    private SetupStateStatus? setupState;
+    private string mode = "create";
+    private string networkName = "Nexus Network";
+    private string createMode = "all-in-one";
+    private string raftTransport = "Tcp";
+    private string publicHttpUrl = "http://localhost:7041";
+    private string raftEndpoint = "localhost:6041";
+    private string irohNodeId = "";
+    private string inviteText = "";
+    private string message = "";
+    private bool lastSuccess;
+    private bool busy;
+    private InviteValidationResponse? validatedInvite;
+    private SetupApplyResponse? lastApply;
+    private IBrowserFile? restoreFile;
+    private string restorePassword = "";
+    private string backupPassword = "";
+    private bool forceRestore;
+    private string DiagnosticsHref => $"{nodeUrl.TrimEnd('/')}/api/setup/diagnostics";
+    private string BackupHref => $"{nodeUrl.TrimEnd('/')}/api/setup/backup";
+    private bool CanCreateBackup => !string.IsNullOrWhiteSpace(backupPassword) && backupPassword.Length >= 12;
+
+    protected override async Task OnInitializedAsync()
+    {
+        nodeUrl = ResolveNodeUrlFromQuery(Configuration["NodeUrl"] ?? "http://localhost:7042").TrimEnd('/');
+        await RefreshState();
+    }
+
+    private async Task RefreshState()
+    {
+        try
+        {
+            setupState = await PeerNetwork.GetSetupStateAsync(nodeUrl);
+        }
+        catch (Exception ex)
+        {
+            message = $"Setup state unavailable: {ex.Message}";
+            lastSuccess = false;
+        }
+    }
+
+    private async Task CreateNetwork()
+    {
+        await Run(async () =>
+        {
+            lastApply = await PeerNetwork.CreateNetworkAsync(nodeUrl, new CreateNetworkSetupRequest(
+                networkName,
+                createMode,
+                null,
+                null,
+                publicHttpUrl,
+                publicHttpUrl,
+                raftTransport,
+                raftEndpoint,
+                irohNodeId,
+                null));
+            ApplyMessage(lastApply);
+        });
+    }
+
+    private async Task ValidateInvite()
+    {
+        await Run(async () =>
+        {
+            validatedInvite = await PeerNetwork.ValidateInviteAsync(nodeUrl, new InviteValidationRequest(inviteText));
+            message = validatedInvite?.Message ?? "Invite validation failed.";
+            lastSuccess = validatedInvite?.Valid == true;
+        });
+    }
+
+    private async Task JoinNetwork()
+    {
+        await Run(async () =>
+        {
+            lastApply = await PeerNetwork.JoinNetworkAsync(nodeUrl, new JoinNetworkSetupRequest(inviteText, "Edge", null));
+            ApplyMessage(lastApply);
+        });
+    }
+
+    private async Task CreateLocal()
+    {
+        await Run(async () =>
+        {
+            lastApply = await PeerNetwork.CreateLocalNodeAsync(nodeUrl, new LocalNodeSetupRequest(networkName, null, null));
+            ApplyMessage(lastApply);
+        });
+    }
+
+    private void OnRestoreFileChanged(InputFileChangeEventArgs args)
+    {
+        restoreFile = args.File;
+        message = restoreFile == null ? "Select a backup file." : $"Selected {restoreFile.Name}.";
+        lastSuccess = restoreFile != null;
+    }
+
+    private async Task UploadRestore()
+    {
+        if (restoreFile == null)
+        {
+            return;
+        }
+
+        await Run(async () =>
+        {
+            using var form = new MultipartFormDataContent();
+            using var stream = restoreFile.OpenReadStream(maxAllowedSize: 128 * 1024 * 1024);
+            form.Add(new StreamContent(stream), "backup", restoreFile.Name);
+            form.Add(new StringContent(restorePassword), "password");
+            form.Add(new StringContent(forceRestore.ToString().ToLowerInvariant()), "force");
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{nodeUrl}/api/setup/restore")
+            {
+                Content = form
+            };
+            using var response = await Http.SendAsync(request);
+            string body = await response.Content.ReadAsStringAsync();
+            lastSuccess = response.IsSuccessStatusCode;
+            message = response.IsSuccessStatusCode ? "Backup restored. Restart the node to activate restored services." : body;
+        });
+    }
+
+    private void OnBackupPasswordChanged(ChangeEventArgs args)
+    {
+        backupPassword = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private async Task Run(Func<Task> action)
+    {
+        busy = true;
+        message = "";
+        try
+        {
+            await action();
+            await RefreshState();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+            lastSuccess = false;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private void ApplyMessage(SetupApplyResponse? response)
+    {
+        lastSuccess = response?.Success == true;
+        message = response?.Message ?? "Setup request failed.";
+    }
+
+    private async Task CopyInvite()
+    {
+        if (lastApply?.Invite == null)
+        {
+            return;
+        }
+
+        await Clipboard.CopyTextAsync(JsonSerializer.Serialize(lastApply.Invite, new JsonSerializerOptions { WriteIndented = true }));
+        message = "Invite copied.";
+        lastSuccess = true;
+    }
+
+    private string ResolveNodeUrlFromQuery(string fallback)
+    {
+        if (!bool.TryParse(Configuration["AllowNodeUrlQueryOverride"], out var allowOverride) || !allowOverride)
+        {
+            return fallback;
+        }
+
+        try
+        {
+            var uri = new Uri(Navigation.Uri);
+            string query = uri.Query.TrimStart('?');
+            foreach (string pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var parts = pair.Split('=', 2);
+                if (parts.Length == 2 && string.Equals(Uri.UnescapeDataString(parts[0]), "nodeUrl", StringComparison.OrdinalIgnoreCase))
+                {
+                    string value = Uri.UnescapeDataString(parts[1]);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        return value;
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return fallback;
+    }
+}

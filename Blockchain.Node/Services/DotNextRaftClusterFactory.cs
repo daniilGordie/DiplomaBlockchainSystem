@@ -16,27 +16,51 @@ namespace Blockchain.Node.Services;
 public sealed class DotNextRaftClusterFactory
 {
     private readonly RaftOptions _options;
+    private readonly P2POptions _p2pOptions;
     private readonly IStateMachine _stateMachine;
+    private readonly IServiceProvider _services;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DotNextRaftClusterFactory> _logger;
 
     public DotNextRaftClusterFactory(
         IOptions<RaftOptions> options,
+        IOptions<P2POptions> p2pOptions,
         IStateMachine stateMachine,
+        IServiceProvider services,
         ILoggerFactory loggerFactory,
         ILogger<DotNextRaftClusterFactory> logger)
     {
         _options = options.Value;
+        _p2pOptions = p2pOptions.Value;
         _stateMachine = stateMachine;
+        _services = services;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
 
     public RaftCluster CreateCluster()
     {
+        if (!_options.UsesSupportedTransport)
+        {
+            throw new NotSupportedException(
+                $"Unsupported Raft transport '{_options.Transport}'. Use Raft:Transport=Tcp or Raft:Transport=Iroh.");
+        }
+
         if (!_options.HasMinimumConfiguration)
         {
-            throw new InvalidOperationException("Raft cluster requires Raft:NodeId, Raft:PublicEndPoint, and at least one Raft:Peers entry.");
+            throw new InvalidOperationException(_options.UsesIrohTransport
+                ? "Raft-over-Iroh requires Raft:NodeId and Raft:IrohNodeId."
+                : "Raft cluster requires Raft:NodeId and Raft:PublicEndPoint.");
+        }
+
+        return _options.UsesIrohTransport ? CreateIrohCluster() : CreateTcpCluster();
+    }
+
+    private RaftCluster CreateTcpCluster()
+    {
+        if (!_options.HasMinimumConfiguration)
+        {
+            throw new InvalidOperationException("Raft cluster requires Raft:NodeId and Raft:PublicEndPoint.");
         }
 
         var publicEndPoint = ParsePublicEndPoint(_options.PublicEndPoint);
@@ -84,6 +108,82 @@ public sealed class DotNextRaftClusterFactory
             logPath,
             _options.UsePersistentMembership ? Path.GetFullPath(_options.MembershipPath) : "in-memory");
 
+        if (!_options.HasRemotePeers)
+        {
+            _logger.LogWarning("[Raft] Starting as a single-member cluster. Blocks can be finalized, but this network has no consensus fault tolerance until another consensus member is added.");
+        }
+
+        return cluster;
+    }
+
+    private RaftCluster CreateIrohCluster()
+    {
+        if (!_p2pOptions.Iroh.Enabled)
+        {
+            throw new InvalidOperationException("Raft:Transport=Iroh requires P2P:Iroh:Enabled=true.");
+        }
+
+        if (string.IsNullOrWhiteSpace(_p2pOptions.Iroh.LocalApiToken))
+        {
+            throw new InvalidOperationException("Raft:Transport=Iroh requires P2P:Iroh:LocalApiToken.");
+        }
+
+        var publicEndPoint = IrohRaftTransport.CreateEndPoint(_options.IrohNodeId);
+        var connectionFactory = _services.GetRequiredService<IrohRaftConnectionFactory>();
+        var listenerFactory = _services.GetRequiredService<IrohRaftConnectionListenerFactory>();
+        var configuration = new RaftCluster.CustomTransportConfiguration(
+            publicEndPoint,
+            listenerFactory,
+            connectionFactory)
+        {
+            PublicEndPoint = publicEndPoint,
+            LowerElectionTimeout = Math.Max(150, _options.ElectionTimeoutMilliseconds),
+            UpperElectionTimeout = Math.Max(300, _options.ElectionTimeoutMilliseconds * 2),
+            RequestTimeout = TimeSpan.FromMilliseconds(Math.Max(500, _options.RequestTimeoutMilliseconds)),
+            ColdStart = false,
+            LoggerFactory = _loggerFactory,
+            EndPointComparer = new IrohRaftEndPointComparer(),
+            ConnectTimeout = TimeSpan.FromMilliseconds(Math.Max(500, _options.RequestTimeoutMilliseconds))
+        };
+        configuration.Metadata["NodeId"] = _options.NodeId;
+
+        var configuredMembers = BuildConfiguredIrohMembers(publicEndPoint);
+        if (_options.UsePersistentMembership)
+        {
+            ConfigurePersistentMembership(configuration, configuredMembers);
+        }
+        else
+        {
+            ConfigureInMemoryMembership(configuration, configuredMembers);
+        }
+
+        var logPath = Path.GetFullPath(_options.LogPath);
+        Directory.CreateDirectory(logPath);
+        Directory.CreateDirectory(Path.GetFullPath(_options.SnapshotPath));
+        var auditTrail = new WriteAheadLog(
+            new WriteAheadLog.Options
+            {
+                Location = logPath
+            },
+            _stateMachine);
+
+        var cluster = new RaftCluster(configuration)
+        {
+            AuditTrail = auditTrail
+        };
+
+        _logger.LogInformation(
+            "[Raft] Created DotNext Iroh cluster node {NodeId} at iroh://{IrohNodeId}; log path: {LogPath}; membership: {MembershipMode}.",
+            _options.NodeId,
+            _options.IrohNodeId,
+            logPath,
+            _options.UsePersistentMembership ? Path.GetFullPath(_options.MembershipPath) : "in-memory");
+
+        if (!_options.HasRemotePeers)
+        {
+            _logger.LogWarning("[Raft] Starting as a single-member Iroh cluster. Blocks can be finalized, but this network has no consensus fault tolerance until another consensus member is added.");
+        }
+
         return cluster;
     }
 
@@ -110,7 +210,30 @@ public sealed class DotNextRaftClusterFactory
         return members;
     }
 
-    private void ConfigureInMemoryMembership(RaftCluster.TcpConfiguration configuration, IReadOnlyCollection<EndPoint> members)
+    private List<EndPoint> BuildConfiguredIrohMembers(EndPoint publicEndPoint)
+    {
+        var members = new List<EndPoint> { publicEndPoint };
+        foreach (var peer in _options.Peers)
+        {
+            if (string.IsNullOrWhiteSpace(peer.EndPoint))
+            {
+                continue;
+            }
+
+            var peerEndPoint = IrohRaftTransport.CreateEndPoint(peer.EndPoint);
+            if (members.Any(member => new IrohRaftEndPointComparer().Equals(member, peerEndPoint)))
+            {
+                continue;
+            }
+
+            members.Add(peerEndPoint);
+            _logger.LogInformation("[Raft] Configured Iroh peer {PeerId} at {PeerEndPoint}.", peer.Id, peerEndPoint);
+        }
+
+        return members;
+    }
+
+    private void ConfigureInMemoryMembership(RaftCluster.NodeConfiguration configuration, IReadOnlyCollection<EndPoint> members)
     {
         var membership = configuration.UseInMemoryConfigurationStorage();
         var activeConfiguration = membership.CreateActiveConfigurationBuilder();
@@ -122,7 +245,7 @@ public sealed class DotNextRaftClusterFactory
         activeConfiguration.Build();
     }
 
-    private void ConfigurePersistentMembership(RaftCluster.TcpConfiguration configuration, IReadOnlyCollection<EndPoint> members)
+    private void ConfigurePersistentMembership(RaftCluster.NodeConfiguration configuration, IReadOnlyCollection<EndPoint> members)
     {
         var membershipPath = Path.GetFullPath(_options.MembershipPath);
         Directory.CreateDirectory(membershipPath);
@@ -205,7 +328,9 @@ public sealed class DotNextRaftClusterFactory
     {
         return publicEndPoint switch
         {
-            IPEndPoint ip => ip,
+            IPEndPoint ip when IPAddress.IsLoopback(ip.Address) => ip,
+            IPEndPoint ip when ip.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 => new IPEndPoint(IPAddress.IPv6Any, ip.Port),
+            IPEndPoint ip => new IPEndPoint(IPAddress.Any, ip.Port),
             DnsEndPoint dns when IsLocalHost(dns.Host) => new IPEndPoint(IPAddress.Loopback, dns.Port),
             DnsEndPoint dns => new IPEndPoint(IPAddress.Any, dns.Port),
             _ => throw new InvalidOperationException($"Unsupported Raft endpoint type '{publicEndPoint.GetType().Name}'.")

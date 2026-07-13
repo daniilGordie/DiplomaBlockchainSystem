@@ -1,4 +1,5 @@
 using Blockchain.Core;
+using Blockchain.Core.Consensus;
 
 namespace Blockchain.Infrastructure.Persistence;
 
@@ -25,6 +26,26 @@ public sealed class SqliteBlockStore : IBlockchainStore
     public void SaveFinalityMetadata(BlockFinalityMetadata metadata) => _database.SaveFinalityMetadata(metadata);
     public BlockFinalityMetadata? GetFinalityMetadata(string blockHash) => _database.GetFinalityMetadata(blockHash);
     public bool HasFinalityMetadata(string blockHash) => _database.HasFinalityMetadata(blockHash);
+    public void SaveContributionProof(string blockHash, ContributionProof proof) => _database.SaveContributionProof(blockHash, proof);
+    public ContributionProof? GetContributionProof(string blockHash) => _database.GetContributionProof(blockHash);
+    public void SaveIntent(IntentOutboxRecord record) => _database.SaveIntent(record);
+    public IntentOutboxRecord? GetIntent(string intentId) => _database.GetIntent(intentId);
+    public List<IntentOutboxRecord> LoadRetryableIntents(DateTime nowUtc, int limit) => _database.LoadRetryableIntents(nowUtc, limit);
+    public List<IntentOutboxRecord> LoadRecentIntents(int limit) => _database.LoadRecentIntents(limit);
+    public List<IntentStatusTransition> LoadIntentHistory(string intentId) => _database.LoadIntentHistory(intentId);
+    public void UpdateIntentStatus(
+        string intentId,
+        IntentStatus status,
+        int attemptCount,
+        DateTime updatedAtUtc,
+        DateTime? lastAttemptAtUtc,
+        DateTime? nextAttemptAtUtc,
+        string lastError,
+        string destination,
+        string? committedBlockHash,
+        long? committedBlockIndex = null,
+        string? proposalId = null) =>
+        _database.UpdateIntentStatus(intentId, status, attemptCount, updatedAtUtc, lastAttemptAtUtc, nextAttemptAtUtc, lastError, destination, committedBlockHash, committedBlockIndex, proposalId);
     public List<string> GetUserProjects(string userName) => _database.GetUserProjects(userName);
     public string? GetUserPublicKey(string userName) => _database.GetUserPublicKey(userName);
     public string GetUserRole(string projectId, string userName) => _database.GetUserRole(projectId, userName);

@@ -33,10 +33,16 @@ public sealed class PeerChainSyncFinalityTests
         public List<string> SavedPeers { get; } = new();
         public List<string> FailedPeers { get; } = new();
 
+        public List<PeerInfo> LoadAllPeerInfos() => new();
         public List<PeerInfo> LoadPeerInfos() => new();
         public List<string> LoadPeers() => SavedPeers.ToList();
         public void SavePeer(PeerInfo peer) => SavedPeers.Add(peer.Url);
         public void SavePeer(string url) => SavedPeers.Add(url);
+        public void SetPeerTrust(string url, bool isTrusted) { }
+        public void SetPeerRole(string url, string role) { }
+        public void SetPeerMembership(string url, string status, string actor, string reason) { }
+        public void SetPeerCapabilities(string url, string capabilities, string actor, string reason) { }
+        public List<PeerAuditEvent> LoadPeerAudit(string url, int limit = 100) => new();
         public void MarkPeerSeen(string url) { }
         public void MarkPeerFailure(string url) => FailedPeers.Add(url);
     }

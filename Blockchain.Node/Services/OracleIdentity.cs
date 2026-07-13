@@ -32,10 +32,19 @@ namespace Blockchain.Node.Services
             if (File.Exists(_keyFileName))
             {
                 byte[] encryptedBytes = File.ReadAllBytes(_keyFileName);
-                _ecdsa.ImportEncryptedPkcs8PrivateKey(
-                    Encoding.UTF8.GetBytes(_keyPassword),
-                    encryptedBytes,
-                    out _);
+                try
+                {
+                    _ecdsa.ImportEncryptedPkcs8PrivateKey(
+                        Encoding.UTF8.GetBytes(_keyPassword),
+                        encryptedBytes,
+                        out _);
+                }
+                catch (CryptographicException ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot load oracle key '{_keyFileName}'. Check OraclePrivateKeyPassword or replace the key file after backing it up.",
+                        ex);
+                }
             }
             else
             {

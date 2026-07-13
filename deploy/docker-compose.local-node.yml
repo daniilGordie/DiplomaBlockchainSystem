@@ -1,0 +1,71 @@
+services:
+  local-node:
+    build:
+      context: ..
+      dockerfile: Blockchain.Node/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Network__Id: ${NETWORK_ID:-nexus-local}
+      Network__BootstrapHttpUrl: ${NETWORK_BOOTSTRAP_HTTP_URL:-}
+      Network__BootstrapGrpcUrl: ${NETWORK_BOOTSTRAP_GRPC_URL:-}
+      Network__BootstrapIrohUrl: ${NETWORK_BOOTSTRAP_IROH_URL:-}
+      Network__TrustedBootstrapNodeId: ${NETWORK_TRUSTED_BOOTSTRAP_NODE_ID:-}
+      Network__TrustedBootstrapFingerprint: ${NETWORK_TRUSTED_BOOTSTRAP_FINGERPRINT:-}
+      Kestrel__Endpoints__Public__Url: http://+:5041
+      Kestrel__Endpoints__Public__Protocols: Http1
+      Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
+      Kestrel__Endpoints__P2PGrpc__Protocols: Http2
+      ConnectionStrings__DefaultNodeDb: ${NODE_DB_PATH:-/data/local-node.db}
+      Node__Role: ${NODE_ROLE:-Local}
+      NodeDbPassword: ${NODE_DB_PASSWORD}
+      NodeAdminToken: ${NODE_ADMIN_TOKEN}
+      WebhookSecret: ${WEBHOOK_SECRET}
+      OraclePublicKey: ${ORACLE_PUBLIC_KEY}
+      OraclePrivateKeyPassword: ${ORACLE_PRIVATE_KEY_PASSWORD}
+      OracleKeyPath: ${ORACLE_KEY_PATH:-/data/oracle_key.dat}
+      Consensus__EnableProofOfContributionValidation: ${CONSENSUS_ENABLE_POC:-false}
+      Consensus__RequireProofOfWork: ${CONSENSUS_REQUIRE_PROOF_OF_WORK:-false}
+      Consensus__AcceptP2PBlocksAsFinal: ${CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL:-false}
+      Consensus__FinalityMode: ${CONSENSUS_FINALITY_MODE:-Immediate}
+      Consensus__ProducerKeyPath: ${CONSENSUS_PRODUCER_KEY_PATH:-}
+      Consensus__ProducerPrivateKeyPassword: ${CONSENSUS_PRODUCER_KEY_PASSWORD:-}
+      P2P__NodeRole: Full
+      P2P__NodeId: ${P2P_NODE_ID:-}
+      P2P__PublicUrl: ""
+      P2P__BootstrapPeers__0: ${P2P_BOOTSTRAP_GRPC_URL:-}
+      P2P__SyncToken: ${P2P_SYNC_TOKEN}
+      P2P__RegistrationToken: ${P2P_REGISTRATION_TOKEN:-}
+      P2P__IdentityKeyPath: ${P2P_IDENTITY_KEY_PATH:-/data/node-identity.p256.key}
+      P2P__DiscoveryIntervalSeconds: ${P2P_DISCOVERY_INTERVAL_SECONDS:-60}
+      P2P__AllowRegistrationTokenFallback: ${P2P_ALLOW_REGISTRATION_TOKEN_FALLBACK:-false}
+      P2P__Iroh__Enabled: "false"
+      NodeVersion__UpdateManifestUrl: ${UPDATE_MANIFEST_URL:-}
+      Logging__LogLevel__System.Net.Http.HttpClient: Warning
+    volumes:
+      - local-node-data:/data
+    ports:
+      - "${NODE_HTTP_PORT:-7040}:5041"
+      - "${NODE_GRPC_PORT:-7140}:5042"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5041/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ui:
+    build:
+      context: ..
+      dockerfile: Blockchain.UI/Dockerfile
+      args:
+        UI_NODE_URL: http://localhost:${NODE_HTTP_PORT:-7040}
+    restart: unless-stopped
+    depends_on:
+      local-node:
+        condition: service_healthy
+    ports:
+      - "${UI_HTTP_PORT:-7080}:80"
+
+volumes:
+  local-node-data:

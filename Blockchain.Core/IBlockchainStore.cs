@@ -1,4 +1,5 @@
 using Blockchain.Core.Contracts;
+using Blockchain.Core.Consensus;
 
 namespace Blockchain.Core;
 
@@ -38,13 +39,16 @@ public interface IBlockFinalityMetadataStore
     void SaveFinalityMetadata(BlockFinalityMetadata metadata);
     BlockFinalityMetadata? GetFinalityMetadata(string blockHash);
     bool HasFinalityMetadata(string blockHash);
+    void SaveContributionProof(string blockHash, ContributionProof proof);
+    ContributionProof? GetContributionProof(string blockHash);
 }
 
 public interface IBlockStore :
     IChainReader,
     IChainWriter,
     IPendingBlockStore,
-    IBlockFinalityMetadataStore
+    IBlockFinalityMetadataStore,
+    IIntentStore
 {
 }
 
@@ -63,6 +67,7 @@ public interface IBlockchainStore :
     IProjectMembershipStore,
     IUserProjectReader,
     ISmartContractState,
-    ISmartContractStateReader
+    ISmartContractStateReader,
+    IIntentStore
 {
 }

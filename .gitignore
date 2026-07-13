@@ -294,6 +294,10 @@ FakesAssemblies/
 # Node.js Tools for Visual Studio
 .ntvs_analysis.dat
 node_modules/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
 
 # Visual Studio 6 build log
 *.plg
@@ -497,3 +501,4 @@ $RECYCLE.BIN/
 appsettings.Local.json
 oracle_key.dat
 *.pem
+**/target/

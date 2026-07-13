@@ -10,6 +10,7 @@ using Blockchain.Node.Services;
 using Google.Protobuf;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 
 const string DefaultProjectId = "RaftSmokeProject";
 const string DefaultUserName = "Alice";
@@ -30,6 +31,7 @@ try
     {
         "prepare" => Prepare(options),
         "submit" => await SubmitAsync(options),
+        "create-project" => await CreateProjectAsync(options),
         _ => UnknownCommand(args[0])
     };
 }
@@ -55,7 +57,7 @@ static int Prepare(CliOptions options)
     string producerPublicKey = Convert.ToBase64String(producerKey.ExportSubjectPublicKeyInfo());
     var seedBlocks = CreateSeedBlocks(producerKey, producerPublicKey, projectId, userName);
 
-    foreach (string nodeName in new[] { "node-a", "node-b" })
+    foreach (string nodeName in GetNodeNames(options))
     {
         string dbPath = Path.Combine(dataRoot, nodeName, "node.db");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dbPath))!);
@@ -72,6 +74,12 @@ static int Prepare(CliOptions options)
     return 0;
 }
 
+static string[] GetNodeNames(CliOptions options) =>
+    options.Get("nodes", "node-a,node-b")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
 static async Task<int> SubmitAsync(CliOptions options)
 {
     NetworkParameters.RequireProofOfWork = false;
@@ -86,6 +94,7 @@ static async Task<int> SubmitAsync(CliOptions options)
     string submitUrl = options.Get("submit-url", "http://localhost:7042");
     string[] verifyUrls = options.Get("verify-urls", "http://localhost:7042,http://localhost:7043")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    bool duplicateCheck = bool.TryParse(options.Get("duplicate-check", "false"), out var parsedDuplicateCheck) && parsedDuplicateCheck;
 
     using var producerKey = LoadOrCreateProducerKey(producerKeyPath, producerPassword);
     string producerPublicKey = Convert.ToBase64String(producerKey.ExportSubjectPublicKeyInfo());
@@ -167,6 +176,196 @@ static async Task<int> SubmitAsync(CliOptions options)
     return 0;
 }
 
+static async Task<int> CreateProjectAsync(CliOptions options)
+{
+    NetworkParameters.RequireProofOfWork = false;
+
+    string submitUrl = options.Get("submit-url", "http://localhost:7041");
+    string projectId = options.Get("project-id", "SmokeProject_" + Guid.NewGuid().ToString("N")[..8]);
+    string userName = options.Get("user", "SmokeUser");
+    string[] verifyUrls = options.Get("verify-urls", submitUrl)
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    bool duplicateCheck = bool.TryParse(options.Get("duplicate-check", "false"), out var parsedDuplicateCheck) && parsedDuplicateCheck;
+
+    using var userKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    string publicKey = Convert.ToBase64String(userKey.ExportSubjectPublicKeyInfo());
+    var latest = await SendGrpcWebUnaryAsync(
+        submitUrl,
+        "GetLastBlock",
+        new EmptyRequest(),
+        () => new BlockModel());
+
+    int nextIndex = string.IsNullOrWhiteSpace(latest.Hash) || latest.Hash == "0"
+        ? 0
+        : latest.Index + 1;
+    string previousHash = string.IsNullOrWhiteSpace(latest.Hash) || latest.Hash == "0"
+        ? "0"
+        : latest.Hash;
+
+    string payloadJson = JsonSerializer.Serialize(new
+    {
+        Type = "CreateProject",
+        ProjectId = projectId,
+        User = userName,
+        Timestamp = DateTime.UtcNow.ToString("O")
+    });
+
+    var block = CreateSignedBlock(
+        nextIndex,
+        previousHash,
+        "System",
+        payloadJson,
+        userKey,
+        publicKey);
+
+    SignedIntentSubmitResponse? reply = null;
+    string acceptedSubmitUrl = string.Empty;
+    foreach (string candidateUrl in new[] { submitUrl }.Concat(verifyUrls).Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        var candidateReply = await SubmitSignedIntentAsync(
+            candidateUrl,
+            "nexus-main",
+            projectId,
+            "System",
+            "CreateProject",
+            payloadJson,
+            userKey,
+            publicKey,
+            GrpcProjectMapper.ToBlockModel(block),
+            "create-project-smoke",
+            duplicateCheck);
+        if (candidateReply.Success)
+        {
+            reply = candidateReply;
+            acceptedSubmitUrl = candidateUrl;
+            break;
+        }
+
+        if (!candidateReply.Message.Contains("leader", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"CreateProject signed intent rejected at {candidateUrl}: {candidateReply.Message}");
+        }
+    }
+
+    if (reply == null)
+    {
+        throw new InvalidOperationException("CreateProject signed intent was rejected by all candidate nodes because no contacted node accepted Raft leadership.");
+    }
+
+    await WaitForNetworkStatusHashAsync(verifyUrls, "System", block.Hash);
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        accepted = true,
+        submitUrl = acceptedSubmitUrl,
+        projectId,
+        block.Index,
+        block.Hash,
+        reply.Message,
+        reply.IntentId,
+        reply.Status,
+        verifiedUrls = verifyUrls
+    }));
+    return 0;
+}
+
+static async Task<SignedIntentSubmitResponse> SubmitSignedIntentAsync(
+    string submitUrl,
+    string networkId,
+    string projectId,
+    string channelId,
+    string operationType,
+    string payloadJson,
+    ECDsa signer,
+    string publicKey,
+    BlockModel block,
+    string correlationPrefix,
+    bool duplicateCheck = false)
+{
+    long timestampUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    string nonce = Guid.NewGuid().ToString("N");
+    string correlationId = $"{correlationPrefix}-{Guid.NewGuid():N}";
+    const int schemaVersion = 1;
+    string intentId = ComputeIntentId(
+        networkId,
+        projectId,
+        channelId,
+        operationType,
+        payloadJson,
+        publicKey,
+        timestampUnixSeconds,
+        nonce,
+        correlationId,
+        schemaVersion);
+    string signable = BuildIntentSignableData(
+        networkId,
+        projectId,
+        channelId,
+        operationType,
+        payloadJson,
+        publicKey,
+        timestampUnixSeconds,
+        nonce,
+        correlationId,
+        schemaVersion);
+    string signature = Convert.ToBase64String(signer.SignData(
+        Encoding.UTF8.GetBytes(signable),
+        HashAlgorithmName.SHA256,
+        DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+
+    var request = new SignedIntentSubmitRequest(
+        new SignedIntentDto(
+            intentId,
+            networkId,
+            projectId,
+            channelId,
+            operationType,
+            payloadJson,
+            publicKey,
+            timestampUnixSeconds,
+            nonce,
+            signature,
+            correlationId,
+            schemaVersion),
+        block);
+
+    using var http = new HttpClient { BaseAddress = new Uri(submitUrl.TrimEnd('/') + "/") };
+    using var response = await http.PostAsJsonAsync("/api/network/intents/submit", request);
+    var responseText = await response.Content.ReadAsStringAsync();
+    SignedIntentSubmitResponse? body = null;
+    if (!string.IsNullOrWhiteSpace(responseText))
+    {
+        try
+        {
+            body = JsonSerializer.Deserialize<SignedIntentSubmitResponse>(responseText, SmokeJson.Options);
+        }
+        catch (JsonException ex)
+        {
+            return new SignedIntentSubmitResponse(false, $"Intent endpoint returned non-JSON HTTP {(int)response.StatusCode}: {responseText[..Math.Min(responseText.Length, 300)]}. JSON error: {ex.Message}", intentId, channelId, "FailedRetryable", "");
+        }
+    }
+    if (body == null)
+    {
+        return new SignedIntentSubmitResponse(false, $"Intent endpoint returned HTTP {(int)response.StatusCode} with empty body.", intentId, channelId, "FailedRetryable", "");
+    }
+
+    if (duplicateCheck)
+    {
+        using var duplicateResponse = await http.PostAsJsonAsync("/api/network/intents/submit", request);
+        var duplicateText = await duplicateResponse.Content.ReadAsStringAsync();
+        var duplicateBody = string.IsNullOrWhiteSpace(duplicateText)
+            ? null
+            : JsonSerializer.Deserialize<SignedIntentSubmitResponse>(duplicateText, SmokeJson.Options);
+        if (duplicateBody == null ||
+            !string.Equals(duplicateBody.IntentId, intentId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(duplicateBody.CommittedBlockHash, body.CommittedBlockHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return new SignedIntentSubmitResponse(false, "Duplicate intent did not return the original committed result.", intentId, channelId, "FailedPermanent", "");
+        }
+    }
+
+    return body;
+}
+
 static async Task WaitForFollowersAsync(string[] urls, string projectId, string syncToken, string expectedHash)
 {
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -204,6 +403,65 @@ static async Task WaitForFollowersAsync(string[] urls, string projectId, string 
     {
         throw new InvalidOperationException($"Committed block did not appear on: {string.Join(", ", pending)}");
     }
+}
+
+static async Task WaitForNetworkStatusHashAsync(string[] urls, string channelId, string expectedHash)
+{
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+    var pending = new HashSet<string>(urls, StringComparer.OrdinalIgnoreCase);
+
+    while (pending.Count > 0 && !timeout.IsCancellationRequested)
+    {
+        foreach (string url in pending.ToArray())
+        {
+            try
+            {
+                using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                using var response = await httpClient.GetAsync($"{url.TrimEnd('/')}/api/network/status", timeout.Token);
+                response.EnsureSuccessStatusCode();
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+                if (TryFindChannelHash(json.RootElement, channelId, expectedHash))
+                {
+                    pending.Remove(url);
+                }
+            }
+            catch when (!timeout.IsCancellationRequested)
+            {
+                // Keep polling until the smoke timeout expires.
+            }
+        }
+
+        if (pending.Count > 0)
+        {
+            await Task.Delay(1000, timeout.Token).ContinueWith(_ => { });
+        }
+    }
+
+    if (pending.Count > 0)
+    {
+        throw new InvalidOperationException($"Committed block {expectedHash} did not appear in network status on: {string.Join(", ", pending)}");
+    }
+}
+
+static bool TryFindChannelHash(JsonElement root, string channelId, string expectedHash)
+{
+    if (!root.TryGetProperty("channels", out var channels) || channels.ValueKind != JsonValueKind.Array)
+    {
+        return false;
+    }
+
+    foreach (var channel in channels.EnumerateArray())
+    {
+        string id = channel.TryGetProperty("channelId", out var idProp) ? idProp.GetString() ?? string.Empty : string.Empty;
+        string hash = channel.TryGetProperty("latestHash", out var hashProp) ? hashProp.GetString() ?? string.Empty : string.Empty;
+        if (string.Equals(id, channelId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(hash, expectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static async Task<TResponse> SendGrpcWebUnaryAsync<TRequest, TResponse>(
@@ -379,6 +637,67 @@ static Block CreateSignedBlock(
     return block;
 }
 
+static string ComputeIntentId(
+    string networkId,
+    string projectId,
+    string channelId,
+    string operationType,
+    string payloadJson,
+    string actorPublicKey,
+    long timestampUnixSeconds,
+    string nonce,
+    string correlationId,
+    int schemaVersion)
+{
+    string canonical = string.Join(
+        ":",
+        "NEXUS_INTENT_ID_V1",
+        networkId,
+        projectId,
+        ChannelName.Normalize(channelId),
+        operationType,
+        ComputeSha256(payloadJson),
+        actorPublicKey,
+        timestampUnixSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        nonce,
+        correlationId,
+        schemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    return ComputeSha256(canonical);
+}
+
+static string BuildIntentSignableData(
+    string networkId,
+    string projectId,
+    string channelId,
+    string operationType,
+    string payloadJson,
+    string actorPublicKey,
+    long timestampUnixSeconds,
+    string nonce,
+    string correlationId,
+    int schemaVersion)
+{
+    return string.Join(
+        ":",
+        "NEXUS_INTENT_V1",
+        networkId,
+        projectId,
+        ChannelName.Normalize(channelId),
+        operationType,
+        ComputeSha256(payloadJson),
+        actorPublicKey,
+        timestampUnixSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        nonce,
+        correlationId,
+        schemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+}
+
+static string ComputeSha256(string value)
+{
+    byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+    return Convert.ToHexString(hash).ToLowerInvariant();
+}
+
 static ECDsa LoadOrCreateProducerKey(string keyPath, string password)
 {
     var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -410,6 +729,7 @@ static void PrintUsage()
     Console.Error.WriteLine("Usage:");
     Console.Error.WriteLine("  RaftGrpcSmoke prepare --data-root <path> [--producer-key-path <path>]");
     Console.Error.WriteLine("  RaftGrpcSmoke submit --data-root <path> [--submit-url http://localhost:7042] [--verify-urls http://localhost:7042,http://localhost:7043]");
+    Console.Error.WriteLine("  RaftGrpcSmoke create-project [--submit-url http://localhost:7041] [--verify-urls http://localhost:7041] [--project-id SmokeProject]");
 }
 
 internal sealed class CliOptions
@@ -458,4 +778,37 @@ internal sealed class CliOptions
         _values.TryGetValue(name, out string? value) && !string.IsNullOrWhiteSpace(value)
             ? value
             : defaultValue;
+}
+
+internal sealed record SignedIntentDto(
+    string IntentId,
+    string NetworkId,
+    string ProjectId,
+    string ChannelId,
+    string OperationType,
+    string PayloadJson,
+    string ActorPublicKey,
+    long TimestampUnixSeconds,
+    string Nonce,
+    string Signature,
+    string CorrelationId,
+    int SchemaVersion);
+
+internal sealed record SignedIntentSubmitRequest(
+    SignedIntentDto Intent,
+    BlockModel Block);
+
+internal sealed record SignedIntentSubmitResponse(
+    bool Success,
+    string Message,
+    string IntentId,
+    string ChannelId,
+    string Status,
+    string CommittedBlockHash,
+    long? CommittedBlockIndex = null,
+    string ProposalId = "");
+
+internal static class SmokeJson
+{
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
 }

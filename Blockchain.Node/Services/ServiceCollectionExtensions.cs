@@ -4,6 +4,7 @@ using Blockchain.Application.Blocks;
 using Blockchain.Application.Git;
 using Blockchain.Application.Projects;
 using Blockchain.Application.Security;
+using Blockchain.Application.Setup;
 using Blockchain.Core;
 using Blockchain.Core.Consensus;
 using DotNext.Net.Cluster.Consensus.Raft;
@@ -25,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ConsensusOptions>().BindConfiguration("Consensus");
         services.AddOptions<RaftOptions>().BindConfiguration("Raft");
         services.AddHttpClient();
+        services.AddSingleton<NexusSetupUseCases>();
         services.AddNexusInfrastructure(databaseManager);
 
         services.AddSingleton<BlockMiner>();
@@ -34,6 +36,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ContributionScoreService>();
         services.AddSingleton<ProducerSelector>();
         services.AddSingleton<BlockProposalFactory>();
+        services.AddSingleton<SignedIntentVerifier>();
         services.AddSingleton(sp => new PoCVerifier(
             sp.GetRequiredService<ContributionScoreService>(),
             sp.GetRequiredService<ProducerSelector>()));
@@ -51,11 +54,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<P2PNetworkService>();
         services.AddSingleton<NodeIdentity>();
         services.AddSingleton<PeerRegistrationSecurity>();
+        services.AddSingleton<IrohMessageSecurity>();
         services.AddHttpClient<IrohSidecarClient>();
         services.AddSingleton<IrohProposalForwarder>();
+        services.AddSingleton<EdgeCommittedBlockSyncService>();
         services.AddHostedService<NodeIdentityWarmupService>();
         services.AddHostedService<P2PBootstrapService>();
         services.AddHostedService<IrohInboundPump>();
+        services.AddHostedService(sp => sp.GetRequiredService<EdgeCommittedBlockSyncService>());
         services.AddSingleton<OracleIdentity>();
         services.AddSingleton<ProducerIdentity>();
         services.AddSingleton<ProjectEventAnchorService>();
@@ -64,11 +70,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<RaftCommittedBlockCommandApplier>();
         services.AddSingleton<RaftBlockStateMachine>();
         services.AddSingleton<IStateMachine>(sp => sp.GetRequiredService<RaftBlockStateMachine>());
+        services.AddSingleton<IrohRaftConnectionFactory>();
+        services.AddSingleton<IrohRaftConnectionListenerFactory>();
         services.AddSingleton<DotNextRaftClusterFactory>();
         services.AddSingleton<RaftCluster>(sp => sp.GetRequiredService<DotNextRaftClusterFactory>().CreateCluster());
         services.AddSingleton<IRaftCluster>(sp => sp.GetRequiredService<RaftCluster>());
         services.AddSingleton<IRaftCommandReplicator, DotNextRaftCommandReplicator>();
         services.AddHostedService<DotNextRaftClusterHostedService>();
+        services.AddHostedService<RaftSnapshotCheckpointService>();
         services.AddSingleton<IBlockFinalitySubmitter>(sp =>
         {
             var mode = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ConsensusOptions>>().Value.FinalityMode;
@@ -93,7 +102,7 @@ public static class ServiceCollectionExtensions
                 var raftOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<RaftOptions>>().Value;
                 if (!raftOptions.HasMinimumConfiguration)
                 {
-                    throw new InvalidOperationException("Consensus:FinalityMode=Raft requires Raft:NodeId, Raft:PublicEndPoint, and at least one Raft:Peers entry.");
+                    throw new InvalidOperationException("Consensus:FinalityMode=Raft requires Raft:NodeId and Raft:PublicEndPoint.");
                 }
 
                 return ActivatorUtilities.CreateInstance<RaftBlockFinalitySubmitter>(sp);
@@ -102,6 +111,8 @@ public static class ServiceCollectionExtensions
             throw new InvalidOperationException($"Unsupported Consensus:FinalityMode '{mode}'.");
         });
         services.AddSingleton<GrpcBlockProcessor>();
+        services.AddSingleton<IntentOutboxRetryService>();
+        services.AddHostedService(sp => sp.GetRequiredService<IntentOutboxRetryService>());
         services.AddSingleton<PeerChainSyncService>();
         services.AddSingleton<ProjectResponseCache>();
         services.AddSingleton<WebhookReplayGuard>();

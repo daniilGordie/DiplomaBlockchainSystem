@@ -21,6 +21,8 @@ $composeFile = Join-Path $scriptRoot "docker-compose.raft-smoke.yml"
 $producerKeyPath = Join-Path $dataRootFull "shared\\producer-key.dat"
 $producerPassword = "local-raft-producer-password"
 $dbPassword = "local-raft-db-password"
+$previousRaftSmokeDataRoot = $env:RAFT_SMOKE_DATA_ROOT
+$env:RAFT_SMOKE_DATA_ROOT = $dataRootFull
 
 if (-not $dataRootFull.StartsWith($tmpRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to clean Docker Raft smoke data outside repository .tmp directory: $dataRootFull"
@@ -97,9 +99,21 @@ try {
     }
 
     Write-Host ""
+    Write-Host "Submitting signed intent CreateProject through HTTP intent endpoint..."
+    dotnet run --no-build --project $smokeProject -- create-project `
+        --submit-url "http://localhost:7442" `
+        --verify-urls "http://localhost:7442,http://localhost:7443" `
+        --project-id "IntentSmoke_$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))" `
+        --user "IntentSmokeUser" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "RaftGrpcSmoke create-project signed intent failed with exit code $LASTEXITCODE."
+    }
+
+    Write-Host ""
     Write-Host "Docker PoC/Raft smoke passed."
 }
 finally {
+    $env:RAFT_SMOKE_DATA_ROOT = $previousRaftSmokeDataRoot
     if (-not $KeepRunning) {
         docker compose -f $composeFile down --remove-orphans | Out-Host
     }

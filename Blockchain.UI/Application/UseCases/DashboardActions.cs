@@ -39,11 +39,17 @@ public sealed class DashboardActions
         {
             var directory = await _peerNetworkClient.GetPeerDirectoryAsync(nodeUrl);
             NodeSetupStatus? setupStatus = null;
+            NetworkStatus? networkStatus = null;
+            NetworkInvite? networkInvite = null;
+            IntentListStatus? intentList = null;
             MigrationChecklist? migrationChecklist = null;
             UpdateCheckStatus? updateCheck = null;
             try
             {
                 setupStatus = await _peerNetworkClient.GetSetupStatusAsync(nodeUrl);
+                networkStatus = await _peerNetworkClient.GetNetworkStatusAsync(nodeUrl);
+                networkInvite = await _peerNetworkClient.GetNetworkInviteAsync(nodeUrl);
+                intentList = await _peerNetworkClient.GetIntentListAsync(nodeUrl);
                 migrationChecklist = await _peerNetworkClient.GetMigrationChecklistAsync(nodeUrl);
                 updateCheck = await _peerNetworkClient.GetUpdateCheckAsync(nodeUrl);
             }
@@ -52,7 +58,7 @@ public sealed class DashboardActions
                 
             }
 
-            return UiResult<PeerNetworkOverview>.Ok(new PeerNetworkOverview(directory, setupStatus, migrationChecklist, updateCheck));
+            return UiResult<PeerNetworkOverview>.Ok(new PeerNetworkOverview(directory, setupStatus, networkStatus, networkInvite, intentList, migrationChecklist, updateCheck));
         }
         catch (Exception ex)
         {
@@ -62,6 +68,15 @@ public sealed class DashboardActions
 
     public Task<SetupPlanResponse?> CreateSetupPlanAsync(string nodeUrl, SetupPlanRequest request) =>
         _peerNetworkClient.CreateSetupPlanAsync(nodeUrl, request);
+
+    public Task<PeerTrustResponse?> SetPeerTrustAsync(string nodeUrl, PeerTrustRequest request) =>
+        _peerNetworkClient.SetPeerTrustAsync(nodeUrl, request);
+
+    public Task<PeerRoleResponse?> SetPeerRoleAsync(string nodeUrl, PeerRoleRequest request) =>
+        _peerNetworkClient.SetPeerRoleAsync(nodeUrl, request);
+
+    public Task<EdgeSyncStatus?> SyncNetworkAsync(string nodeUrl, NetworkSyncRequest request) =>
+        _peerNetworkClient.SyncNetworkAsync(nodeUrl, request);
 
     private static string NormalizeNodeUrl(string url) => url.Trim().TrimEnd('/');
 

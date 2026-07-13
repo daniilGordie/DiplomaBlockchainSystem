@@ -39,10 +39,19 @@ public sealed class ProducerIdentity
         if (File.Exists(keyFileName))
         {
             byte[] encryptedBytes = File.ReadAllBytes(keyFileName);
-            _ecdsa.ImportEncryptedPkcs8PrivateKey(
-                Encoding.UTF8.GetBytes(keyPassword),
-                encryptedBytes,
-                out _);
+            try
+            {
+                _ecdsa.ImportEncryptedPkcs8PrivateKey(
+                    Encoding.UTF8.GetBytes(keyPassword),
+                    encryptedBytes,
+                    out _);
+            }
+            catch (CryptographicException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot load producer key '{keyFileName}'. Check Consensus:ProducerPrivateKeyPassword or replace the key file after backing it up.",
+                    ex);
+            }
         }
         else
         {

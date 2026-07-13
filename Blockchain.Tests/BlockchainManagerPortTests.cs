@@ -1,4 +1,5 @@
 using Blockchain.Core;
+using Blockchain.Core.Consensus;
 
 public class BlockchainManagerPortTests
 {
@@ -18,6 +19,8 @@ public class BlockchainManagerPortTests
     private sealed class InMemoryBlockchainStore : IBlockchainStore
     {
         private readonly Dictionary<string, List<Block>> _chains = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, ContributionProof> _proofs = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, IntentOutboxRecord> _intents = new(StringComparer.OrdinalIgnoreCase);
 
         public bool HasBlocks(string channelId = "System") => LoadChain(channelId).Count > 0;
 
@@ -51,6 +54,14 @@ public class BlockchainManagerPortTests
 
         public bool HasFinalityMetadata(string blockHash) => false;
 
+        public void SaveContributionProof(string blockHash, ContributionProof proof)
+        {
+            _proofs[blockHash] = proof;
+        }
+
+        public ContributionProof? GetContributionProof(string blockHash) =>
+            _proofs.TryGetValue(blockHash, out var proof) ? proof : null;
+
         public List<string> GetKnownChannels() => _chains.Keys.ToList();
 
         public List<Block> LoadChain(string channelId = "System")
@@ -73,6 +84,55 @@ public class BlockchainManagerPortTests
         public void ReplaceChain(string channelId, List<Block> blocks)
         {
             _chains[channelId] = blocks;
+        }
+
+        public void SaveIntent(IntentOutboxRecord record)
+        {
+            _intents[record.Intent.IntentId] = record;
+        }
+
+        public IntentOutboxRecord? GetIntent(string intentId) =>
+            _intents.TryGetValue(intentId, out var record) ? record : null;
+
+        public List<IntentOutboxRecord> LoadRetryableIntents(DateTime nowUtc, int limit) =>
+            _intents.Values.Take(limit).ToList();
+
+        public List<IntentOutboxRecord> LoadRecentIntents(int limit) =>
+            _intents.Values.Take(limit).ToList();
+
+        public List<IntentStatusTransition> LoadIntentHistory(string intentId) => new();
+
+        public void UpdateIntentStatus(
+            string intentId,
+            IntentStatus status,
+            int attemptCount,
+            DateTime updatedAtUtc,
+            DateTime? lastAttemptAtUtc,
+            DateTime? nextAttemptAtUtc,
+            string lastError,
+            string destination,
+            string? committedBlockHash,
+            long? committedBlockIndex = null,
+            string? proposalId = null)
+        {
+            if (!_intents.TryGetValue(intentId, out var record))
+            {
+                return;
+            }
+
+            _intents[intentId] = record with
+            {
+                Status = status,
+                AttemptCount = attemptCount,
+                UpdatedAtUtc = updatedAtUtc,
+                LastAttemptAtUtc = lastAttemptAtUtc,
+                NextAttemptAtUtc = nextAttemptAtUtc,
+                LastError = lastError,
+                Destination = destination,
+                CommittedBlockHash = committedBlockHash,
+                CommittedBlockIndex = committedBlockIndex,
+                ProposalId = proposalId
+            };
         }
 
         public List<string> GetUserProjects(string userName) => new();

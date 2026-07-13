@@ -1,0 +1,104 @@
+name: Nexus Release Verification
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - release/**
+  workflow_dispatch:
+    inputs:
+      run_docker_smoke:
+        description: "Run Docker TCP/Iroh product smoke"
+        required: false
+        default: "false"
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+      - run: dotnet restore DiplomaBlockchainSystem.sln
+      - run: dotnet build DiplomaBlockchainSystem.sln --no-restore
+      - run: dotnet test DiplomaBlockchainSystem.sln --no-build
+
+  rust-sidecar:
+    name: Rust sidecar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --check
+        working-directory: iroh-sidecar
+      - name: Run tests and enforce nonzero test count
+        run: |
+          set -euo pipefail
+          cargo test 2>&1 | tee cargo-test.log
+          if grep -q "running 0 tests" cargo-test.log; then
+            echo "Rust sidecar test suite reported running 0 tests."
+            exit 1
+          fi
+          if ! grep -Eq "test result: ok\. [1-9][0-9]* passed" cargo-test.log; then
+            echo "Rust sidecar test suite did not report a positive passing test count."
+            exit 1
+          fi
+        working-directory: iroh-sidecar
+
+  browser-e2e:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    needs: dotnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: dotnet restore DiplomaBlockchainSystem.sln
+      - run: dotnet build DiplomaBlockchainSystem.sln --no-restore
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-artifacts
+          path: |
+            playwright-report/
+            test-results/
+
+  docker-smoke:
+    name: Docker product smoke
+    runs-on: windows-latest
+    needs:
+      - dotnet
+      - rust-sidecar
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_docker_smoke == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+      - run: dotnet restore DiplomaBlockchainSystem.sln
+      - run: dotnet build DiplomaBlockchainSystem.sln --no-restore
+      - run: deploy\Invoke-NexusProductSmoke.ps1 -RaftTransport Tcp -SkipBuild -TimeoutSeconds 300
+        shell: pwsh
+      - run: deploy\Invoke-NexusProductSmoke.ps1 -RaftTransport Iroh -SkipBuild -TimeoutSeconds 300
+        shell: pwsh
+      - run: deploy\Invoke-IrohRaftSnapshotSmoke.ps1 -TimeoutSeconds 600
+        shell: pwsh
+      - run: deploy\Invoke-NexusRelaySmoke.ps1 -TimeoutSeconds 600
+        shell: pwsh

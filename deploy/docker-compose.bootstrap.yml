@@ -6,6 +6,12 @@ services:
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Network__Id: ${NETWORK_ID:-nexus-main}
+      Network__BootstrapHttpUrl: ${NETWORK_BOOTSTRAP_HTTP_URL:-}
+      Network__BootstrapGrpcUrl: ${NETWORK_BOOTSTRAP_GRPC_URL:-}
+      Network__BootstrapIrohUrl: ${NETWORK_BOOTSTRAP_IROH_URL:-}
+      Network__TrustedBootstrapNodeId: ${NETWORK_TRUSTED_BOOTSTRAP_NODE_ID:-}
+      Network__TrustedBootstrapFingerprint: ${NETWORK_TRUSTED_BOOTSTRAP_FINGERPRINT:-}
       Kestrel__Endpoints__Public__Url: http://+:5041
       Kestrel__Endpoints__Public__Protocols: Http1
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
@@ -24,8 +30,12 @@ services:
       Consensus__FinalityMode: ${CONSENSUS_FINALITY_MODE:-Immediate}
       Consensus__ProducerKeyPath: ${CONSENSUS_PRODUCER_KEY_PATH:-}
       Consensus__ProducerPrivateKeyPassword: ${CONSENSUS_PRODUCER_KEY_PASSWORD:-}
+      Raft__Transport: ${RAFT_TRANSPORT:-Tcp}
       Raft__NodeId: ${RAFT_NODE_ID:-}
       Raft__PublicEndPoint: ${RAFT_PUBLIC_ENDPOINT:-}
+      Raft__IrohNodeId: ${RAFT_IROH_NODE_ID:-}
+      Raft__IrohControlEndPoint: ${RAFT_IROH_CONTROL_ENDPOINT:-127.0.0.1:60411}
+      Raft__IrohNodeListenEndPoint: ${RAFT_IROH_NODE_LISTEN_ENDPOINT:-127.0.0.1:60410}
       Raft__LogPath: ${RAFT_LOG_PATH:-/data/raft-log}
       Raft__UsePersistentMembership: ${RAFT_USE_PERSISTENT_MEMBERSHIP:-true}
       Raft__MembershipPath: ${RAFT_MEMBERSHIP_PATH:-/data/raft-membership}
@@ -42,7 +52,9 @@ services:
       P2P__AllowRegistrationTokenFallback: ${P2P_ALLOW_REGISTRATION_TOKEN_FALLBACK:-false}
       P2P__MaxRegisteredPeers: ${P2P_MAX_REGISTERED_PEERS:-5000}
       P2P__MaxRegistrationsPerMinutePerAddress: ${P2P_MAX_REGISTRATIONS_PER_MINUTE_PER_ADDRESS:-30}
-      P2P__Iroh__Enabled: "false"
+      P2P__Iroh__Enabled: ${IROH_ENABLED:-false}
+      P2P__Iroh__SidecarUrl: ${IROH_SIDECAR_URL:-http://iroh-sidecar:49152}
+      P2P__Iroh__LocalApiToken: ${IROH_LOCAL_API_TOKEN:-}
       NodeVersion__UpdateManifestUrl: ${UPDATE_MANIFEST_URL:-}
       Logging__LogLevel__System.Net.Http.HttpClient: Warning
     volumes:

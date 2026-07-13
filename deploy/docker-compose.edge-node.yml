@@ -6,6 +6,12 @@ services:
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Network__Id: ${NETWORK_ID:-nexus-main}
+      Network__BootstrapHttpUrl: ${NETWORK_BOOTSTRAP_HTTP_URL:-}
+      Network__BootstrapGrpcUrl: ${NETWORK_BOOTSTRAP_GRPC_URL:-}
+      Network__BootstrapIrohUrl: ${NETWORK_BOOTSTRAP_IROH_URL:-}
+      Network__TrustedBootstrapNodeId: ${NETWORK_TRUSTED_BOOTSTRAP_NODE_ID:-}
+      Network__TrustedBootstrapFingerprint: ${NETWORK_TRUSTED_BOOTSTRAP_FINGERPRINT:-}
       Kestrel__Endpoints__Public__Url: http://+:5041
       Kestrel__Endpoints__Public__Protocols: Http1
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
@@ -73,6 +79,19 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  ui:
+    build:
+      context: ..
+      dockerfile: Blockchain.UI/Dockerfile
+      args:
+        UI_NODE_URL: http://localhost:${NODE_HTTP_PORT:-7042}
+    restart: unless-stopped
+    depends_on:
+      edge-node:
+        condition: service_healthy
+    ports:
+      - "${UI_HTTP_PORT:-7082}:80"
 
 volumes:
   edge-node-data:

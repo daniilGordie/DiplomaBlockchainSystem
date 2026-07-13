@@ -4,8 +4,12 @@ using Blockchain.Node.Services;
 using DotNext.Net.Cluster;
 using DotNext.Net.Cluster.Consensus.Raft;
 using Microsoft.Extensions.Options;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Blockchain.Node.Endpoints;
+
+#pragma warning disable DOTNEXT001
 
 public static class ConsensusEndpoints
 {
@@ -72,15 +76,17 @@ public static class ConsensusEndpoints
                     proof.EvidenceBlockHashes.ToArray())));
         });
 
-        endpoints.MapGet("/api/consensus/raft/status", (
+        endpoints.MapGet("/api/consensus/raft/status", async (
             IOptions<ConsensusOptions> consensusOptions,
             IOptions<NexusNodeOptions> nodeOptions,
             IOptions<RaftOptions> raftOptions,
+            IrohSidecarClient irohSidecar,
             IServiceProvider services) =>
         {
             var consensus = consensusOptions.Value;
             var node = nodeOptions.Value;
             var raft = raftOptions.Value;
+            var irohStatus = raft.UsesIrohTransport ? await irohSidecar.GetStatusAsync() : null;
             var cluster = TryGetRaftCluster(consensus, node, raft, services);
             bool clusterRegistered = cluster != null;
             var baseStatus = BuildRaftStatus(consensus, node, raft, clusterRegistered);
@@ -92,7 +98,59 @@ public static class ConsensusEndpoints
                 cluster != null && !cluster.LeadershipToken.IsCancellationRequested,
                 cluster != null && !cluster.ConsensusToken.IsCancellationRequested,
                 GetLeader(cluster),
-                GetMembers(cluster)));
+                GetMembers(cluster),
+                services.GetService<RaftBlockStateMachine>()?.GetDiagnostics(),
+                new RaftTransportProofResponse(
+                    raft.UsesIrohTransport ? "Iroh" : "Tcp",
+                    raft.UsesIrohTransport ? "Iroh" : "Tcp",
+                    irohStatus?.NodeId ?? string.Empty,
+                    irohStatus?.ConnectionPath ?? string.Empty,
+                    irohStatus?.TransportMode ?? string.Empty,
+                    irohStatus?.DirectAddresses?.Length ?? 0,
+                    raft.UsesIrohTransport ? "nexus/raft/1" : string.Empty)));
+        });
+
+        endpoints.MapPost("/api/consensus/raft/snapshot", async (
+            RaftSnapshotTriggerRequest request,
+            IOptions<ConsensusOptions> consensusOptions,
+            IOptions<NexusNodeOptions> nodeOptions,
+            IOptions<RaftOptions> raftOptions,
+            IConfiguration configuration,
+            IServiceProvider services,
+            CancellationToken cancellationToken) =>
+        {
+            if (!IsValidAdminToken(configuration, request.AdminToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            var consensus = consensusOptions.Value;
+            var node = nodeOptions.Value;
+            var raft = raftOptions.Value;
+            if (node.IsEdge)
+            {
+                return Results.BadRequest(new RaftSnapshotTriggerResponse(false, "Edge nodes do not run local Raft snapshots.", null));
+            }
+
+            var cluster = TryGetRaftCluster(consensus, node, raft, services);
+            if (cluster == null)
+            {
+                return Results.BadRequest(new RaftSnapshotTriggerResponse(false, "Raft cluster is not available.", null));
+            }
+
+            if (cluster.AuditTrail is not DotNext.Net.Cluster.Consensus.Raft.StateMachine.WriteAheadLog wal)
+            {
+                return Results.BadRequest(new RaftSnapshotTriggerResponse(false, "Raft audit trail does not support snapshot flush.", null));
+            }
+
+            await cluster.ApplyReadBarrierAsync(cancellationToken);
+            await wal.FlushAsync(cancellationToken);
+
+            var diagnostics = services.GetService<RaftBlockStateMachine>()?.GetDiagnostics();
+            return Results.Json(new RaftSnapshotTriggerResponse(
+                diagnostics?.CurrentSnapshotIndex != null,
+                diagnostics?.CurrentSnapshotIndex != null ? "Snapshot checkpoint flushed." : "Snapshot checkpoint flushed, but DotNext did not publish a snapshot index.",
+                diagnostics));
         });
 
         return endpoints;
@@ -106,14 +164,15 @@ public static class ConsensusEndpoints
     {
         bool raftFinality = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase);
         bool requested = raftFinality && node.IsConsensusMember;
-        bool configured = node.IsConsensusMember && raft.HasMinimumConfiguration;
+        bool supportedTransport = raft.UsesSupportedTransport;
+        bool configured = node.IsConsensusMember && raft.HasMinimumConfiguration && supportedTransport;
         bool ready = requested && configured && raftClusterRegistered;
         string status = raftFinality && node.IsEdge
             ? "edge_node_uses_remote_consensus"
             : !requested
             ? "not_requested"
             : !configured
-                ? "missing_configuration"
+                ? supportedTransport ? "missing_configuration" : "unsupported_transport"
                 : !raftClusterRegistered
                     ? "cluster_not_registered"
                     : "ready";
@@ -124,6 +183,7 @@ public static class ConsensusEndpoints
             raftClusterRegistered,
             ready,
             status,
+            string.IsNullOrWhiteSpace(raft.Transport) ? "Tcp" : raft.Transport,
             raft.NodeId,
             raft.PublicEndPoint,
             raft.LogPath,
@@ -139,7 +199,7 @@ public static class ConsensusEndpoints
     {
         bool requested = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase)
                          && node.IsConsensusMember;
-        if (!requested || !raft.HasMinimumConfiguration)
+        if (!requested || !raft.HasMinimumConfiguration || !raft.UsesSupportedTransport)
         {
             return false;
         }
@@ -162,7 +222,8 @@ public static class ConsensusEndpoints
     {
         if (!string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase) ||
             !node.IsConsensusMember ||
-            !raft.HasMinimumConfiguration)
+            !raft.HasMinimumConfiguration ||
+            !raft.UsesSupportedTransport)
         {
             return null;
         }
@@ -202,6 +263,20 @@ public static class ConsensusEndpoints
                 member.Status.ToString()))
             .ToArray();
     }
+
+    private static bool IsValidAdminToken(IConfiguration configuration, string suppliedToken)
+    {
+        string configuredToken = configuration["NodeAdminToken"] ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(configuredToken) || string.IsNullOrWhiteSpace(suppliedToken))
+        {
+            return false;
+        }
+
+        byte[] expected = Encoding.UTF8.GetBytes(configuredToken);
+        byte[] actual = Encoding.UTF8.GetBytes(suppliedToken);
+        return expected.Length == actual.Length &&
+               CryptographicOperations.FixedTimeEquals(expected, actual);
+    }
 }
 
 public sealed record ConsensusProducerResponse(
@@ -222,6 +297,7 @@ public sealed record RaftStatusResponse(
     bool ClusterRegistered,
     bool Ready,
     string Status,
+    string Transport,
     string NodeId,
     string PublicEndPoint,
     string LogPath,
@@ -235,7 +311,18 @@ public sealed record RaftRuntimeStatusResponse(
     bool LocalNodeIsLeader,
     bool HasLeaderConnection,
     string? Leader,
-    IReadOnlyList<RaftMemberRuntimeResponse> Members);
+    IReadOnlyList<RaftMemberRuntimeResponse> Members,
+    RaftSnapshotDiagnostics? Snapshot,
+    RaftTransportProofResponse TransportProof);
+
+public sealed record RaftTransportProofResponse(
+    string ConfiguredTransport,
+    string ActualTransport,
+    string LocalIrohNodeId,
+    string ConnectionPath,
+    string IrohTransportMode,
+    int DirectAddressCount,
+    string Alpn);
 
 public sealed record RaftPeerResponse(
     string Id,
@@ -247,6 +334,13 @@ public sealed record RaftMemberRuntimeResponse(
     bool IsRemote,
     string Status);
 
+public sealed record RaftSnapshotTriggerRequest(string AdminToken);
+
+public sealed record RaftSnapshotTriggerResponse(
+    bool Success,
+    string Message,
+    RaftSnapshotDiagnostics? Snapshot);
+
 public sealed record ContributionProofResponse(
     string ProjectId,
     long Epoch,
@@ -254,3 +348,5 @@ public sealed record ContributionProofResponse(
     int ProducerScore,
     string ScoreSnapshotHash,
     IReadOnlyList<string> EvidenceBlockHashes);
+
+#pragma warning restore DOTNEXT001

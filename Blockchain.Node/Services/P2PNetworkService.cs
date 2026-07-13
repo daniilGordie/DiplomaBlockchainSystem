@@ -51,6 +51,25 @@ namespace Blockchain.Node.Services
             }
         }
 
+        public void RemovePeer(string url)
+        {
+            string normalizedUrl = P2POptions.NormalizeUrl(url);
+            if (string.IsNullOrWhiteSpace(normalizedUrl))
+            {
+                return;
+            }
+
+            if (_peers.TryRemove(normalizedUrl, out _))
+            {
+                _logger.LogInformation("[P2P] Removed peer node: {PeerUrl}", normalizedUrl);
+            }
+
+            if (_channels.TryRemove(normalizedUrl, out var channel))
+            {
+                channel.Dispose();
+            }
+        }
+
         public List<string> GetPeers()
         {
             return new List<string>(_peers.Keys);
@@ -189,6 +208,12 @@ namespace Blockchain.Node.Services
                 .Where(channel => !string.IsNullOrWhiteSpace(channel))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+        }
+
+        public async Task<StatusReply> SubmitBlockAsync(string peerUrl, BlockModel block)
+        {
+            var client = CreateClient(peerUrl);
+            return await client.ReceiveBlockAsync(block);
         }
 
         private async Task BroadcastToPeerAsync(string peerUrl, BlockModel block)

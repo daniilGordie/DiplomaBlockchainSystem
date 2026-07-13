@@ -10,6 +10,7 @@ using Blockchain.UI.Infrastructure.Browser;
 using Blockchain.UI.Infrastructure.Grpc;
 using Blockchain.UI.Infrastructure.Http;
 using Blockchain.UI.Infrastructure.SignalR;
+using Microsoft.AspNetCore.Components;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 
@@ -32,13 +33,18 @@ builder.Services.AddScoped<IPeerNetworkClient, PeerNetworkClient>();
 builder.Services.AddScoped<IIpfsGatewayClient, IpfsGatewayClient>();
 builder.Services.AddScoped<DashboardActions>();
 builder.Services.AddScoped<IClipboardService, ClipboardService>();
+builder.Services.AddScoped<IBrowserOperationQueue, BrowserOperationQueue>();
 
 builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });
 
 builder.Services.AddScoped<IpfsService>();
 
-var nodeUrl = builder.Configuration["NodeUrl"] ?? "https://localhost:7066";
-
-builder.Services.AddScoped(services => services.GetRequiredService<INodeClientFactory>().Create(nodeUrl));
+builder.Services.AddScoped(services =>
+{
+    var configuration = services.GetRequiredService<IConfiguration>();
+    var navigation = services.GetRequiredService<NavigationManager>();
+    string nodeUrl = NodeUrlResolver.Resolve(configuration, navigation);
+    return services.GetRequiredService<INodeClientFactory>().Create(nodeUrl);
+});
 
 await builder.Build().RunAsync();

@@ -4,6 +4,7 @@ using Blockchain.UI.Services;
 using Blockchain.UI.Components;
 using Blockchain.UI.Components.Dashboard;
 using Blockchain.UI.Application.UseCases;
+using Blockchain.UI.Infrastructure.Browser;
 using Blockchain.UI.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
@@ -32,7 +33,9 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     [Inject] private IBlockAnchoringService BlockAnchoringService { get; set; } = default!;
     [Inject] private IPeerNetworkClient PeerNetworkClient { get; set; } = default!;
     [Inject] private IClipboardService ClipboardService { get; set; } = default!;
+    [Inject] private IBrowserOperationQueue BrowserOperationQueue { get; set; } = default!;
     [Inject] private DashboardActions DashboardActions { get; set; } = default!;
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
 
     private string currentNodeUrl = "";
     private string nodeUrlInput = "";
@@ -42,6 +45,10 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     private string currentNodeRole = "Unknown";
     private PeerDirectorySnapshot? peerDirectorySnapshot;
     private NodeSetupStatus? nodeSetupStatus;
+    private NetworkStatus? networkStatus;
+    private NetworkInvite? networkInvite;
+    private IntentListStatus? intentListStatus;
+    private IReadOnlyList<BrowserQueuedOperation> browserQueuedOperations = Array.Empty<BrowserQueuedOperation>();
     private MigrationChecklist? migrationChecklist;
     private UpdateCheckStatus? updateCheckStatus;
 
@@ -95,6 +102,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     private bool isUploading = false;
     private bool isMining = false;
     private bool isSyncing = false;
+    private bool isBrowserQueueRetrying = false;
     private string workspaceSnapshotKey = "";
     private CancellationTokenSource? workspaceRefreshCts;
     private string mnemonicCopyButtonText = "Copy to Clipboard";
@@ -136,11 +144,20 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     {
         isGenesisModeActive = bool.TryParse(Config["GenesisModeEnabled"], out var genesis) && genesis;
 
-        currentNodeUrl = DashboardActions.GetInitialNodeUrl();
+        currentNodeUrl = ResolveNodeUrlFromQuery(DashboardActions.GetInitialNodeUrl());
         nodeUrlInput = currentNodeUrl;
         try
         {
+            var setupState = await PeerNetworkClient.GetSetupStateAsync(currentNodeUrl);
+            if (setupState is { FullNodeConfigured: false } &&
+                string.Equals(setupState.State, "NotConfigured", StringComparison.OrdinalIgnoreCase))
+            {
+                Navigation.NavigateTo($"/setup?nodeUrl={Uri.EscapeDataString(currentNodeUrl)}");
+                return;
+            }
+
             await StartRealtimeConnection();
+            browserQueuedOperations = await BrowserOperationQueue.LoadAsync();
             await RefreshPeers();
             await LoadIntegrationStatus();
         }
@@ -266,6 +283,8 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
                 peerUrls.Clear();
                 peerDirectorySnapshot = null;
                 nodeSetupStatus = null;
+                networkStatus = null;
+                intentListStatus = null;
                 migrationChecklist = null;
                 updateCheckStatus = null;
                 nodeConnectionStatus = result.Error;
@@ -275,16 +294,25 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             currentNodeRole = result.Value.Directory.CurrentRole;
             peerDirectorySnapshot = result.Value.Directory;
             nodeSetupStatus = result.Value.SetupStatus;
+            networkStatus = result.Value.NetworkStatus;
+            networkInvite = result.Value.NetworkInvite;
+            intentListStatus = result.Value.IntentList;
             migrationChecklist = result.Value.MigrationChecklist;
             updateCheckStatus = result.Value.UpdateCheck;
             peerUrls = result.Value.Directory.Peers.ToList();
-            nodeConnectionStatus = $"Connected to {currentNodeUrl}. {peerUrls.Count} peer(s) registered.";
+            nodeConnectionStatus = networkStatus == null
+                ? $"Connected to {currentNodeUrl}. {peerUrls.Count} peer(s) registered."
+                : $"Connected to {currentNodeUrl}. {networkStatus.NodeRole} node, {peerUrls.Count} peer(s), {networkStatus.Channels.Count} channel(s).";
+            await RetryBrowserQueueIfConnected();
         }
         catch (Exception ex)
         {
             peerUrls.Clear();
             peerDirectorySnapshot = null;
             nodeSetupStatus = null;
+            networkStatus = null;
+            networkInvite = null;
+            intentListStatus = null;
             migrationChecklist = null;
             updateCheckStatus = null;
             currentNodeRole = "Unknown";
@@ -331,6 +359,95 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         catch (Exception ex)
         {
             statusMessage = $"Setup plan failed: {ex.Message}";
+            return null;
+        }
+        finally
+        {
+            isPeerPanelBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<PeerTrustResponse?> SetPeerTrust(PeerTrustRequest request)
+    {
+        var validation = DashboardActions.ValidateNodeUrl(currentNodeUrl);
+        if (!validation.Success || string.IsNullOrWhiteSpace(validation.Value))
+        {
+            statusMessage = validation.Error;
+            return null;
+        }
+
+        try
+        {
+            isPeerPanelBusy = true;
+            var response = await DashboardActions.SetPeerTrustAsync(validation.Value, request);
+            statusMessage = response?.Message ?? "Peer trust update failed.";
+            await RefreshPeers();
+            return response;
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Peer trust update failed: {ex.Message}";
+            return null;
+        }
+        finally
+        {
+            isPeerPanelBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<PeerRoleResponse?> SetPeerRole(PeerRoleRequest request)
+    {
+        var validation = DashboardActions.ValidateNodeUrl(currentNodeUrl);
+        if (!validation.Success || string.IsNullOrWhiteSpace(validation.Value))
+        {
+            statusMessage = validation.Error;
+            return null;
+        }
+
+        try
+        {
+            isPeerPanelBusy = true;
+            var response = await DashboardActions.SetPeerRoleAsync(validation.Value, request);
+            statusMessage = response?.Message ?? "Peer role update failed.";
+            await RefreshPeers();
+            return response;
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Peer role update failed: {ex.Message}";
+            return null;
+        }
+        finally
+        {
+            isPeerPanelBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<EdgeSyncStatus?> SyncNetwork(NetworkSyncRequest request)
+    {
+        var validation = DashboardActions.ValidateNodeUrl(currentNodeUrl);
+        if (!validation.Success || string.IsNullOrWhiteSpace(validation.Value))
+        {
+            statusMessage = validation.Error;
+            return null;
+        }
+
+        try
+        {
+            isPeerPanelBusy = true;
+            var response = await DashboardActions.SyncNetworkAsync(validation.Value, request);
+            statusMessage = response == null
+                ? "Network sync failed."
+                : $"Network sync: {response.State}, applied {response.LastAppliedBlocks} block(s).";
+            await RefreshPeers();
+            return response;
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Network sync failed: {ex.Message}";
             return null;
         }
         finally
@@ -570,33 +687,40 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
 
     private async Task CreateWallet()
     {
-        string requestedUserName = userNameInput.Trim();
-        if (string.IsNullOrWhiteSpace(requestedUserName))
+        try
         {
-            statusMessage = "Enter a user name before creating a wallet.";
-            return;
-        }
+            string requestedUserName = userNameInput.Trim();
+            if (string.IsNullOrWhiteSpace(requestedUserName))
+            {
+                statusMessage = "Enter a user name before creating a wallet.";
+                return;
+            }
 
-        var availability = await BlockAnchoringService.CheckUserNameAvailabilityAsync(requestedUserName);
-        if (!availability.Success)
+            var availability = await BlockAnchoringService.CheckUserNameAvailabilityAsync(requestedUserName);
+            if (!availability.Success)
+            {
+                statusMessage = availability.Message;
+                return;
+            }
+
+            if (availability.Exists)
+            {
+                statusMessage = $"User name '{requestedUserName}' is already taken. Restore the original wallet for this name or choose another name.";
+                return;
+            }
+
+            await Logout();
+            await MyKeyService.CreateNewWallet(requestedUserName);
+            showPasswordEntry = true;
+            statusMessage = $"Wallet created for '{requestedUserName}'. Save the wallet file before continuing.";
+            await JoinSignalRGroups();
+            await SyncChain();
+            StartWorkspaceRefreshLoop();
+        }
+        catch (Exception ex)
         {
-            statusMessage = availability.Message;
-            return;
+            statusMessage = $"Wallet creation failed: {ex.Message}";
         }
-
-        if (availability.Exists)
-        {
-            statusMessage = $"User name '{requestedUserName}' is already taken. Restore the original wallet for this name or choose another name.";
-            return;
-        }
-
-        await Logout();
-        await MyKeyService.CreateNewWallet(requestedUserName);
-        showPasswordEntry = true;
-        statusMessage = $"Wallet created for '{requestedUserName}'. Save the wallet file before continuing.";
-        await JoinSignalRGroups();
-        await SyncChain();
-        StartWorkspaceRefreshLoop();
     }
 
     private void RestoreMode() => isRestoreMode = !isRestoreMode;
@@ -1019,15 +1143,114 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             statusMessage = result.Message;
 
             if (result.Success) await SyncChain();
+            else if (ShouldQueueBrowserOperation(result.Message))
+            {
+                await BrowserOperationQueue.EnqueueAsync(ExtractPayloadType(payloadJson), targetChannel, payloadJson, result.Message);
+                browserQueuedOperations = await BrowserOperationQueue.LoadAsync();
+                statusMessage = "Action queued locally. It will be submitted when this browser can reach the local node.";
+            }
 
             return result.Success;
         }
         catch (Exception ex)
         {
-            statusMessage = ex.Message;
+            await BrowserOperationQueue.EnqueueAsync(ExtractPayloadType(payloadJson), targetChannel, payloadJson, ex.Message);
+            browserQueuedOperations = await BrowserOperationQueue.LoadAsync();
+            statusMessage = "Action queued locally. It will be submitted when this browser can reach the local node.";
             return false;
         }
         finally { isMining = false; StateHasChanged(); }
+    }
+
+    private static bool ShouldQueueBrowserOperation(string message) =>
+        message.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("endpoint", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("network", StringComparison.OrdinalIgnoreCase);
+
+    private static string ExtractPayloadType(string payloadJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            if (doc.RootElement.TryGetProperty("Type", out var type) ||
+                doc.RootElement.TryGetProperty("type", out type))
+            {
+                return type.GetString() ?? "Operation";
+            }
+        }
+        catch
+        {
+        }
+
+        return "Operation";
+    }
+
+    private async Task RetryBrowserQueue()
+    {
+        await RetryBrowserQueueCore(showNoopMessage: true);
+    }
+
+    private async Task RetryBrowserQueueIfConnected()
+    {
+        if (!MyKeyService.IsLoggedIn || isBrowserQueueRetrying)
+        {
+            return;
+        }
+
+        var queued = await BrowserOperationQueue.LoadAsync();
+        if (queued.Count == 0)
+        {
+            browserQueuedOperations = queued;
+            return;
+        }
+
+        await RetryBrowserQueueCore(showNoopMessage: false);
+    }
+
+    private async Task RetryBrowserQueueCore(bool showNoopMessage)
+    {
+        if (isBrowserQueueRetrying)
+        {
+            return;
+        }
+
+        isBrowserQueueRetrying = true;
+        var queued = await BrowserOperationQueue.LoadAsync();
+        int committed = 0;
+        try
+        {
+            foreach (var item in queued)
+            {
+                var result = await BlockAnchoringService.AnchorJsonStringAsync(item.PayloadJson, item.ChannelId);
+                if (result.Success)
+                {
+                    committed++;
+                    await BrowserOperationQueue.RemoveAsync(item.OperationId);
+                }
+            }
+
+            browserQueuedOperations = await BrowserOperationQueue.LoadAsync();
+            if (committed > 0)
+            {
+                statusMessage = $"Submitted {committed} queued action(s).";
+            }
+            else if (showNoopMessage)
+            {
+                statusMessage = "Queued actions are still waiting for the local node.";
+            }
+        }
+        finally
+        {
+            isBrowserQueueRetrying = false;
+        }
+    }
+
+    private async Task ClearBrowserQueue()
+    {
+        await BrowserOperationQueue.ClearCommittedAsync();
+        browserQueuedOperations = await BrowserOperationQueue.LoadAsync();
+        statusMessage = "Submitted browser queue entries cleared.";
     }
 
     private async Task SyncChain()
@@ -1088,6 +1311,37 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         {
             isSyncing = false;
         }
+    }
+
+    private string ResolveNodeUrlFromQuery(string fallback)
+    {
+        if (!bool.TryParse(Config["AllowNodeUrlQueryOverride"], out var allowOverride) || !allowOverride)
+        {
+            return fallback;
+        }
+
+        try
+        {
+            var uri = new Uri(Navigation.Uri);
+            string query = uri.Query.TrimStart('?');
+            foreach (string pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var parts = pair.Split('=', 2);
+                if (parts.Length == 2 && string.Equals(Uri.UnescapeDataString(parts[0]), "nodeUrl", StringComparison.OrdinalIgnoreCase))
+                {
+                    string value = Uri.UnescapeDataString(parts[1]);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        return value.TrimEnd('/');
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return fallback;
     }
 
     private static string BuildWorkspaceSnapshotKey(ProjectWorkspaceData workspace)
@@ -1155,6 +1409,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             {
                 if (MyKeyService.IsLoggedIn)
                 {
+                    await InvokeAsync(RefreshPeers);
                     await InvokeAsync(SyncChain);
                 }
             }
@@ -1354,14 +1609,23 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             return;
         }
 
-        var identity = await BlockAnchoringService.CheckCurrentUserIdentityAsync();
-        if (!identity.Success)
+        UserIdentityCheckResult? identity = null;
+        try
+        {
+            identity = await BlockAnchoringService.CheckCurrentUserIdentityAsync();
+        }
+        catch (Exception ex) when (ShouldQueueBrowserOperation(ex.Message))
+        {
+            identity = null;
+        }
+
+        if (identity != null && !identity.Success)
         {
             statusMessage = $"Identity check failed: {identity.Message}";
             return;
         }
 
-        if (identity.Exists && !identity.PublicKeyMatches)
+        if (identity != null && identity.Exists && !identity.PublicKeyMatches)
         {
             statusMessage = $"User name '{MyKeyService.UserName}' is already bound to another wallet. Restore the original wallet or choose a different user name.";
             return;

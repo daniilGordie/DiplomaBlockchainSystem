@@ -6,6 +6,12 @@ services:
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Network__Id: ${NETWORK_ID:-nexus-main}
+      Network__BootstrapHttpUrl: ${NETWORK_BOOTSTRAP_HTTP_URL:-}
+      Network__BootstrapGrpcUrl: ${NETWORK_BOOTSTRAP_GRPC_URL:-}
+      Network__BootstrapIrohUrl: ${NETWORK_BOOTSTRAP_IROH_URL:-}
+      Network__TrustedBootstrapNodeId: ${NETWORK_TRUSTED_BOOTSTRAP_NODE_ID:-}
+      Network__TrustedBootstrapFingerprint: ${NETWORK_TRUSTED_BOOTSTRAP_FINGERPRINT:-}
       Kestrel__Endpoints__Public__Url: http://+:5041
       Kestrel__Endpoints__Public__Protocols: Http1
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
@@ -24,8 +30,12 @@ services:
       Consensus__FinalityMode: ${CONSENSUS_FINALITY_MODE:-Immediate}
       Consensus__ProducerKeyPath: ${CONSENSUS_PRODUCER_KEY_PATH:-}
       Consensus__ProducerPrivateKeyPassword: ${CONSENSUS_PRODUCER_KEY_PASSWORD:-}
+      Raft__Transport: ${RAFT_TRANSPORT:-Tcp}
       Raft__NodeId: ${RAFT_NODE_ID:-}
       Raft__PublicEndPoint: ${RAFT_PUBLIC_ENDPOINT:-}
+      Raft__IrohNodeId: ${RAFT_IROH_NODE_ID:-}
+      Raft__IrohControlEndPoint: ${RAFT_IROH_CONTROL_ENDPOINT:-127.0.0.1:60411}
+      Raft__IrohNodeListenEndPoint: ${RAFT_IROH_NODE_LISTEN_ENDPOINT:-127.0.0.1:60410}
       Raft__LogPath: ${RAFT_LOG_PATH:-/data/raft-log}
       Raft__UsePersistentMembership: ${RAFT_USE_PERSISTENT_MEMBERSHIP:-true}
       Raft__MembershipPath: ${RAFT_MEMBERSHIP_PATH:-/data/raft-membership}
@@ -73,6 +83,8 @@ services:
       NEXUS_IROH_TOKEN: ${IROH_LOCAL_API_TOKEN}
       NEXUS_IROH_SECRET_KEY_PATH: ${IROH_SECRET_KEY_PATH:-/data/iroh-secret.key}
       NEXUS_IROH_RELAY_MODE: ${IROH_RELAY_MODE:-default}
+      NEXUS_IROH_RAFT_LISTEN: ${IROH_RAFT_LISTEN:-127.0.0.1:60411}
+      NEXUS_IROH_RAFT_NODE_LISTEN: ${IROH_RAFT_NODE_LISTEN:-127.0.0.1:60410}
       RUST_LOG: ${IROH_LOG:-info,nexus_iroh_sidecar=info}
     volumes:
       - iroh-sidecar-data:/data

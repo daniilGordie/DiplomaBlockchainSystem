@@ -235,6 +235,10 @@
                                   CurrentNodeRole="@currentNodeRole"
                                   Snapshot="@peerDirectorySnapshot"
                                   SetupStatus="@nodeSetupStatus"
+                                  NetworkStatus="@networkStatus"
+                                  NetworkInvite="@networkInvite"
+                                  IntentList="@intentListStatus"
+                                  BrowserQueue="@browserQueuedOperations"
                                   MigrationChecklist="@migrationChecklist"
                                   UpdateCheck="@updateCheckStatus"
                                   NodeUrlInput="@nodeUrlInput"
@@ -244,7 +248,12 @@
                                   NodeUrlInputChanged="OnNodeUrlInputChanged"
                                   OnConnectNode="ConnectToNode"
                                   OnRefreshPeers="RefreshPeers"
-                                  OnCreateSetupPlan="CreateSetupPlan" />
+                                  OnCreateSetupPlan="CreateSetupPlan"
+                                  OnSetPeerTrust="SetPeerTrust"
+                                  OnSetPeerRole="SetPeerRole"
+                                  OnSyncNetwork="SyncNetwork"
+                                  OnRetryBrowserQueue="RetryBrowserQueue"
+                                  OnClearBrowserQueue="ClearBrowserQueue" />
             }
         </div>
     }
@@ -260,7 +269,8 @@
                            value="@unlockPassword"
                            @oninput="OnUnlockPasswordChanged"
                            class="form-control bg-dark text-white border-secondary"
-                           placeholder="Wallet password" />
+                           placeholder="Wallet password"
+                           aria-label="Wallet password" />
                     <button class="btn btn-primary" @onclick="UnlockWalletWithPassword">Unlock</button>
                 </div>
                 <button class="btn btn-outline-secondary w-100" @onclick="UnlockWalletWithPasskey">Unlock with passkey</button>

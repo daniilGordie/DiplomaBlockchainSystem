@@ -6,7 +6,9 @@
                 <span class="badge bg-info">Current node: @CurrentNodeLabel</span>
                 <span class="badge @RoleBadge(CurrentNodeRole)">@CurrentNodeRole</span>
                 <span class="badge @TransportBadge">@TransportLabel</span>
-                <span class="badge bg-secondary">@Peers.Count peers</span>
+                <span class="badge @ConsensusBadge">@ConsensusLabel</span>
+                <span class="badge @EdgeSyncBadge">@EdgeSyncLabel</span>
+                <span class="badge bg-secondary">@DisplayPeers.Count peers</span>
             </div>
             <div class="text-muted small">@ConnectionStatusLabel</div>
         </div>
@@ -32,6 +34,8 @@
                     <div class="text-white small fw-semibold">@ModeLabel</div>
                     <span class="badge @ModeBadge">@ModeStatus</span>
                 </div>
+                <div class="small text-white mt-2">Network: @NetworkIdLabel</div>
+                <div class="small text-white">Trusted bootstrap: @TrustedBootstrapLabel</div>
                 <div class="form-text text-muted">@ModeHint</div>
             </div>
         </div>
@@ -50,7 +54,65 @@
         </div>
     </div>
 
+    @if (NetworkStatus?.Errors.Count > 0 || NetworkStatus?.Warnings.Count > 0)
+    {
+        <div class="mt-3 d-flex flex-column gap-2">
+            @foreach (var error in NetworkStatus.Errors)
+            {
+                <div class="alert alert-danger py-2 px-3 mb-0 small">@error</div>
+            }
+            @foreach (var warning in NetworkStatus.Warnings)
+            {
+                <div class="alert alert-warning py-2 px-3 mb-0 small">@warning</div>
+            }
+        </div>
+    }
+
     <div class="row g-3 mt-1">
+        <div class="col-lg-4">
+            <div class="network-panel__group p-3 border border-secondary rounded h-100">
+                <div class="text-white-50 small fw-semibold mb-2">Consensus</div>
+                <div class="small text-white">Mode: @FinalityModeLabel</div>
+                <div class="small text-white">PoC validation: @PoCLabel</div>
+                <div class="small text-white">Local Raft: @LocalRaftLabel</div>
+                <div class="small text-white">Raft transport: @RaftTransportLabel</div>
+                <div class="small text-white">Raft endpoint: @RaftEndpointLabel</div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="network-panel__group p-3 border border-secondary rounded h-100">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <div class="text-white-50 small fw-semibold">Edge sync</div>
+                    <button class="btn btn-outline-info btn-sm"
+                            type="button"
+                            disabled="@(IsBusy || OnSyncNetwork == null || string.IsNullOrWhiteSpace(PeerAdminToken))"
+                            @onclick="SyncNetwork">Sync now</button>
+                </div>
+                <div class="small text-white">State: @EdgeSyncStateLabel</div>
+                <div class="small text-white">Applied: @EdgeSyncAppliedLabel</div>
+                <div class="small text-white">Last peer: @EdgeSyncPeerLabel</div>
+                @if (!string.IsNullOrWhiteSpace(NetworkStatus?.EdgeSync.LastError))
+                {
+                    <div class="alert alert-warning py-1 px-2 mt-2 mb-0 small">@NetworkStatus.EdgeSync.LastError</div>
+                }
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="network-panel__group p-3 border border-secondary rounded h-100">
+                <div class="text-white-50 small fw-semibold mb-2">Committed state</div>
+                <div class="small text-white">Channels: @ChannelCountLabel</div>
+                <div class="small text-white">Latest: @LatestChannelLabel</div>
+                <div class="small text-white">Pending intents: @PendingIntentLabel</div>
+                <div class="small text-white">Rejected intents: @RejectedIntentLabel</div>
+                <div class="small text-white">Pending proposals: @PendingProposalLabel</div>
+                <div class="small text-white">Forwarding: @ProposalForwardingLabel</div>
+                @if (!string.IsNullOrWhiteSpace(NetworkStatus?.EdgeProposalForwarding.LastMessage))
+                {
+                    <div class="alert @ProposalForwardingAlert py-1 px-2 mt-2 mb-0 small">@NetworkStatus.EdgeProposalForwarding.LastMessage</div>
+                }
+            </div>
+        </div>
+
         <div class="col-12">
             <div class="network-panel__group p-3 border border-secondary rounded">
                 <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
@@ -59,7 +121,8 @@
                 </div>
                 <div class="btn-group w-100 mb-3" role="group" aria-label="Node setup mode">
                     <button type="button" class="btn btn-sm @SetupModeButton("local")" @onclick="@(() => SelectSetupMode("local"))">Local node</button>
-                    <button type="button" class="btn btn-sm @SetupModeButton("full-node")" @onclick="@(() => SelectSetupMode("full-node"))">Join network</button>
+                    <button type="button" class="btn btn-sm @SetupModeButton("edge")" @onclick="@(() => SelectSetupMode("edge"))">Join network</button>
+                    <button type="button" class="btn btn-sm @SetupModeButton("consensus")" @onclick="@(() => SelectSetupMode("consensus"))">Consensus node</button>
                     <button type="button" class="btn btn-sm @SetupModeButton("bootstrap")" @onclick="@(() => SelectSetupMode("bootstrap"))">Bootstrap node</button>
                 </div>
                 <div class="row g-2">
@@ -87,6 +150,28 @@
                                 <option value="staging">staging</option>
                                 <option value="disabled">disabled</option>
                             </select>
+                        </div>
+                    }
+                    @if (SetupMode == "edge" || SetupMode == "consensus")
+                    {
+                        <div class="col-md-12">
+                            <div class="d-flex align-items-center justify-content-between gap-2 mb-1">
+                                <label class="form-label text-white-50 small mb-0">Connection invite</label>
+                                <button class="btn btn-outline-info btn-sm"
+                                        type="button"
+                                        disabled="@string.IsNullOrWhiteSpace(NetworkInvite?.Token)"
+                                        @onclick="UseCurrentInvite">Use current node invite</button>
+                            </div>
+                            <textarea class="form-control form-control-sm bg-dark text-white border-secondary font-monospace"
+                                      rows="3"
+                                      value="@SetupInvite"
+                                      @oninput="OnSetupInviteChanged"
+                                      placeholder="Paste invite token or JSON"></textarea>
+                            <div class="form-text text-muted">@CurrentInviteLabel</div>
+                            @if (SetupMode == "consensus")
+                            {
+                                <div class="form-text text-warning">Consensus nodes need a stable Raft TCP endpoint until Raft-over-Iroh is available.</div>
+                            }
                         </div>
                     }
                     <div class="col-md-12">
@@ -161,9 +246,126 @@
         </div>
     }
 
+    @if (NetworkStatus?.Channels.Count > 0)
+    {
+        <div class="mt-3">
+            <div class="text-white-50 small fw-semibold mb-2">Committed channels</div>
+            <div class="table-responsive">
+                <table class="table table-dark table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Channel</th>
+                            <th>Index</th>
+                            <th>Finality</th>
+                            <th>Raft log</th>
+                            <th>Hash</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var channel in NetworkStatus.Channels.OrderBy(channel => channel.ChannelId == "System" ? 0 : 1).ThenBy(channel => channel.ChannelId))
+                        {
+                            <tr>
+                                <td class="font-monospace small">@channel.ChannelId</td>
+                                <td class="small">@channel.LatestIndex</td>
+                                <td><span class="badge @FinalityBadge(channel.FinalityMode)">@FinalityLabel(channel.FinalityMode)</span></td>
+                                <td class="small">@RaftLogLabel(channel)</td>
+                                <td class="font-monospace small">@ShortHash(channel.LatestHash)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (IntentList?.Intents.Count > 0)
+    {
+        <div class="mt-3">
+            <div class="text-white-50 small fw-semibold mb-2">Recent intents</div>
+            <div class="table-responsive">
+                <table class="table table-dark table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Operation</th>
+                            <th>Status</th>
+                            <th>Attempts</th>
+                            <th>Next retry</th>
+                            <th>Intent</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var intent in IntentList.Intents.Take(10))
+                        {
+                            <tr>
+                                <td class="small">@intent.OperationType</td>
+                                <td><span class="badge @IntentStatusBadge(intent.Status)">@IntentStatusLabel(intent.Status)</span></td>
+                                <td class="small">@intent.AttemptCount</td>
+                                <td class="small text-white-50">@RetryLabel(intent)</td>
+                                <td class="font-monospace small" title="@SafeIntentError(intent)">@ShortHash(intent.IntentId)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (BrowserQueue.Count > 0)
+    {
+        <div class="mt-3">
+            <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                <div class="text-white-50 small fw-semibold">Browser queue</div>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-info" disabled="@(IsBusy || OnRetryBrowserQueue == null)" @onclick="RetryBrowserQueue">Retry</button>
+                    <button class="btn btn-outline-secondary" disabled="@(IsBusy || OnClearBrowserQueue == null)" @onclick="ClearBrowserQueue">Clear submitted</button>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-dark table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Operation</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in BrowserQueue.Take(10))
+                        {
+                            <tr>
+                                <td class="small">@item.OperationType</td>
+                                <td><span class="badge bg-warning text-dark">Action queued locally</span></td>
+                                <td class="small text-white-50">@item.CreatedAtUtc.ToLocalTime().ToString("g")</td>
+                                <td class="small text-white-50">@item.LastError</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
     <div class="mt-3">
-            <div class="text-white-50 small fw-semibold mb-2">Known peers</div>
-        @if (Peers.Count == 0)
+        <div class="d-flex align-items-end justify-content-between gap-3 flex-wrap mb-2">
+            <div>
+                <div class="text-white-50 small fw-semibold">Known peers</div>
+                <div class="text-muted small">Approve or revoke nodes stored in the local peer registry.</div>
+            </div>
+            <div class="input-group input-group-sm" style="max-width: 360px;">
+                <span class="input-group-text">Admin token</span>
+                <input type="password"
+                       value="@PeerAdminToken"
+                       @oninput="OnPeerAdminTokenChanged"
+                       class="form-control bg-dark text-white border-secondary"
+                       placeholder="NodeAdminToken" />
+            </div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(PeerTrustMessage))
+        {
+            <div class="alert @(PeerTrustSucceeded ? "alert-success" : "alert-warning") py-2 px-3 small">@PeerTrustMessage</div>
+        }
+        @if (DisplayPeers.Count == 0)
         {
             <div class="text-muted small">No peers registered on this node.</div>
         }
@@ -178,17 +380,45 @@
                             <th>URL</th>
                             <th>Status</th>
                             <th>Last seen</th>
+                            <th>Role change</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                @foreach (var peer in Peers)
+                @foreach (var peer in DisplayPeers)
                 {
                         <tr>
                             <td><span class="badge @RoleBadge(peer.Role)">@peer.Role</span></td>
                             <td class="font-monospace small">@NodeLabel(peer)</td>
-                            <td class="font-monospace small">@peer.PublicUrl</td>
-                            <td><span class="badge @StatusBadge(peer)">@peer.Status</span></td>
+                            <td class="font-monospace small">@peer.Url</td>
+                            <td>
+                                <span class="badge @StatusBadge(peer)">@StatusLabel(peer)</span>
+                                <span class="badge @TrustedBadge(peer)">@TrustedLabel(peer)</span>
+                            </td>
                             <td class="small text-white-50">@LastSeenLabel(peer)</td>
+                            <td>
+                                <div class="btn-group btn-group-sm" role="group" aria-label="Peer role actions">
+                                    <button class="btn btn-outline-info"
+                                            disabled="@(IsBusy || IsPeerRole(peer, "Edge") || string.IsNullOrWhiteSpace(PeerAdminToken))"
+                                            @onclick="@(() => SetPeerRole(peer, "Edge"))">Edge</button>
+                                    <button class="btn btn-outline-primary"
+                                            disabled="@(IsBusy || IsPeerRole(peer, "Consensus") || string.IsNullOrWhiteSpace(PeerAdminToken))"
+                                            @onclick="@(() => SetPeerRole(peer, "Consensus"))">Consensus</button>
+                                    <button class="btn btn-outline-warning"
+                                            disabled="@(IsBusy || IsPeerRole(peer, "Bootstrap") || string.IsNullOrWhiteSpace(PeerAdminToken))"
+                                            @onclick="@(() => SetPeerRole(peer, "Bootstrap"))">Bootstrap</button>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="btn-group btn-group-sm" role="group" aria-label="Peer trust actions">
+                                    <button class="btn btn-outline-success"
+                                            disabled="@(IsBusy || peer.IsTrusted || string.IsNullOrWhiteSpace(PeerAdminToken))"
+                                            @onclick="@(() => SetPeerTrust(peer, true))">Approve</button>
+                                    <button class="btn btn-outline-warning"
+                                            disabled="@(IsBusy || !peer.IsTrusted || string.IsNullOrWhiteSpace(PeerAdminToken))"
+                                            @onclick="@(() => SetPeerTrust(peer, false))">Revoke</button>
+                                </div>
+                            </td>
                         </tr>
                 }
                     </tbody>
@@ -202,6 +432,10 @@
     [Parameter] public IReadOnlyList<Blockchain.UI.Application.Clients.PeerNodeInfo> Peers { get; set; } = Array.Empty<Blockchain.UI.Application.Clients.PeerNodeInfo>();
     [Parameter] public Blockchain.UI.Application.Clients.PeerDirectorySnapshot? Snapshot { get; set; }
     [Parameter] public Blockchain.UI.Application.Clients.NodeSetupStatus? SetupStatus { get; set; }
+    [Parameter] public Blockchain.UI.Application.Clients.NetworkStatus? NetworkStatus { get; set; }
+    [Parameter] public Blockchain.UI.Application.Clients.NetworkInvite? NetworkInvite { get; set; }
+    [Parameter] public Blockchain.UI.Application.Clients.IntentListStatus? IntentList { get; set; }
+    [Parameter] public IReadOnlyList<Blockchain.UI.Infrastructure.Browser.BrowserQueuedOperation> BrowserQueue { get; set; } = Array.Empty<Blockchain.UI.Infrastructure.Browser.BrowserQueuedOperation>();
     [Parameter] public Blockchain.UI.Application.Clients.MigrationChecklist? MigrationChecklist { get; set; }
     [Parameter] public Blockchain.UI.Application.Clients.UpdateCheckStatus? UpdateCheck { get; set; }
     [Parameter] public string CurrentNodeUrl { get; set; } = "";
@@ -214,14 +448,33 @@
     [Parameter] public EventCallback OnConnectNode { get; set; }
     [Parameter] public EventCallback OnRefreshPeers { get; set; }
     [Parameter] public Func<Blockchain.UI.Application.Clients.SetupPlanRequest, Task<Blockchain.UI.Application.Clients.SetupPlanResponse?>>? OnCreateSetupPlan { get; set; }
+    [Parameter] public Func<Blockchain.UI.Application.Clients.PeerTrustRequest, Task<Blockchain.UI.Application.Clients.PeerTrustResponse?>>? OnSetPeerTrust { get; set; }
+    [Parameter] public Func<Blockchain.UI.Application.Clients.PeerRoleRequest, Task<Blockchain.UI.Application.Clients.PeerRoleResponse?>>? OnSetPeerRole { get; set; }
+    [Parameter] public Func<Blockchain.UI.Application.Clients.NetworkSyncRequest, Task<Blockchain.UI.Application.Clients.EdgeSyncStatus?>>? OnSyncNetwork { get; set; }
+    [Parameter] public Func<Task>? OnRetryBrowserQueue { get; set; }
+    [Parameter] public Func<Task>? OnClearBrowserQueue { get; set; }
 
-    private string SetupMode { get; set; } = "full-node";
+    private string SetupMode { get; set; } = "edge";
     private string SetupNodeId { get; set; } = "";
     private string SetupPublicUrl { get; set; } = "https://bootstrap.example.com";
     private string SetupBootstrapGrpcUrl { get; set; } = "https://bootstrap.example.com:7141";
     private string SetupRelayMode { get; set; } = "default";
     private string SetupOraclePublicKey { get; set; } = "auto";
+    private string SetupInvite { get; set; } = "";
     private Blockchain.UI.Application.Clients.SetupPlanResponse? SetupPlan { get; set; }
+    private string PeerAdminToken { get; set; } = "";
+    private string PeerTrustMessage { get; set; } = "";
+    private bool PeerTrustSucceeded { get; set; }
+    private IReadOnlyList<Blockchain.UI.Application.Clients.NetworkPeerStatus> DisplayPeers =>
+        NetworkStatus?.KnownPeers ??
+        Peers.Select(peer => new Blockchain.UI.Application.Clients.NetworkPeerStatus(
+            peer.PublicUrl,
+            peer.NodeId,
+            peer.Role,
+            peer.PublicUrl.StartsWith("iroh://", StringComparison.OrdinalIgnoreCase) ? "Iroh" : "HttpGrpc",
+            peer.LastSeen,
+            peer.LastFailure,
+            peer.IsTrusted)).ToArray();
 
     private string CurrentNodeLabel => string.IsNullOrWhiteSpace(CurrentNodeUrl) ? "Not connected" : CurrentNodeUrl;
     private string ConnectionStatusLabel => string.IsNullOrWhiteSpace(ConnectionStatus) ? "Connection status unavailable." : ConnectionStatus;
@@ -251,12 +504,13 @@
     {
         "local" => "Local node",
         "bootstrap" => "Bootstrap node",
+        "consensus" => "Consensus node",
         _ => "Join network"
     };
     private bool CanGenerateSetupPlan => SetupMode switch
     {
         "bootstrap" => IsHttpUrl(SetupPublicUrl),
-        "full-node" => IsHttpUrl(SetupBootstrapGrpcUrl),
+        "edge" or "consensus" => IsHttpUrl(SetupBootstrapGrpcUrl) || !string.IsNullOrWhiteSpace(SetupInvite),
         "local" => true,
         _ => false
     };
@@ -264,7 +518,10 @@
         ? "Ready to generate a node environment file."
         : SetupMode == "bootstrap"
             ? "Enter a valid public bootstrap HTTP or HTTPS URL."
-            : "Enter a valid bootstrap gRPC HTTP or HTTPS URL.";
+            : "Enter a valid bootstrap HTTP/gRPC URL or paste a connection invite.";
+    private string CurrentInviteLabel => NetworkInvite == null
+        ? "Current node did not publish an invite."
+        : $"Current invite: {NetworkInvite.NetworkId}, bootstrap {NetworkInvite.BootstrapGrpcUrl}, fingerprint {NetworkInvite.TrustedBootstrapFingerprint}.";
     private string ModeLabel => string.Equals(CurrentNodeRole, "Bootstrap", StringComparison.OrdinalIgnoreCase)
         ? "Bootstrap node"
         : Snapshot?.BootstrapPeers.Count > 0 ? "Joined network" : "Local node";
@@ -275,6 +532,66 @@
         : Snapshot?.BootstrapPeers.Count > 0
             ? "This node registers with bootstrap peers and syncs data from discovered nodes."
             : "This node is running without bootstrap discovery. Configure bootstrap peers to join the shared network.";
+    private string NetworkIdLabel => string.IsNullOrWhiteSpace(NetworkStatus?.NetworkId) ? "unknown" : NetworkStatus.NetworkId;
+    private string TrustedBootstrapLabel => string.IsNullOrWhiteSpace(NetworkStatus?.TrustedBootstrapFingerprint)
+        ? "not pinned"
+        : NetworkStatus.TrustedBootstrapFingerprint[..Math.Min(NetworkStatus.TrustedBootstrapFingerprint.Length, 16)];
+
+    private string ConsensusLabel => NetworkStatus == null
+        ? "consensus unknown"
+        : NetworkStatus.LocalRaftRequested
+            ? NetworkStatus.LocalRaftConfigured ? "raft configured" : "raft missing"
+            : NetworkStatus.IsEdge ? "remote consensus" : NetworkStatus.FinalityMode;
+    private string ConsensusBadge => NetworkStatus == null
+        ? "bg-secondary"
+        : NetworkStatus.LocalRaftRequested && !NetworkStatus.LocalRaftConfigured
+            ? "bg-danger"
+            : NetworkStatus.IsEdge
+                ? "bg-info"
+                : "bg-success";
+    private string EdgeSyncLabel => NetworkStatus?.EdgeSync.Enabled == true ? NetworkStatus.EdgeSync.State : "sync local";
+    private string EdgeSyncBadge => NetworkStatus?.EdgeSync.Enabled == true
+        ? NetworkStatus.EdgeSync.State.Contains("error", StringComparison.OrdinalIgnoreCase) ? "bg-danger" : "bg-success"
+        : "bg-secondary";
+    private string FinalityModeLabel => string.IsNullOrWhiteSpace(NetworkStatus?.FinalityMode) ? "unknown" : NetworkStatus.FinalityMode;
+    private string PoCLabel => NetworkStatus?.ProofOfContributionValidationEnabled == true ? "enabled" : "disabled";
+    private string LocalRaftLabel => NetworkStatus == null
+        ? "unknown"
+        : NetworkStatus.LocalRaftRequested
+            ? NetworkStatus.LocalRaftConfigured ? "configured" : "missing configuration"
+            : "not local member";
+    private string RaftTransportLabel => string.IsNullOrWhiteSpace(NetworkStatus?.RaftTransport) ? "Tcp" : NetworkStatus.RaftTransport;
+    private string RaftEndpointLabel => string.IsNullOrWhiteSpace(NetworkStatus?.RaftPublicEndPoint) ? "none" : NetworkStatus.RaftPublicEndPoint;
+    private string EdgeSyncStateLabel => NetworkStatus?.EdgeSync.Enabled == true ? NetworkStatus.EdgeSync.State : "not running";
+    private string EdgeSyncAppliedLabel => NetworkStatus?.EdgeSync.Enabled == true
+        ? $"{NetworkStatus.EdgeSync.LastAppliedBlocks} blocks / {NetworkStatus.EdgeSync.LastChangedChannels} channels"
+        : "none";
+    private string EdgeSyncPeerLabel => string.IsNullOrWhiteSpace(NetworkStatus?.EdgeSync.LastPeer) ? "none" : NetworkStatus.EdgeSync.LastPeer;
+    private string ChannelCountLabel => NetworkStatus == null ? "unknown" : NetworkStatus.Channels.Count.ToString();
+    private string LatestChannelLabel
+    {
+        get
+        {
+            var latest = NetworkStatus?.Channels
+                .OrderByDescending(channel => channel.LatestIndex)
+                .ThenBy(channel => channel.ChannelId)
+                .FirstOrDefault();
+            return latest == null ? "none" : $"{latest.ChannelId} #{latest.LatestIndex}";
+        }
+    }
+    private string PendingProposalLabel => NetworkStatus == null ? "unknown" : NetworkStatus.EdgeProposalForwarding.PendingCount.ToString();
+    private string PendingIntentLabel => IntentList == null
+        ? "unknown"
+        : IntentList.Intents.Count(intent => IsPendingIntentStatus(intent.Status)).ToString();
+    private string RejectedIntentLabel => IntentList == null
+        ? "unknown"
+        : IntentList.Intents.Count(intent =>
+            string.Equals(intent.Status, "Rejected", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(intent.Status, "FailedPermanent", StringComparison.OrdinalIgnoreCase)).ToString();
+    private string ProposalForwardingLabel => NetworkStatus?.EdgeProposalForwarding.Enabled == true
+        ? $"{NetworkStatus.EdgeProposalForwarding.State}, ok {NetworkStatus.EdgeProposalForwarding.SuccessCount}, failed {NetworkStatus.EdgeProposalForwarding.FailureCount}"
+        : "not running";
+    private string ProposalForwardingAlert => NetworkStatus?.EdgeProposalForwarding.State == "failed" ? "alert-warning" : "alert-info";
 
     private Task OnNodeUrlInput(ChangeEventArgs e) => NodeUrlInputChanged.InvokeAsync(e.Value?.ToString() ?? "");
     private Task OnSetupNodeIdChanged(ChangeEventArgs e) { SetupNodeId = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
@@ -282,6 +599,14 @@
     private Task OnSetupBootstrapGrpcUrlChanged(ChangeEventArgs e) { SetupBootstrapGrpcUrl = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
     private Task OnSetupRelayModeChanged(ChangeEventArgs e) { SetupRelayMode = e.Value?.ToString() ?? "default"; return Task.CompletedTask; }
     private Task OnSetupOraclePublicKeyChanged(ChangeEventArgs e) { SetupOraclePublicKey = e.Value?.ToString() ?? "auto"; return Task.CompletedTask; }
+    private Task OnSetupInviteChanged(ChangeEventArgs e) { SetupInvite = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
+    private Task OnPeerAdminTokenChanged(ChangeEventArgs e) { PeerAdminToken = e.Value?.ToString() ?? ""; return Task.CompletedTask; }
+
+    private void UseCurrentInvite()
+    {
+        SetupInvite = NetworkInvite?.Token ?? "";
+        SetupPlan = null;
+    }
 
     private void SelectSetupMode(string mode)
     {
@@ -304,7 +629,68 @@
             SetupBootstrapGrpcUrl,
             SetupNodeId,
             SetupRelayMode,
-            SetupOraclePublicKey));
+            SetupOraclePublicKey,
+            SetupInvite));
+    }
+
+    private async Task SetPeerTrust(Blockchain.UI.Application.Clients.NetworkPeerStatus peer, bool isTrusted)
+    {
+        if (OnSetPeerTrust == null || string.IsNullOrWhiteSpace(PeerAdminToken))
+        {
+            return;
+        }
+
+        var response = await OnSetPeerTrust.Invoke(new Blockchain.UI.Application.Clients.PeerTrustRequest(
+            peer.Url,
+            isTrusted,
+            PeerAdminToken));
+        PeerTrustSucceeded = response?.Success == true;
+        PeerTrustMessage = response?.Message ?? "Peer trust update failed.";
+    }
+
+    private async Task SetPeerRole(Blockchain.UI.Application.Clients.NetworkPeerStatus peer, string role)
+    {
+        if (OnSetPeerRole == null || string.IsNullOrWhiteSpace(PeerAdminToken))
+        {
+            return;
+        }
+
+        var response = await OnSetPeerRole.Invoke(new Blockchain.UI.Application.Clients.PeerRoleRequest(
+            peer.Url,
+            role,
+            PeerAdminToken));
+        PeerTrustSucceeded = response?.Success == true;
+        PeerTrustMessage = response?.Message ?? "Peer role update failed.";
+    }
+
+    private async Task SyncNetwork()
+    {
+        if (OnSyncNetwork == null || string.IsNullOrWhiteSpace(PeerAdminToken))
+        {
+            return;
+        }
+
+        var response = await OnSyncNetwork.Invoke(new Blockchain.UI.Application.Clients.NetworkSyncRequest(PeerAdminToken));
+        PeerTrustSucceeded = string.IsNullOrWhiteSpace(response?.LastError);
+        PeerTrustMessage = response == null
+            ? "Network sync failed."
+            : $"Network sync: {response.State}, applied {response.LastAppliedBlocks} block(s).";
+    }
+
+    private async Task RetryBrowserQueue()
+    {
+        if (OnRetryBrowserQueue != null)
+        {
+            await OnRetryBrowserQueue();
+        }
+    }
+
+    private async Task ClearBrowserQueue()
+    {
+        if (OnClearBrowserQueue != null)
+        {
+            await OnClearBrowserQueue();
+        }
     }
 
     private static bool IsHttpUrl(string? value) =>
@@ -312,16 +698,65 @@
         && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static string RoleBadge(string role) =>
-        string.Equals(role, "Bootstrap", StringComparison.OrdinalIgnoreCase) ? "bg-warning text-dark" : "bg-primary";
+        string.Equals(role, "Bootstrap", StringComparison.OrdinalIgnoreCase) ? "bg-warning text-dark" :
+        string.Equals(role, "Consensus", StringComparison.OrdinalIgnoreCase) ? "bg-primary" :
+        string.Equals(role, "Edge", StringComparison.OrdinalIgnoreCase) ? "bg-info" :
+        "bg-secondary";
 
-    private static string StatusBadge(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
+    private static bool IsPeerRole(Blockchain.UI.Application.Clients.NetworkPeerStatus peer, string role) =>
+        string.Equals(peer.Role, role, StringComparison.OrdinalIgnoreCase);
+
+    private static string StatusBadge(Blockchain.UI.Application.Clients.NetworkPeerStatus peer) =>
         string.IsNullOrWhiteSpace(peer.LastFailure) ? "bg-success" : "bg-danger";
+
+    private static string StatusLabel(Blockchain.UI.Application.Clients.NetworkPeerStatus peer) =>
+        string.IsNullOrWhiteSpace(peer.LastFailure) ? "Online" : "Check";
+
+    private static string TrustedBadge(Blockchain.UI.Application.Clients.NetworkPeerStatus peer) =>
+        peer.IsTrusted ? "bg-success" : "bg-warning text-dark";
+
+    private static string TrustedLabel(Blockchain.UI.Application.Clients.NetworkPeerStatus peer) =>
+        peer.IsTrusted ? "trusted" : "untrusted";
+
+    private static string FinalityBadge(string finalityMode) =>
+        string.Equals(finalityMode, "Raft", StringComparison.OrdinalIgnoreCase) ? "bg-success" :
+        string.IsNullOrWhiteSpace(finalityMode) ? "bg-secondary" : "bg-info";
+
+    private static string FinalityLabel(string finalityMode) =>
+        string.IsNullOrWhiteSpace(finalityMode) ? "unknown" : finalityMode;
+
+    private static bool IsPendingIntentStatus(string status) =>
+        status is "Created" or "QueuedOffline" or "Submitted" or "Accepted" or "WaitingForProducer" or "Proposed" or "WaitingForConsensus" or "FailedRetryable";
+
+    private static string IntentStatusBadge(string status) =>
+        string.Equals(status, "Committed", StringComparison.OrdinalIgnoreCase) ? "bg-success" :
+        string.Equals(status, "Rejected", StringComparison.OrdinalIgnoreCase) || string.Equals(status, "FailedPermanent", StringComparison.OrdinalIgnoreCase) ? "bg-danger" :
+        string.Equals(status, "FailedRetryable", StringComparison.OrdinalIgnoreCase) || string.Equals(status, "QueuedOffline", StringComparison.OrdinalIgnoreCase) ? "bg-warning text-dark" :
+        "bg-info";
+
+    private static string IntentStatusLabel(string status) =>
+        string.Equals(status, "QueuedOffline", StringComparison.OrdinalIgnoreCase) ? "saved locally" :
+        string.Equals(status, "FailedRetryable", StringComparison.OrdinalIgnoreCase) ? "retrying" :
+        string.Equals(status, "WaitingForConsensus", StringComparison.OrdinalIgnoreCase) ? "waiting for commit" :
+        string.IsNullOrWhiteSpace(status) ? "unknown" : status;
+
+    private static string RetryLabel(Blockchain.UI.Application.Clients.IntentStatusItem intent) =>
+        intent.NextAttemptAtUtc == null ? "none" : intent.NextAttemptAtUtc.Value.ToLocalTime().ToString("g");
+
+    private static string SafeIntentError(Blockchain.UI.Application.Clients.IntentStatusItem intent) =>
+        string.IsNullOrWhiteSpace(intent.LastError) ? intent.CommittedBlockHash : intent.LastError;
+
+    private static string RaftLogLabel(Blockchain.UI.Application.Clients.NetworkChannelStatus channel) =>
+        channel.RaftLogIndex.HasValue ? channel.RaftLogIndex.Value.ToString() : "none";
+
+    private static string ShortHash(string hash) =>
+        string.IsNullOrWhiteSpace(hash) ? "none" : hash[..Math.Min(hash.Length, 12)];
 
     private static string ReadyBadge(bool ready) => ready ? "bg-success" : "bg-danger";
 
-    private static string NodeLabel(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
+    private static string NodeLabel(Blockchain.UI.Application.Clients.NetworkPeerStatus peer) =>
         string.IsNullOrWhiteSpace(peer.NodeId) ? "unknown" : peer.NodeId;
 
-    private static string LastSeenLabel(Blockchain.UI.Application.Clients.PeerNodeInfo peer) =>
+    private static string LastSeenLabel(Blockchain.UI.Application.Clients.NetworkPeerStatus peer) =>
         string.IsNullOrWhiteSpace(peer.LastSeen) ? "never" : peer.LastSeen;
 }

@@ -1,7 +1,11 @@
 using System.Security.Cryptography;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Blockchain.Node;
 using Blockchain.UI.Application.Security;
+using Blockchain.UI.Infrastructure.Grpc;
 using Blockchain.UI.Services;
+using Microsoft.AspNetCore.Components;
 
 namespace Blockchain.UI.Application.Clients;
 
@@ -18,13 +22,14 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         IReadRequestAuthorizer readAuthorizer,
         KeyService keyService,
         IConsensusClient consensusClient,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        NavigationManager navigation)
     {
         _blockchainClient = blockchainClient;
         _readAuthorizer = readAuthorizer;
         _keyService = keyService;
         _consensusClient = consensusClient;
-        _nodeUrl = configuration["NodeUrl"] ?? "https://localhost:7066";
+        _nodeUrl = NodeUrlResolver.Resolve(configuration, navigation);
     }
 
     public async Task<UserNameAvailabilityResult> CheckUserNameAvailabilityAsync(string userName)
@@ -117,10 +122,100 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
             block.ContributionProof = consensus.ContributionProof;
         }
 
-        var response = await _blockchainClient.ReceiveBlockAsync(block);
-        return response.Success
-            ? new BlockAnchorResult(true, successMessage)
-            : new BlockAnchorResult(false, $"{failurePrefix}: {response.Message}");
+        var intentResponse = await SubmitSignedIntentAsync(json, targetChannel, publicKey, timestampUnixSeconds, signAsync, block);
+        if (intentResponse != null)
+        {
+            return intentResponse.Success
+                ? new BlockAnchorResult(true, successMessage)
+                : new BlockAnchorResult(false, $"{failurePrefix}: {intentResponse.Message}");
+        }
+
+        return new BlockAnchorResult(
+            false,
+            $"{failurePrefix}: signed intent endpoint is unavailable. The action was not submitted through the legacy block path.");
+    }
+
+    private async Task<SignedIntentSubmitResponse?> SubmitSignedIntentAsync(
+        string payloadJson,
+        string targetChannel,
+        string actorPublicKey,
+        long timestampUnixSeconds,
+        Func<string, Task<string>> signAsync,
+        BlockModel block)
+    {
+        string networkId = await LoadNetworkIdAsync();
+        string operationType = ExtractOperationType(payloadJson);
+        string correlationId = Guid.NewGuid().ToString("N");
+        string nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        int schemaVersion = 1;
+        string projectId = string.Equals(targetChannel, "System", StringComparison.OrdinalIgnoreCase)
+            ? ExtractProjectId(payloadJson)
+            : targetChannel;
+        string intentId = ComputeIntentId(
+            networkId,
+            projectId,
+            targetChannel,
+            operationType,
+            payloadJson,
+            actorPublicKey,
+            timestampUnixSeconds,
+            nonce,
+            correlationId,
+            schemaVersion);
+        string canonical = BuildIntentSignableData(
+            networkId,
+            projectId,
+            targetChannel,
+            operationType,
+            payloadJson,
+            actorPublicKey,
+            timestampUnixSeconds,
+            nonce,
+            correlationId,
+            schemaVersion);
+        string intentSignature = await signAsync(canonical);
+
+        var request = new SignedIntentSubmitRequest(
+            new SignedIntentDto(
+                intentId,
+                networkId,
+                projectId,
+                targetChannel,
+                operationType,
+                payloadJson,
+                actorPublicKey,
+                timestampUnixSeconds,
+                nonce,
+                intentSignature,
+                correlationId,
+                schemaVersion),
+            block);
+
+        using var http = new HttpClient { BaseAddress = new Uri(_nodeUrl.TrimEnd('/') + "/") };
+        try
+        {
+            var response = await http.PostAsJsonAsync("/api/network/intents/submit", request);
+            var body = await response.Content.ReadFromJsonAsync<SignedIntentSubmitResponse>();
+            return body ?? new SignedIntentSubmitResponse(false, $"Intent submit failed with HTTP {(int)response.StatusCode}.", intentId, targetChannel, "FailedRetryable", "");
+        }
+        catch (Exception ex)
+        {
+            return new SignedIntentSubmitResponse(false, $"Intent submit failed: {ex.Message}", intentId, targetChannel, "FailedRetryable", "");
+        }
+    }
+
+    private async Task<string> LoadNetworkIdAsync()
+    {
+        using var http = new HttpClient { BaseAddress = new Uri(_nodeUrl.TrimEnd('/') + "/") };
+        try
+        {
+            var status = await http.GetFromJsonAsync<NetworkStatusProbe>("/api/network/status");
+            return string.IsNullOrWhiteSpace(status?.NetworkId) ? "nexus-main" : status.NetworkId;
+        }
+        catch
+        {
+            return "nexus-main";
+        }
     }
 
     private async Task<BlockModel?> LoadLatestAnchorBlockAsync(string targetChannel)
@@ -164,6 +259,85 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         return BitConverter.ToString(sha256.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
     }
 
+    private static string ComputeIntentId(
+        string networkId,
+        string projectId,
+        string channelId,
+        string operationType,
+        string payloadJson,
+        string actorPublicKey,
+        long timestampUnixSeconds,
+        string nonce,
+        string correlationId,
+        int schemaVersion)
+    {
+        string canonical = string.Join(
+            ":",
+            "NEXUS_INTENT_ID_V1",
+            networkId,
+            projectId,
+            channelId,
+            operationType,
+            ComputeSimpleHash(payloadJson),
+            actorPublicKey,
+            timestampUnixSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            nonce,
+            correlationId,
+            schemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return ComputeSimpleHash(canonical);
+    }
+
+    private static string BuildIntentSignableData(
+        string networkId,
+        string projectId,
+        string channelId,
+        string operationType,
+        string payloadJson,
+        string actorPublicKey,
+        long timestampUnixSeconds,
+        string nonce,
+        string correlationId,
+        int schemaVersion)
+    {
+        return string.Join(
+            ":",
+            "NEXUS_INTENT_V1",
+            networkId,
+            projectId,
+            channelId,
+            operationType,
+            ComputeSimpleHash(payloadJson),
+            actorPublicKey,
+            timestampUnixSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            nonce,
+            correlationId,
+            schemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static string ExtractOperationType(string payloadJson) =>
+        ExtractPayloadString(payloadJson, "Type", "Action");
+
+    private static string ExtractProjectId(string payloadJson) =>
+        ExtractPayloadString(payloadJson, "ProjectId", "System");
+
+    private static string ExtractPayloadString(string payloadJson, string propertyName, string fallback)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            if (doc.RootElement.TryGetProperty(propertyName, out var value) ||
+                doc.RootElement.TryGetProperty(char.ToLowerInvariant(propertyName[0]) + propertyName[1..], out value))
+            {
+                return value.GetString() ?? fallback;
+            }
+        }
+        catch
+        {
+        }
+
+        return fallback;
+    }
+
     private static async Task FinalizeBlockHashLocal(BlockModel block, bool requireProofOfWork)
     {
         await Task.Delay(10);
@@ -202,4 +376,34 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
             }
         }
     }
+
+    private sealed record NetworkStatusProbe(string NetworkId);
+
+    private sealed record SignedIntentDto(
+        string IntentId,
+        string NetworkId,
+        string ProjectId,
+        string ChannelId,
+        string OperationType,
+        string PayloadJson,
+        string ActorPublicKey,
+        long TimestampUnixSeconds,
+        string Nonce,
+        string Signature,
+        string CorrelationId,
+        int SchemaVersion);
+
+    private sealed record SignedIntentSubmitRequest(
+        SignedIntentDto Intent,
+        BlockModel Block);
+
+    private sealed record SignedIntentSubmitResponse(
+        bool Success,
+        string Message,
+        string IntentId,
+        string ChannelId,
+        string Status,
+        string CommittedBlockHash,
+        long? CommittedBlockIndex = null,
+        string ProposalId = "");
 }
