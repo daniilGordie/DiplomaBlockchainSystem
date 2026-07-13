@@ -63,7 +63,23 @@ public sealed class RaftBlockStateMachine : SimpleStateMachine
             return false;
         }
 
-        var payload = CopyPayload(entry);
+        byte[] payload;
+        try
+        {
+            payload = CopyPayload(entry);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "[Raft] Failed to read committed log entry payload at index {Index}, term {Term}. The entry will be skipped to keep the node diagnosable.",
+                entry.Index,
+                entry.Term);
+            _lastAppliedIndex = Math.Max(_lastAppliedIndex, entry.Index);
+            _lastAppliedTerm = Math.Max(_lastAppliedTerm, entry.Term);
+            return false;
+        }
+
         if (payload.Length == 0)
         {
             _logger.LogDebug("[Raft] Empty log entry {Index} reached block state machine.", entry.Index);
