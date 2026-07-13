@@ -286,7 +286,7 @@ public sealed class NexusBackupService
             return values;
         }
 
-        foreach (string rawLine in envContent.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (string rawLine in envContent.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
             string line = rawLine.Trim();
             if (line.Length == 0 || line.StartsWith('#'))
