@@ -110,6 +110,12 @@ public sealed class GrpcBlockProcessor
 
     private BlockProposalBuildResult BuildProposal(BlockModel request, Block block)
     {
+        var implicitProposal = _blockProposalFactory.BuildImplicitProposal(block);
+        if (implicitProposal.Accepted)
+        {
+            return implicitProposal;
+        }
+
         if (request.ContributionProof != null)
         {
             return BlockProposalBuildResult.Accept(new BlockProposal(
@@ -118,7 +124,7 @@ public sealed class GrpcBlockProcessor
                 DateTime.UtcNow));
         }
 
-        return _blockProposalFactory.BuildImplicitProposal(block);
+        return implicitProposal;
     }
 
     public static Block ToBlock(BlockModel model)
