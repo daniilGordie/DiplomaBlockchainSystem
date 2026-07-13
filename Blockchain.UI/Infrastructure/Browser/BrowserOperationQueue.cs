@@ -48,15 +48,17 @@ public sealed class BrowserOperationQueue : IBrowserOperationQueue
             items.RemoveRange(0, items.Count - MaxQueuedOperations + 1);
         }
 
-        items.Add(new BrowserQueuedOperation(
-            Guid.NewGuid().ToString("N"),
-            operationType,
-            channelId,
-            payloadJson,
-            DateTime.UtcNow,
-            "QueuedLocally",
-            0,
-            reason));
+        items.Add(new BrowserQueuedOperation
+        {
+            OperationId = Guid.NewGuid().ToString("N"),
+            OperationType = operationType,
+            ChannelId = channelId,
+            PayloadJson = payloadJson,
+            CreatedAtUtc = DateTime.UtcNow,
+            LocalSubmitStatus = "QueuedLocally",
+            RetryCount = 0,
+            LastError = reason
+        });
         await SaveAsync(items);
     }
 
@@ -85,12 +87,14 @@ public sealed class BrowserOperationQueue : IBrowserOperationQueue
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 }
 
-public sealed record BrowserQueuedOperation(
-    string OperationId,
-    string OperationType,
-    string ChannelId,
-    string PayloadJson,
-    DateTime CreatedAtUtc,
-    string LocalSubmitStatus,
-    int RetryCount,
-    string LastError);
+public sealed class BrowserQueuedOperation
+{
+    public string OperationId { get; set; } = string.Empty;
+    public string OperationType { get; set; } = string.Empty;
+    public string ChannelId { get; set; } = string.Empty;
+    public string PayloadJson { get; set; } = string.Empty;
+    public DateTime CreatedAtUtc { get; set; }
+    public string LocalSubmitStatus { get; set; } = string.Empty;
+    public int RetryCount { get; set; }
+    public string LastError { get; set; } = string.Empty;
+}
