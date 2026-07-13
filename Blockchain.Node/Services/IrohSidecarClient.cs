@@ -97,6 +97,49 @@ public sealed class IrohSidecarClient
         return channels?.ChannelIds ?? Array.Empty<string>();
     }
 
+    public async Task<IReadOnlyList<string>> FetchKnownChannelsOverHttpAsync(string peerUrl, CancellationToken cancellationToken = default)
+    {
+        string normalizedPeerUrl = P2POptions.NormalizeUrl(peerUrl);
+        if (string.IsNullOrWhiteSpace(normalizedPeerUrl) || IsIrohPeerUrl(normalizedPeerUrl))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            using var response = await _httpClient.GetAsync($"{normalizedPeerUrl}/api/network/status", cancellationToken);
+            await EnsureSuccessAsync(response, "network/status", cancellationToken);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (!doc.RootElement.TryGetProperty("channels", out var channelsElement) ||
+                channelsElement.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<string>();
+            }
+
+            var channels = new List<string>();
+            foreach (var channel in channelsElement.EnumerateArray())
+            {
+                if (channel.TryGetProperty("channelId", out var id) ||
+                    channel.TryGetProperty("ChannelId", out id))
+                {
+                    string? value = id.GetString();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        channels.Add(value);
+                    }
+                }
+            }
+
+            return channels;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("[P2P] Fetch known channels over HTTP from {PeerUrl} failed: {Message}", normalizedPeerUrl, ex.Message);
+            return Array.Empty<string>();
+        }
+    }
+
     public async Task<IReadOnlyList<BlockModel>> FetchChainAsync(string peerUrl, string channelId, CancellationToken cancellationToken = default)
     {
         string peer = ParseIrohPeerAddress(peerUrl);

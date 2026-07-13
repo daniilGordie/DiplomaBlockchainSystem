@@ -67,9 +67,25 @@ public sealed class BlockchainRealtimeClient : IBlockchainRealtimeClient, IAsync
         if (!string.IsNullOrWhiteSpace(currentProjectId))
         {
             await _connection.InvokeAsync("JoinProject", currentProjectId);
+            string normalizedProjectId = NormalizeChannelId(currentProjectId);
+            if (!string.Equals(normalizedProjectId, currentProjectId, StringComparison.Ordinal))
+            {
+                await _connection.InvokeAsync("JoinProject", normalizedProjectId);
+            }
         }
 
         return true;
+    }
+
+    private static string NormalizeChannelId(string channelId)
+    {
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            return "System";
+        }
+
+        var safeName = new string(channelId.Where(char.IsLetterOrDigit).ToArray());
+        return string.IsNullOrEmpty(safeName) ? "System" : safeName;
     }
 
     public async ValueTask DisposeAsync()

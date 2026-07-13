@@ -14,7 +14,6 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
     private readonly IPeerStore _peerStore;
     private readonly IChainReader _chainReader;
     private readonly IrohSidecarClient _irohSidecar;
-    private readonly VerifyBlockProposalUseCase _verifyBlockProposal;
     private readonly CommittedBlockApplier _committedBlockApplier;
     private readonly ILogger<EdgeCommittedBlockSyncService> _logger;
     private readonly object _statusLock = new();
@@ -28,7 +27,6 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
         IPeerStore peerStore,
         IChainReader chainReader,
         IrohSidecarClient irohSidecar,
-        VerifyBlockProposalUseCase verifyBlockProposal,
         CommittedBlockApplier committedBlockApplier,
         ILogger<EdgeCommittedBlockSyncService> logger)
     {
@@ -39,7 +37,6 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
         _peerStore = peerStore;
         _chainReader = chainReader;
         _irohSidecar = irohSidecar;
-        _verifyBlockProposal = verifyBlockProposal;
         _committedBlockApplier = committedBlockApplier;
         _logger = logger;
     }
@@ -87,7 +84,14 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
             lastPeer = peer;
             try
             {
-                var channels = await _irohSidecar.FetchKnownChannelsAsync(peer, cancellationToken);
+                var remoteChannels = IrohSidecarClient.IsIrohPeerUrl(peer)
+                    ? await _irohSidecar.FetchKnownChannelsAsync(peer, cancellationToken)
+                    : await _irohSidecar.FetchKnownChannelsOverHttpAsync(peer, cancellationToken);
+                var channels = remoteChannels
+                    .Concat(_chainReader.GetKnownChannels())
+                    .Select(ChannelName.Normalize)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
                 if (!channels.Contains("System", StringComparer.OrdinalIgnoreCase))
                 {
                     channels = new[] { "System" }.Concat(channels).ToArray();
@@ -158,19 +162,10 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
                 continue;
             }
 
-            if (_consensusOptions.EnableProofOfContributionValidation && envelope.Block.ContributionProof != null)
-            {
-                var proposal = new BlockProposal(
-                    block,
-                    GrpcProjectMapper.ToContributionProof(envelope.Block.ContributionProof),
-                    DateTime.UtcNow);
-                var proof = _verifyBlockProposal.Execute(proposal);
-                if (!proof.Accepted)
-                {
-                    _logger.LogWarning("[EdgeSync] Rejected committed block {Hash}: PoC verification rejected: {Reason}", block.Hash, proof.Reason);
-                    continue;
-                }
-            }
+            // Edge catch-up applies blocks that have already been finalized by Raft.
+            // Re-running producer proof locally is invalid while the Edge is behind:
+            // the proof was created against the consensus node's pre-commit state,
+            // which can differ from the Edge's partially synchronized view.
 
             var result = await _committedBlockApplier.ApplyAsync(
                 block,
