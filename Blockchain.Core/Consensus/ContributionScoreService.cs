@@ -103,7 +103,7 @@ public sealed class ContributionScoreService
                 ? projectProp.GetString() ?? string.Empty
                 : string.Empty;
 
-            if (!string.Equals(payloadProjectId, projectId, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(ChannelName.Normalize(payloadProjectId), ChannelName.Normalize(projectId), StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }

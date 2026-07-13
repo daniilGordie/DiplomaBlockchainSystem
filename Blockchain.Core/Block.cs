@@ -2,6 +2,8 @@
 using System.Security.Cryptography;
 using System.Text;
 
+using Blockchain.Core.Cryptography;
+
 namespace Blockchain.Core
 {
     public class Block
@@ -57,34 +59,10 @@ namespace Blockchain.Core
             if (string.IsNullOrEmpty(ValidatorPublicKey) || string.IsNullOrEmpty(Signature))
                 return false;
 
-            try
-            {
-                byte[] signatureBytes = Convert.FromBase64String(Signature);
-
-                if (signatureBytes.Length != 64)
-                {
-                    Console.WriteLine($"[Cryptography] Rejected: Invalid raw ECDSA signature length ({signatureBytes.Length} bytes).");
-                    return false;
-                }
-
-                using (ECDsa ecdsa = ECDsa.Create())
-                {
-                    ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(ValidatorPublicKey), out _);
-
-                    byte[] dataToVerify = Encoding.UTF8.GetBytes(GetSignableData());
-
-                    return ecdsa.VerifyData(
-                        dataToVerify,
-                        signatureBytes,
-                        HashAlgorithmName.SHA256,
-                        DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Cryptography] Critical signature verification error: {ex.Message}");
-                return false;
-            }
+            return EcdsaSignatureVerifier.VerifyP1363Sha256(
+                ValidatorPublicKey,
+                Signature,
+                GetSignableData());
         }
 
         public bool IsSystemGenesisBlock()

@@ -1751,11 +1751,13 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             StateHasChanged();
 
             string payloadJson = BuildTaskEventJson(args.Event);
+            string signerPublicKey = MyKeyService.GetPublicKeyFromKeystore(args.Keystore);
             var result = await BlockAnchoringService.AnchorJsonStringWithKeystoreAsync(
                 payloadJson,
                 args.Event.ProjectId,
                 args.Keystore,
-                args.Password);
+                args.Password,
+                signerPublicKey);
             statusMessage = result.Message;
 
             if (result.Success)

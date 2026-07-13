@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Blockchain.Core.Cryptography;
 
 namespace Blockchain.Core.Consensus;
 
@@ -142,29 +143,28 @@ public sealed class SignedIntentVerifier
             return SignedIntentValidationResult.Reject("intent timestamp is outside the accepted clock skew");
         }
 
+        byte[] signatureBytes;
         try
         {
-            byte[] signatureBytes = Convert.FromBase64String(intent.Signature);
-            if (signatureBytes.Length != 64)
-            {
-                return SignedIntentValidationResult.Reject("intent signature has invalid length");
-            }
-
-            using var ecdsa = ECDsa.Create();
-            ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(intent.ActorPublicKey), out _);
-            bool valid = ecdsa.VerifyData(
-                Encoding.UTF8.GetBytes(intent.CanonicalSignableData()),
-                signatureBytes,
-                HashAlgorithmName.SHA256,
-                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-            return valid
-                ? SignedIntentValidationResult.Accept(expectedIntentId)
-                : SignedIntentValidationResult.Reject("invalid intent signature");
+            signatureBytes = Convert.FromBase64String(intent.Signature);
         }
         catch
         {
             return SignedIntentValidationResult.Reject("intent signature validation failed");
         }
+
+        if (signatureBytes.Length != 64)
+        {
+            return SignedIntentValidationResult.Reject("intent signature has invalid length");
+        }
+
+        bool valid = EcdsaSignatureVerifier.VerifyP1363Sha256(
+            intent.ActorPublicKey,
+            intent.Signature,
+            intent.CanonicalSignableData());
+        return valid
+            ? SignedIntentValidationResult.Accept(expectedIntentId)
+            : SignedIntentValidationResult.Reject("invalid intent signature");
     }
 }
 

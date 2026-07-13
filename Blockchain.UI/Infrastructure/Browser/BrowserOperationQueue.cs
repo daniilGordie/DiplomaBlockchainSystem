@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using Microsoft.JSInterop;
 
 namespace Blockchain.UI.Infrastructure.Browser;
@@ -32,7 +33,7 @@ public sealed class BrowserOperationQueue : IBrowserOperationQueue
                 return Array.Empty<BrowserQueuedOperation>();
             }
 
-            return JsonSerializer.Deserialize<List<BrowserQueuedOperation>>(json, JsonOptions) ?? new List<BrowserQueuedOperation>();
+            return ParseQueue(json);
         }
         catch
         {
@@ -80,11 +81,81 @@ public sealed class BrowserOperationQueue : IBrowserOperationQueue
 
     private async Task SaveAsync(IReadOnlyList<BrowserQueuedOperation> items)
     {
-        string json = JsonSerializer.Serialize(items, JsonOptions);
+        string json = SerializeQueue(items);
         await _js.InvokeVoidAsync("localStorage.setItem", StorageKey, json);
     }
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static IReadOnlyList<BrowserQueuedOperation> ParseQueue(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<BrowserQueuedOperation>();
+        }
+
+        var items = new List<BrowserQueuedOperation>();
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            items.Add(new BrowserQueuedOperation
+            {
+                OperationId = GetString(item, nameof(BrowserQueuedOperation.OperationId)),
+                OperationType = GetString(item, nameof(BrowserQueuedOperation.OperationType)),
+                ChannelId = GetString(item, nameof(BrowserQueuedOperation.ChannelId)),
+                PayloadJson = GetString(item, nameof(BrowserQueuedOperation.PayloadJson)),
+                CreatedAtUtc = GetDateTime(item, nameof(BrowserQueuedOperation.CreatedAtUtc)),
+                LocalSubmitStatus = GetString(item, nameof(BrowserQueuedOperation.LocalSubmitStatus)),
+                RetryCount = GetInt32(item, nameof(BrowserQueuedOperation.RetryCount)),
+                LastError = GetString(item, nameof(BrowserQueuedOperation.LastError))
+            });
+        }
+
+        return items;
+    }
+
+    private static string SerializeQueue(IReadOnlyList<BrowserQueuedOperation> items)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartArray();
+            foreach (var item in items)
+            {
+                writer.WriteStartObject();
+                writer.WriteString(nameof(BrowserQueuedOperation.OperationId), item.OperationId);
+                writer.WriteString(nameof(BrowserQueuedOperation.OperationType), item.OperationType);
+                writer.WriteString(nameof(BrowserQueuedOperation.ChannelId), item.ChannelId);
+                writer.WriteString(nameof(BrowserQueuedOperation.PayloadJson), item.PayloadJson);
+                writer.WriteString(nameof(BrowserQueuedOperation.CreatedAtUtc), item.CreatedAtUtc);
+                writer.WriteString(nameof(BrowserQueuedOperation.LocalSubmitStatus), item.LocalSubmitStatus);
+                writer.WriteNumber(nameof(BrowserQueuedOperation.RetryCount), item.RetryCount);
+                writer.WriteString(nameof(BrowserQueuedOperation.LastError), item.LastError);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static string GetString(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString() ?? string.Empty
+            : string.Empty;
+
+    private static int GetInt32(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var property) && property.TryGetInt32(out int value)
+            ? value
+            : 0;
+
+    private static DateTime GetDateTime(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var property) && property.TryGetDateTime(out var value)
+            ? value
+            : DateTime.UtcNow;
 }
 
 public sealed class BrowserQueuedOperation

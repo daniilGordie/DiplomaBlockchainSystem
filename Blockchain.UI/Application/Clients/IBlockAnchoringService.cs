@@ -9,7 +9,8 @@ public interface IBlockAnchoringService
         string json,
         string targetChannel,
         string keystore,
-        string password);
+        string password,
+        string? signerPublicKey = null);
 }
 
 public sealed record BlockAnchorResult(

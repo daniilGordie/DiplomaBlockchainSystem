@@ -262,6 +262,12 @@ namespace Blockchain.UI.Services
             return signature;
         }
 
+        public string GetPublicKeyFromKeystore(string keystoreJson)
+        {
+            var keystore = ReadKeystore(keystoreJson);
+            return keystore.Address ?? string.Empty;
+        }
+
         public async Task<string> SignDataWithPasskeyKeystoreAsync(string keystoreJson, string dataToSign)
         {
             string decryptedPrivateKey = await DecryptPrivateKeyFromPasskeyKeystoreAsync(keystoreJson);

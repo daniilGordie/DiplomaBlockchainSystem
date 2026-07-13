@@ -17,9 +17,11 @@ public static class SignedIntentEndpoints
             IRequestReplayGuard replayGuard,
             IIntentStore intentStore,
             GrpcBlockProcessor blockProcessor,
+            ILoggerFactory loggerFactory,
             CancellationToken cancellationToken) =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var logger = loggerFactory.CreateLogger("SignedIntentEndpoints");
 
             string networkId = FirstNonEmpty(configuration["Network:Id"], configuration["NetworkId"], "nexus-main");
             var intent = request.Intent with
@@ -39,12 +41,17 @@ public static class SignedIntentEndpoints
 
             if (!string.Equals(intent.NetworkId, networkId, StringComparison.OrdinalIgnoreCase))
             {
+                logger.LogWarning("Rejected signed intent {IntentId}: network id mismatch. Expected {ExpectedNetworkId}, got {ActualNetworkId}.",
+                    intent.IntentId,
+                    networkId,
+                    intent.NetworkId);
                 return Results.BadRequest(new SignedIntentSubmitResponse(false, "intent network id does not match this node", string.Empty, string.Empty));
             }
 
             var validation = intentVerifier.Validate(intent);
             if (!validation.Accepted)
             {
+                logger.LogWarning("Rejected signed intent {IntentId}: {Reason}.", intent.IntentId, validation.Reason);
                 return Results.BadRequest(new SignedIntentSubmitResponse(false, $"intent rejected: {validation.Reason}", string.Empty, string.Empty));
             }
 
@@ -57,6 +64,7 @@ public static class SignedIntentEndpoints
             var envelopeValidation = ValidateBlockEnvelope(intent, request.Block);
             if (!envelopeValidation.Accepted)
             {
+                logger.LogWarning("Rejected signed intent {IntentId}: block envelope rejected: {Reason}.", validation.IntentId, envelopeValidation.Reason);
                 return Results.BadRequest(new SignedIntentSubmitResponse(false, $"block envelope rejected: {envelopeValidation.Reason}", validation.IntentId, intent.ChannelId));
             }
 
