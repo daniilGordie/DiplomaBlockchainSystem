@@ -759,7 +759,7 @@ using System.Text.Json;
 
                 if (type == "AssignRole" || type == "CreateProject")
                 {
-                    string projRole = GetStringSafe(root, "ProjectId", "System");
+                    string projRole = ChannelName.Normalize(GetStringSafe(root, "ProjectId", "System"));
 
                     if (type == "CreateProject")
                     {
@@ -808,7 +808,7 @@ using System.Text.Json;
                 string tid = GetStringSafe(root, "TaskId");
                 if ((type == "Create" || type == "Update" || type == "Move") && !string.IsNullOrEmpty(tid))
                 {
-                    string proj = GetStringSafe(root, "ProjectId", "System");
+                    string proj = ChannelName.Normalize(GetStringSafe(root, "ProjectId", "System"));
                     string title = GetStringSafe(root, "Title", "No Title");
                     int status = GetIntSafe(root, "Status", 0);
                     string desc = GetStringSafe(root, "Description");
@@ -1122,17 +1122,21 @@ using System.Text.Json;
                 var cmd = conn.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = "SELECT COUNT(1) FROM ProjectMembers WHERE ProjectId = $proj";
-                cmd.Parameters.AddWithValue("$proj", projectId);
+                string safeProjectId = ChannelName.Normalize(projectId);
+                cmd.Parameters.AddWithValue("$proj", safeProjectId);
                 return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
             }
 
             public bool IsProjectExists(string projectId)
             {
+                string safeProjectId = ChannelName.Normalize(projectId);
+                string rawProjectId = projectId ?? string.Empty;
                 using var connection = new SqliteConnection(ConnectionString);
                 connection.Open();
                 var cmd = connection.CreateCommand();
-                cmd.CommandText = "SELECT COUNT(1) FROM ProjectMembers WHERE ProjectId = $proj";
-                cmd.Parameters.AddWithValue("$proj", projectId);
+                cmd.CommandText = "SELECT COUNT(1) FROM ProjectMembers WHERE ProjectId = $proj OR ProjectId = $raw";
+                cmd.Parameters.AddWithValue("$proj", safeProjectId);
+                cmd.Parameters.AddWithValue("$raw", rawProjectId);
                 return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
             }
 
@@ -1671,8 +1675,11 @@ using System.Text.Json;
                         using var connection = new SqliteConnection(ConnectionString);
                         connection.Open();
                         var cmd = connection.CreateCommand();
-                        cmd.CommandText = "SELECT Role FROM ProjectMembers WHERE ProjectId = $proj AND UserName = $user";
-                        cmd.Parameters.AddWithValue("$proj", projectId);
+                        string safeProjectId = ChannelName.Normalize(projectId);
+                        string rawProjectId = projectId ?? string.Empty;
+                        cmd.CommandText = "SELECT Role FROM ProjectMembers WHERE (ProjectId = $proj OR ProjectId = $raw) AND UserName = $user";
+                        cmd.Parameters.AddWithValue("$proj", safeProjectId);
+                        cmd.Parameters.AddWithValue("$raw", rawProjectId);
                         cmd.Parameters.AddWithValue("$user", userName);
                         string role = DecryptString(cmd.ExecuteScalar()?.ToString());
                         return string.IsNullOrWhiteSpace(role) ? "None" : role;

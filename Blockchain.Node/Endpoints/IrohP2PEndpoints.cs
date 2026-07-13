@@ -171,7 +171,7 @@ public static class IrohP2PEndpoints
         IChainReader chainReader,
         IBlockFinalityMetadataStore finalityMetadata)
     {
-        string channelToRead = string.IsNullOrWhiteSpace(channelId) ? "System" : channelId;
+        string channelToRead = ChannelName.Normalize(string.IsNullOrWhiteSpace(channelId) ? "System" : channelId);
         int minIndex = afterIndex ?? -1;
         string expectedAfterHash = afterHash ?? string.Empty;
         var chain = chainReader.LoadChain(channelToRead)

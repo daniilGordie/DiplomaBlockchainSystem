@@ -138,12 +138,13 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
         ISet<string> changedChannels,
         CancellationToken cancellationToken)
     {
-        var latest = _chainReader.GetLatestBlock(channelId);
+        string safeChannelId = ChannelName.Normalize(channelId);
+        var latest = _chainReader.GetLatestBlock(safeChannelId);
         int afterIndex = latest?.Index ?? -1;
         string afterHash = latest?.Hash ?? string.Empty;
         var envelopes = IrohSidecarClient.IsIrohPeerUrl(peer)
-            ? await _irohSidecar.FetchCommittedSinceAsync(peer, channelId, afterIndex, afterHash, cancellationToken)
-            : await _irohSidecar.FetchCommittedSinceOverHttpAsync(peer, channelId, afterIndex, afterHash, cancellationToken);
+            ? await _irohSidecar.FetchCommittedSinceAsync(peer, safeChannelId, afterIndex, afterHash, cancellationToken)
+            : await _irohSidecar.FetchCommittedSinceOverHttpAsync(peer, safeChannelId, afterIndex, afterHash, cancellationToken);
         int applied = 0;
 
         foreach (var envelope in envelopes.OrderBy(item => item.Block.Index))

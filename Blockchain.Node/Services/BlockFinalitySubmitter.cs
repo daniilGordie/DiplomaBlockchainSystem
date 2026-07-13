@@ -44,7 +44,16 @@ public sealed class EdgeBlockFinalitySubmitter : IBlockFinalitySubmitter
         var result = await _forwarder.ForwardAsync(proposal, sourceModel);
         if (result.Success)
         {
-            await _edgeSync.SyncOnceAsync();
+            for (int attempt = 1; attempt <= 5; attempt++)
+            {
+                var syncStatus = await _edgeSync.SyncOnceAsync();
+                if (syncStatus.LastAppliedBlocks > 0)
+                {
+                    break;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(500));
+            }
         }
 
         return result;

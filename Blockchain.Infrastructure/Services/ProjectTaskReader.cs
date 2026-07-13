@@ -26,10 +26,11 @@ public sealed class ProjectTaskReader : IProjectTaskReader
 
     public ProjectTaskListResult GetProjectTasks(string projectId, string userName)
     {
-        string role = _database.GetUserRole(projectId, userName);
+        string safeProjectId = ChannelName.Normalize(projectId);
+        string role = _database.GetUserRole(safeProjectId, userName);
         var tasks = new List<ProjectTaskDto>();
 
-        if (role == "None" && projectId != "System")
+        if (role == "None" && safeProjectId != "System")
         {
             return new ProjectTaskListResult(role, tasks);
         }
@@ -40,8 +41,9 @@ public sealed class ProjectTaskReader : IProjectTaskReader
             conn.Open();
             using var cmd = conn.CreateCommand();
 
-            cmd.CommandText = "SELECT TaskId, Title, Creator, Assignee, Status, ProjectId, Description, ParentTaskId, BranchInfo FROM Tasks WHERE ProjectId = $p";
-            cmd.Parameters.AddWithValue("$p", projectId);
+            cmd.CommandText = "SELECT TaskId, Title, Creator, Assignee, Status, ProjectId, Description, ParentTaskId, BranchInfo FROM Tasks WHERE ProjectId = $p OR ProjectId = $raw";
+            cmd.Parameters.AddWithValue("$p", safeProjectId);
+            cmd.Parameters.AddWithValue("$raw", projectId ?? string.Empty);
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
@@ -69,7 +71,7 @@ public sealed class ProjectTaskReader : IProjectTaskReader
     public IReadOnlyList<TaskHistoryDto> GetTaskHistory(string projectId, string taskId)
     {
         var result = new List<TaskHistoryDto>();
-        var blocks = _database.LoadChain(projectId);
+        var blocks = _database.LoadChain(ChannelName.Normalize(projectId));
 
         foreach (var block in blocks)
         {
