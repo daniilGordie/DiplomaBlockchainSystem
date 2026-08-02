@@ -76,39 +76,32 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<RaftCluster>(sp => sp.GetRequiredService<DotNextRaftClusterFactory>().CreateCluster());
         services.AddSingleton<IRaftCluster>(sp => sp.GetRequiredService<RaftCluster>());
         services.AddSingleton<IRaftCommandReplicator, DotNextRaftCommandReplicator>();
+        services.AddHostedService<ConsensusConfigurationValidationService>();
         services.AddHostedService<DotNextRaftClusterHostedService>();
         services.AddHostedService<RaftSnapshotCheckpointService>();
         services.AddSingleton<IBlockFinalitySubmitter>(sp =>
         {
-            var mode = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ConsensusOptions>>().Value.FinalityMode;
             var nodeOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<NexusNodeOptions>>().Value;
-            if (string.Equals(mode, ConsensusFinalityModes.Immediate, StringComparison.OrdinalIgnoreCase))
+            var consensusOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ConsensusOptions>>().Value;
+            ConsensusConfigurationPolicy.EnsureValid(consensusOptions, nodeOptions);
+
+            if (nodeOptions.IsLocal)
             {
                 return ActivatorUtilities.CreateInstance<ImmediateBlockFinalitySubmitter>(sp);
             }
 
-            if (string.Equals(mode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase))
+            if (nodeOptions.IsEdge)
             {
-                if (nodeOptions.IsEdge)
-                {
-                    return ActivatorUtilities.CreateInstance<EdgeBlockFinalitySubmitter>(sp);
-                }
-
-                if (!nodeOptions.IsConsensusMember)
-                {
-                    throw new InvalidOperationException($"Consensus:FinalityMode=Raft requires Node:Role=Bootstrap, Consensus, or Edge. Current role: {nodeOptions.EffectiveRole}.");
-                }
-
-                var raftOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<RaftOptions>>().Value;
-                if (!raftOptions.HasMinimumConfiguration)
-                {
-                    throw new InvalidOperationException("Consensus:FinalityMode=Raft requires Raft:NodeId and Raft:PublicEndPoint.");
-                }
-
-                return ActivatorUtilities.CreateInstance<RaftBlockFinalitySubmitter>(sp);
+                return ActivatorUtilities.CreateInstance<EdgeBlockFinalitySubmitter>(sp);
             }
 
-            throw new InvalidOperationException($"Unsupported Consensus:FinalityMode '{mode}'.");
+            var raftOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<RaftOptions>>().Value;
+            if (!raftOptions.HasMinimumConfiguration)
+            {
+                throw new InvalidOperationException("PoC consensus requires Raft:NodeId and a transport endpoint on Bootstrap/Consensus nodes.");
+            }
+
+            return ActivatorUtilities.CreateInstance<RaftBlockFinalitySubmitter>(sp);
         });
         services.AddSingleton<GrpcBlockProcessor>();
         services.AddSingleton<IntentOutboxRetryService>();

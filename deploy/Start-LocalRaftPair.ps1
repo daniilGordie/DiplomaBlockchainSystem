@@ -3,7 +3,6 @@ param(
     [string]$DataRoot = "",
     [switch]$SkipBuild,
     [switch]$Clean,
-    [switch]$EnablePoC,
     [switch]$UsePersistentMembership,
     [string]$ProducerKeyPath = "",
     [string]$ProducerPrivateKeyPassword = "local-raft-producer-password",
@@ -51,7 +50,7 @@ $sharedSecrets = @{
     OraclePublicKey = "auto"
     WebhookSecret = "local-raft-webhook-secret"
     OracleKeyPath = (Join-Path $dataRootFull "shared\\oracle_key.dat")
-    Consensus__EnableProofOfContributionValidation = if ($EnablePoC) { "true" } else { "false" }
+    Consensus__EnableProofOfContributionValidation = "true"
     Consensus__RequireProofOfWork = "false"
     Consensus__AcceptP2PBlocksAsFinal = "false"
     Consensus__FinalityMode = "Raft"

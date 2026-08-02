@@ -84,6 +84,7 @@ public static class SetupStatusEndpoints
                 irohStatus?.TransportMode ?? string.Empty,
                 irohStatus?.DirectAddresses?.Length ?? 0,
                 consensusValue.FinalityMode,
+                ConsensusConfigurationPolicy.GetEngineName(nodeValue),
                 consensusValue.EnableProofOfContributionValidation,
                 consensusValue.RequireProofOfWork,
                 consensusValue.AcceptP2PBlocksAsFinal,
@@ -175,6 +176,7 @@ public static class SetupStatusEndpoints
                 p2pValue.NormalizedBootstrapPeers.ToArray(),
                 peers,
                 consensusValue.FinalityMode,
+                ConsensusConfigurationPolicy.GetEngineName(nodeValue),
                 consensusValue.EnableProofOfContributionValidation,
                 string.Equals(consensusValue.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase) && nodeValue.IsConsensusMember,
                 raftValue.Transport,
@@ -685,6 +687,7 @@ public static class SetupStatusEndpoints
         AddValueDiagnostics(configuration, "Raft:PublicEndPoint", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:Peers:0:Id", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:Peers:0:EndPoint", errors, warnings);
+        errors.AddRange(ConsensusConfigurationPolicy.Validate(consensus, node));
 
         if (node.IsEdge && !p2p.Iroh.Enabled)
         {
@@ -737,11 +740,6 @@ public static class SetupStatusEndpoints
         if (node.IsConsensusMember && raftFinality && raft.HasMinimumConfiguration && !raft.HasRemotePeers)
         {
             warnings.Add("Raft is configured as a single-member cluster. Blocks can be finalized, but add consensus peers for fault tolerance.");
-        }
-
-        if (node.IsLocal && raftFinality)
-        {
-            errors.Add("Node:Role=Local cannot use Consensus:FinalityMode=Raft. Use Immediate finality or change role.");
         }
 
         if (p2p.Iroh.Enabled && string.IsNullOrWhiteSpace(p2p.Iroh.LocalApiToken))
@@ -1186,6 +1184,7 @@ public sealed record NodeStatusResponse(
     string IrohTransportMode,
     int IrohDirectAddressCount,
     string FinalityMode,
+    string ConsensusEngine,
     bool ProofOfContributionValidationEnabled,
     bool RequireProofOfWork,
     bool AcceptP2PBlocksAsFinal,
@@ -1219,6 +1218,7 @@ public sealed record NetworkStatusResponse(
     string[] BootstrapPeers,
     IReadOnlyList<NetworkPeerResponse> KnownPeers,
     string FinalityMode,
+    string ConsensusEngine,
     bool ProofOfContributionValidationEnabled,
     bool LocalRaftRequested,
     string RaftTransport,

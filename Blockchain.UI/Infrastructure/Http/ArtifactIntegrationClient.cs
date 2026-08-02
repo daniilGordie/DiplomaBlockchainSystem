@@ -21,7 +21,7 @@ public sealed class ArtifactIntegrationClient : IArtifactIntegrationClient
         string timestamp = DateTime.UtcNow.ToString("O");
         string signable = $"ARTIFACT_REGISTER:{command.ProjectId}:{command.FileHash}:{actor}:{timestamp}";
 
-        var request = new ArtifactAnchorRequest
+        var request = new ArtifactAnchorApiRequest
         {
             ProjectId = command.ProjectId,
             FileHash = command.FileHash,
@@ -36,7 +36,10 @@ public sealed class ArtifactIntegrationClient : IArtifactIntegrationClient
             UserSignature = _keyService.SignData(signable)
         };
 
-        using var response = await _http.PostAsJsonAsync($"{command.NodeUrl}/api/integrations/artifacts/register", request);
+        using var response = await _http.PostAsJsonAsync(
+            $"{command.NodeUrl}/api/integrations/artifacts/register",
+            request,
+            IntegrationApiJsonContext.Default.ArtifactAnchorApiRequest);
         if (response.IsSuccessStatusCode)
         {
             return new ArtifactAnchorResult(true, "");
@@ -44,20 +47,5 @@ public sealed class ArtifactIntegrationClient : IArtifactIntegrationClient
 
         string details = await response.Content.ReadAsStringAsync();
         return new ArtifactAnchorResult(false, $"Artifact anchor failed ({(int)response.StatusCode}): {details}");
-    }
-
-    private sealed class ArtifactAnchorRequest
-    {
-        public string ProjectId { get; set; } = "";
-        public string FileHash { get; set; } = "";
-        public string FileName { get; set; } = "";
-        public long SizeBytes { get; set; }
-        public string ContentType { get; set; } = "";
-        public string User { get; set; } = "";
-        public string RegisteredBy { get; set; } = "";
-        public string VerificationMethod { get; set; } = "IPFS CID";
-        public string Timestamp { get; set; } = "";
-        public string UserPublicKey { get; set; } = "";
-        public string UserSignature { get; set; } = "";
     }
 }

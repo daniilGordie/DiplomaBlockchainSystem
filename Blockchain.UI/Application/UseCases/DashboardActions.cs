@@ -38,25 +38,12 @@ public sealed class DashboardActions
         try
         {
             var directory = await _peerNetworkClient.GetPeerDirectoryAsync(nodeUrl);
-            NodeSetupStatus? setupStatus = null;
-            NetworkStatus? networkStatus = null;
-            NetworkInvite? networkInvite = null;
-            IntentListStatus? intentList = null;
-            MigrationChecklist? migrationChecklist = null;
-            UpdateCheckStatus? updateCheck = null;
-            try
-            {
-                setupStatus = await _peerNetworkClient.GetSetupStatusAsync(nodeUrl);
-                networkStatus = await _peerNetworkClient.GetNetworkStatusAsync(nodeUrl);
-                networkInvite = await _peerNetworkClient.GetNetworkInviteAsync(nodeUrl);
-                intentList = await _peerNetworkClient.GetIntentListAsync(nodeUrl);
-                migrationChecklist = await _peerNetworkClient.GetMigrationChecklistAsync(nodeUrl);
-                updateCheck = await _peerNetworkClient.GetUpdateCheckAsync(nodeUrl);
-            }
-            catch
-            {
-                
-            }
+            var setupStatus = await TryLoadAsync("setup status", () => _peerNetworkClient.GetSetupStatusAsync(nodeUrl));
+            var networkStatus = await TryLoadAsync("network status", () => _peerNetworkClient.GetNetworkStatusAsync(nodeUrl));
+            var networkInvite = await TryLoadAsync("network invite", () => _peerNetworkClient.GetNetworkInviteAsync(nodeUrl));
+            var intentList = await TryLoadAsync("intent list", () => _peerNetworkClient.GetIntentListAsync(nodeUrl));
+            var migrationChecklist = await TryLoadAsync("migration checklist", () => _peerNetworkClient.GetMigrationChecklistAsync(nodeUrl));
+            var updateCheck = await TryLoadAsync("update check", () => _peerNetworkClient.GetUpdateCheckAsync(nodeUrl));
 
             return UiResult<PeerNetworkOverview>.Ok(new PeerNetworkOverview(directory, setupStatus, networkStatus, networkInvite, intentList, migrationChecklist, updateCheck));
         }
@@ -77,6 +64,19 @@ public sealed class DashboardActions
 
     public Task<EdgeSyncStatus?> SyncNetworkAsync(string nodeUrl, NetworkSyncRequest request) =>
         _peerNetworkClient.SyncNetworkAsync(nodeUrl, request);
+
+    private static async Task<T?> TryLoadAsync<T>(string resource, Func<Task<T?>> loader)
+    {
+        try
+        {
+            return await loader();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Failed to load {resource}: {ex.Message}");
+            return default;
+        }
+    }
 
     private static string NormalizeNodeUrl(string url) => url.Trim().TrimEnd('/');
 

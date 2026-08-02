@@ -12,7 +12,7 @@ services:
       Kestrel__Endpoints__P2PGrpc__Url: http://+:5042
       Kestrel__Endpoints__P2PGrpc__Protocols: Http2
       ConnectionStrings__DefaultNodeDb: /data/node.db
-      Node__Role: Consensus
+      Node__Role: Bootstrap
       NodeDbPassword: local-raft-db-password
       NodeAdminToken: local-raft-admin-token
       WebhookSecret: local-raft-webhook-secret
@@ -34,7 +34,7 @@ services:
       Raft__SnapshotPath: /data/raft-snapshots
       Raft__Peers__0__Id: node-b
       Raft__Peers__0__EndPoint: node-b:6042
-      P2P__NodeRole: Full
+      P2P__NodeRole: Bootstrap
       P2P__NodeId: node-a
       P2P__PublicUrl: ""
       P2P__SyncToken: local-raft-sync-token
@@ -94,6 +94,7 @@ services:
       P2P__NodeRole: Full
       P2P__NodeId: node-b
       P2P__PublicUrl: ""
+      P2P__BootstrapPeers__0: http://node-a:5042
       P2P__SyncToken: local-raft-sync-token
       P2P__RegistrationToken: local-raft-registration-token
       P2P__IdentityKeyPath: /data/node-identity.p256.key

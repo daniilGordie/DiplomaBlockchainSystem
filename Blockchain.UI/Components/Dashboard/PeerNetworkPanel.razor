@@ -72,6 +72,7 @@
         <div class="col-lg-4">
             <div class="network-panel__group p-3 border border-secondary rounded h-100">
                 <div class="text-white-50 small fw-semibold mb-2">Consensus</div>
+                <div class="small text-white fw-semibold">Engine: @ConsensusEngineLabel</div>
                 <div class="small text-white">Mode: @FinalityModeLabel</div>
                 <div class="small text-white">PoC validation: @PoCLabel</div>
                 <div class="small text-white">Local Raft: @LocalRaftLabel</div>
@@ -540,8 +541,8 @@
     private string ConsensusLabel => NetworkStatus == null
         ? "consensus unknown"
         : NetworkStatus.LocalRaftRequested
-            ? NetworkStatus.LocalRaftConfigured ? "raft configured" : "raft missing"
-            : NetworkStatus.IsEdge ? "remote consensus" : NetworkStatus.FinalityMode;
+            ? NetworkStatus.LocalRaftConfigured ? "PoC + DotNext Raft" : "raft missing"
+            : NetworkStatus.IsEdge ? "PoC + remote Raft" : NetworkStatus.ConsensusEngine;
     private string ConsensusBadge => NetworkStatus == null
         ? "bg-secondary"
         : NetworkStatus.LocalRaftRequested && !NetworkStatus.LocalRaftConfigured
@@ -554,6 +555,7 @@
         ? NetworkStatus.EdgeSync.State.Contains("error", StringComparison.OrdinalIgnoreCase) ? "bg-danger" : "bg-success"
         : "bg-secondary";
     private string FinalityModeLabel => string.IsNullOrWhiteSpace(NetworkStatus?.FinalityMode) ? "unknown" : NetworkStatus.FinalityMode;
+    private string ConsensusEngineLabel => string.IsNullOrWhiteSpace(NetworkStatus?.ConsensusEngine) ? "unknown" : NetworkStatus.ConsensusEngine;
     private string PoCLabel => NetworkStatus?.ProofOfContributionValidationEnabled == true ? "enabled" : "disabled";
     private string LocalRaftLabel => NetworkStatus == null
         ? "unknown"

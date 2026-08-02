@@ -114,6 +114,7 @@ public static class ConsensusEndpoints
                                 : "operational";
 
             return Results.Json(new RaftRuntimeStatusResponse(
+                ConsensusConfigurationPolicy.GetEngineName(node),
                 baseStatus,
                 cluster?.Term,
                 readinessCompleted,
@@ -335,6 +336,7 @@ public sealed record RaftStatusResponse(
     string NodeRole);
 
 public sealed record RaftRuntimeStatusResponse(
+    string ConsensusEngine,
     RaftStatusResponse Configuration,
     long? Term,
     bool ReadinessCompleted,

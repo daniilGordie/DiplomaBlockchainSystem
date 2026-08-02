@@ -18,7 +18,9 @@ public sealed class IpfsIntegrationClient : IIpfsIntegrationClient
     {
         try
         {
-            using var doc = await _http.GetFromJsonAsync<JsonDocument>($"{nodeUrl}/api/integrations/ipfs/health");
+            using var doc = await _http.GetFromJsonAsync(
+                $"{nodeUrl}/api/integrations/ipfs/health",
+                IntegrationApiJsonContext.Default.JsonDocument);
             var root = doc?.RootElement;
             string apiUrl = root?.TryGetProperty("apiUrl", out var apiProp) == true ? apiProp.GetString() ?? "" : "";
             bool reachable = root?.TryGetProperty("reachable", out var reachableProp) == true && reachableProp.GetBoolean();

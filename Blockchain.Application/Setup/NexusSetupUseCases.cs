@@ -80,7 +80,7 @@ public sealed class NexusSetupUseCases
         string nodeId = string.IsNullOrWhiteSpace(request.NodeId) ? NewNodeId("edge") : request.NodeId.Trim();
         var config = BaseConfig(invite.NetworkName, invite.NetworkId, nodeId, role == "Edge" ? "Edge" : "Edge");
         config["Consensus:FinalityMode"] = "Raft";
-        config["Consensus:EnablePoC"] = "true";
+        config["Consensus:EnableProofOfContributionValidation"] = "true";
         config["P2P:Iroh:Enabled"] = "true";
         config["P2P:Iroh:LocalApiToken"] = NewSecret();
         config["P2P:BootstrapPeers:0"] = invite.BootstrapIrohUrl;

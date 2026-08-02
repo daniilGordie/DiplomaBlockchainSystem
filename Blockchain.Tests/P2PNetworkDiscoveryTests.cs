@@ -274,7 +274,10 @@ public class P2PNetworkDiscoveryTests
             ["NodeDbPassword"] = "test-db-password",
             ["NodeAdminToken"] = "admin-secret",
             ["OraclePublicKey"] = "test-oracle",
-            ["WebhookSecret"] = "test-webhook"
+            ["WebhookSecret"] = "test-webhook",
+            ["Node:Role"] = "Local",
+            ["Consensus:FinalityMode"] = "Immediate",
+            ["Consensus:AcceptP2PBlocksAsFinal"] = "false"
         };
 
         var configuration = new ConfigurationBuilder()

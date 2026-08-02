@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace Blockchain.UI.Application.Clients;
 
 public sealed record NodeSetupStatus(
@@ -33,6 +36,7 @@ public sealed record NetworkStatus(
     string[] BootstrapPeers,
     IReadOnlyList<NetworkPeerStatus> KnownPeers,
     string FinalityMode,
+    string ConsensusEngine,
     bool ProofOfContributionValidationEnabled,
     bool LocalRaftRequested,
     string RaftTransport,
@@ -223,3 +227,35 @@ public sealed record UpdateCheckStatus(
     bool IrohSidecarCompatible,
     string ManifestUrl,
     string Warning);
+
+[JsonSourceGenerationOptions(
+    GenerationMode = JsonSourceGenerationMode.Metadata,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(NodeSetupStatus))]
+[JsonSerializable(typeof(NetworkStatus))]
+[JsonSerializable(typeof(NetworkInvite))]
+[JsonSerializable(typeof(IntentListStatus))]
+[JsonSerializable(typeof(MigrationChecklist))]
+[JsonSerializable(typeof(SetupPlanRequest))]
+[JsonSerializable(typeof(SetupPlanResponse))]
+[JsonSerializable(typeof(SetupStateStatus))]
+[JsonSerializable(typeof(InviteValidationRequest))]
+[JsonSerializable(typeof(InviteValidationResponse))]
+[JsonSerializable(typeof(CreateNetworkSetupRequest))]
+[JsonSerializable(typeof(JoinNetworkSetupRequest))]
+[JsonSerializable(typeof(LocalNodeSetupRequest))]
+[JsonSerializable(typeof(SetupApplyResponse))]
+[JsonSerializable(typeof(PeerTrustRequest))]
+[JsonSerializable(typeof(PeerTrustResponse))]
+[JsonSerializable(typeof(PeerRoleRequest))]
+[JsonSerializable(typeof(PeerRoleResponse))]
+[JsonSerializable(typeof(NetworkSyncRequest))]
+[JsonSerializable(typeof(EdgeSyncStatus))]
+[JsonSerializable(typeof(UpdateCheckStatus))]
+internal partial class NodeApiJsonContext : JsonSerializerContext
+{
+    public static NodeApiJsonContext Indented { get; } = new(new JsonSerializerOptions(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true
+    });
+}

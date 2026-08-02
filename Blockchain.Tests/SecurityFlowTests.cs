@@ -1358,7 +1358,10 @@ public sealed class SecurityFlowTests
             {
                 ["ConnectionStrings:DefaultNodeDb"] = dbPath,
                 ["NodeDbPassword"] = "test-db-password",
-                ["NodeAdminToken"] = nodeAdminToken
+                ["NodeAdminToken"] = nodeAdminToken,
+                ["Node:Role"] = "Local",
+                ["Consensus:FinalityMode"] = "Immediate",
+                ["Consensus:AcceptP2PBlocksAsFinal"] = "false"
             })
             .Build();
 

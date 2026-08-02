@@ -18,7 +18,9 @@ public sealed class GitIntegrationClient : IGitIntegrationClient
     {
         try
         {
-            using var doc = await _http.GetFromJsonAsync<JsonDocument>($"{nodeUrl}/api/integrations/git/status");
+            using var doc = await _http.GetFromJsonAsync(
+                $"{nodeUrl}/api/integrations/git/status",
+                IntegrationApiJsonContext.Default.JsonDocument);
             var root = doc?.RootElement;
             string webhookUrl = root?.TryGetProperty("webhookUrl", out var webhookProp) == true ? webhookProp.GetString() ?? "" : "";
             string mode = root?.TryGetProperty("mode", out var modeProp) == true ? modeProp.GetString() ?? "" : "";
@@ -61,7 +63,7 @@ public sealed class GitIntegrationClient : IGitIntegrationClient
 
     public async Task<GitRepositoryConnectResult> ConnectRepositoryAsync(GitRepositoryConnectCommand command)
     {
-        var request = new GitRepositoryConnectRequest
+        var request = new GitRepositoryConnectApiRequest
         {
             ProjectId = command.ProjectId,
             Repository = command.Repository,
@@ -71,7 +73,10 @@ public sealed class GitIntegrationClient : IGitIntegrationClient
             UserSignature = command.UserSignature
         };
 
-        using var response = await _http.PostAsJsonAsync($"{command.NodeUrl}/api/integrations/git/connect", request);
+        using var response = await _http.PostAsJsonAsync(
+            $"{command.NodeUrl}/api/integrations/git/connect",
+            request,
+            IntegrationApiJsonContext.Default.GitRepositoryConnectApiRequest);
         if (response.IsSuccessStatusCode)
         {
             return new GitRepositoryConnectResult(true, command.Repository, $"Repository connected: {command.Repository}.");
@@ -141,15 +146,5 @@ public sealed class GitIntegrationClient : IGitIntegrationClient
         }
 
         return $"{details} | bindings: {bindingsCount}";
-    }
-
-    private sealed class GitRepositoryConnectRequest
-    {
-        public string ProjectId { get; set; } = "";
-        public string Repository { get; set; } = "";
-        public string User { get; set; } = "";
-        public string Timestamp { get; set; } = "";
-        public string UserPublicKey { get; set; } = "";
-        public string UserSignature { get; set; } = "";
     }
 }

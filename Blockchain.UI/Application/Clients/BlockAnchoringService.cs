@@ -227,7 +227,9 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         using var http = new HttpClient { BaseAddress = new Uri(_nodeUrl.TrimEnd('/') + "/") };
         try
         {
-            var status = await http.GetFromJsonAsync<NetworkStatusProbe>("/api/network/status");
+            var status = await http.GetFromJsonAsync(
+                "/api/network/status",
+                IntegrationApiJsonContext.Default.NetworkStatusProbe);
             return string.IsNullOrWhiteSpace(status?.NetworkId) ? "nexus-main" : status.NetworkId;
         }
         catch
@@ -515,8 +517,6 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         value.TryGetInt64(out long result)
             ? result
             : null;
-
-    private sealed record NetworkStatusProbe(string NetworkId);
 
     private sealed record SignedIntentDto(
         string IntentId,

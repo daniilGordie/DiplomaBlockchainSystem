@@ -25,7 +25,10 @@ public class NodeServiceCollectionTests
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["NodeDbPassword"] = "test-password",
-                    ["NodeDatabase"] = dbPath
+                    ["NodeDatabase"] = dbPath,
+                    ["Node:Role"] = "Local",
+                    ["Consensus:FinalityMode"] = "Immediate",
+                    ["Consensus:AcceptP2PBlocksAsFinal"] = "false"
                 })
                 .Build();
 
@@ -63,6 +66,7 @@ public class NodeServiceCollectionTests
             Assert.NotNull(provider.GetRequiredService<RaftCommittedBlockCommandApplier>());
             Assert.NotNull(provider.GetRequiredService<IStateMachine>());
             Assert.NotNull(provider.GetRequiredService<IBlockFinalitySubmitter>());
+            Assert.IsType<ImmediateBlockFinalitySubmitter>(provider.GetRequiredService<IBlockFinalitySubmitter>());
             Assert.NotNull(provider.GetRequiredService<ProjectEventAnchorService>());
             Assert.NotNull(provider.GetRequiredService<ConnectGitRepositoryUseCase>());
             Assert.NotNull(provider.GetRequiredService<AnchorGitCommitUseCase>());

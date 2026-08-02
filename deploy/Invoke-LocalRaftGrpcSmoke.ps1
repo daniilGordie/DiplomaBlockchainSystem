@@ -54,7 +54,6 @@ try {
     $startArgs = @{
         SkipBuild = $true
         DataRoot = $dataRootFull
-        EnablePoC = $true
         ProducerKeyPath = $producerKeyPath
         ProducerPrivateKeyPassword = $producerPassword
         KeepAliveSeconds = $WarmupSeconds

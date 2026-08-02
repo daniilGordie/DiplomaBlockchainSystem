@@ -683,7 +683,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         newMemberPublicKeyFingerprint = "";
     }
 
-    private string FormatJson(string json) { try { using var doc = JsonDocument.Parse(json); return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true }); } catch { return json; } }
+    private string FormatJson(string json) { try { using var doc = JsonDocument.Parse(json); return JsonSerializer.Serialize(doc.RootElement, IntegrationApiJsonContext.Indented.JsonElement); } catch { return json; } }
 
     private async Task CreateWallet()
     {

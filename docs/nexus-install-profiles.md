@@ -6,6 +6,8 @@ Nexus supports three practical node profiles for product installs:
 - `edge-node`: user workstation node with UI and Iroh sidecar, joins an existing network without becoming a Raft voter.
 - `bootstrap-node` / `consensus-node`: stable network core nodes with PoC over Raft finality.
 
+All shared-network profiles enforce one consensus contract: Proof of Contribution validates proposals and DotNext Raft provides finality. `Immediate` finality is accepted only for an isolated `local-node`; network nodes fail startup if PoC/Raft is disabled or direct P2P blocks are configured as final.
+
 ## Local private node
 
 Generate config:

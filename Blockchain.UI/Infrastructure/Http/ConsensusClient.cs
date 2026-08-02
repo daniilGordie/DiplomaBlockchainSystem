@@ -19,7 +19,9 @@ public sealed class ConsensusClient : IConsensusClient
         try
         {
             string safeProjectId = Uri.EscapeDataString(projectId);
-            using var doc = await _http.GetFromJsonAsync<JsonDocument>($"{nodeUrl}/api/consensus/projects/{safeProjectId}/producer");
+            using var doc = await _http.GetFromJsonAsync(
+                $"{nodeUrl}/api/consensus/projects/{safeProjectId}/producer",
+                IntegrationApiJsonContext.Default.JsonDocument);
             if (doc == null)
             {
                 return ConsensusProducerInfo.LegacyDefault();

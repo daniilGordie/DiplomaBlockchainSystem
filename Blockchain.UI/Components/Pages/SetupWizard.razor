@@ -178,7 +178,7 @@
                     <label class="form-label text-white">Connection invite</label>
                     <button class="btn btn-sm btn-outline-info mb-2" @onclick="CopyInvite">Copy invite</button>
                 </div>
-                <textarea class="form-control bg-dark text-info border-secondary font-monospace" rows="8" readonly>@JsonSerializer.Serialize(lastApply.Invite, new JsonSerializerOptions { WriteIndented = true })</textarea>
+                <textarea class="form-control bg-dark text-info border-secondary font-monospace" rows="8" readonly>@JsonSerializer.Serialize(lastApply.Invite, NodeApiJsonContext.Indented.NetworkInviteDocument)</textarea>
             </div>
         }
 
@@ -349,7 +349,7 @@
             return;
         }
 
-        await Clipboard.CopyTextAsync(JsonSerializer.Serialize(lastApply.Invite, new JsonSerializerOptions { WriteIndented = true }));
+        await Clipboard.CopyTextAsync(JsonSerializer.Serialize(lastApply.Invite, NodeApiJsonContext.Indented.NetworkInviteDocument));
         message = "Invite copied.";
         lastSuccess = true;
     }

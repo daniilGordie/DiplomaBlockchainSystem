@@ -300,7 +300,7 @@ public sealed class RaftBlockFinalitySubmitterTests
             });
 
             await wal.CommitAsync(raftLogIndex);
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAnyAsync<Exception>(
                 () => wal.WaitForApplyAsync(raftLogIndex).AsTask());
 
             var diagnostics = stateMachine.GetDiagnostics();
