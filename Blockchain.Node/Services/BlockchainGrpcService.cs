@@ -31,8 +31,6 @@ namespace Blockchain.Node.Services
         private readonly IPeerStore _peerStore;
         private readonly P2POptions _p2pOptions;
         private readonly BlockchainManager _blockchainManager;
-        private readonly P2PNetworkService _p2pService;
-        private readonly PeerChainSyncService _peerChainSync;
         private readonly ProjectResponseCache _projectResponseCache;
         private readonly GrpcBlockProcessor _blockProcessor;
         private readonly AuthorizeReadRequestUseCase _authorizeReadRequest;
@@ -60,8 +58,6 @@ namespace Blockchain.Node.Services
             IPeerStore peerStore,
             IOptions<P2POptions> p2pOptions,
             BlockchainManager manager,
-            P2PNetworkService p2pService,
-            PeerChainSyncService peerChainSync,
             ProjectResponseCache projectResponseCache,
             GrpcBlockProcessor blockProcessor,
             AuthorizeReadRequestUseCase authorizeReadRequest,
@@ -86,8 +82,6 @@ namespace Blockchain.Node.Services
             _peerStore = peerStore;
             _p2pOptions = p2pOptions.Value;
             _blockchainManager = manager;
-            _p2pService = p2pService;
-            _peerChainSync = peerChainSync;
             _projectResponseCache = projectResponseCache;
             _blockProcessor = blockProcessor;
             _authorizeReadRequest = authorizeReadRequest;
@@ -164,53 +158,6 @@ namespace Blockchain.Node.Services
             return true;
         }
 
-        private bool IsValidAdminToken(string suppliedToken)
-        {
-            string configuredToken = _configuration["NodeAdminToken"] ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(configuredToken) || string.IsNullOrWhiteSpace(suppliedToken))
-            {
-                return false;
-            }
-
-            byte[] left = System.Text.Encoding.UTF8.GetBytes(configuredToken);
-            byte[] right = System.Text.Encoding.UTF8.GetBytes(suppliedToken);
-            return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
-        }
-
-        public override async Task<StatusReply> AddPeer(PeerRequest request, ServerCallContext context)
-        {
-            if (!IsValidAdminToken(request.AdminToken))
-            {
-                _logger.LogWarning("[Security] Rejected AddPeer request: invalid admin token.");
-                return new StatusReply { Success = false, Message = "Invalid admin token" };
-            }
-
-            if (IsSelfPeer(request.Url))
-            {
-                return new StatusReply { Success = false, Message = "Cannot add this node as its own peer" };
-            }
-
-            if (IsValidPeerUrl(request.Url, allowLocalhost: IsLocalNetworkMode(), allowIroh: CanAcceptIrohPeerUrls()))
-            {
-                _p2pService.AddPeer(request.Url);
-                _peerStore.SavePeer(request.Url);
-                var sync = await _peerChainSync.SyncFromPeerAsync(request.Url);
-                foreach (var channelId in sync.ChangedChannels)
-                {
-                    _projectResponseCache.InvalidateProject(channelId);
-                }
-                return new StatusReply { Success = true, Message = $"Peer added. Synced {sync.AcceptedBlocks} blocks." };
-            }
-            return new StatusReply { Success = false, Message = "Invalid URL format" };
-        }
-
-        public override Task<PeerListResponse> GetPeers(EmptyRequest request, ServerCallContext context)
-        {
-            var resp = new PeerListResponse();
-            resp.Urls.AddRange(_p2pService.GetPeers());
-            return Task.FromResult(resp);
-        }
-
         public override Task<StatusReply> RegisterPeer(RegisterPeerRequest request, ServerCallContext context)
         {
             string publicUrl = P2POptions.NormalizeUrl(request.PublicUrl);
@@ -272,7 +219,6 @@ namespace Blockchain.Node.Services
                 CurrentRole = _p2pOptions.Role.ToString(),
                 IrohEnabled = _p2pOptions.Iroh.Enabled,
                 IrohSidecarUrl = _p2pOptions.Iroh.NormalizedSidecarUrl,
-                SyncTokenConfigured = !string.IsNullOrWhiteSpace(_p2pOptions.SyncToken),
                 NodeIdentityConfigured = !string.IsNullOrWhiteSpace(_p2pOptions.EffectiveIdentityKeyPath),
                 RegistrationTokenFallbackEnabled = _p2pOptions.AllowRegistrationTokenFallback,
                 DiscoveryIntervalSeconds = Math.Clamp(_p2pOptions.DiscoveryIntervalSeconds, 10, 3600)
@@ -293,25 +239,6 @@ namespace Blockchain.Node.Services
             }
 
             return Task.FromResult(response);
-        }
-
-        public override Task<KnownChannelsResponse> GetKnownChannels(EmptyRequest request, ServerCallContext context)
-        {
-            var response = new KnownChannelsResponse();
-            response.ChannelIds.AddRange(_chainReader.GetKnownChannels());
-            return Task.FromResult(response);
-        }
-
-        public override async Task<StatusReply> BroadcastBlock(BlockModel request, ServerCallContext context)
-        {
-            var result = await _blockProcessor.ProcessBroadcastAsync(request);
-            if (result.Success)
-            {
-                TrackPayloadForAnalytics(request.Data);
-                _projectResponseCache.InvalidateProject(result.ChannelId);
-            }
-
-            return new StatusReply { Success = result.Success, Message = result.Message };
         }
 
         public override async Task<StatusReply> ReceiveBlock(BlockModel request, ServerCallContext context)
@@ -343,26 +270,22 @@ namespace Blockchain.Node.Services
             string channelToRead = string.IsNullOrEmpty(request.ChannelId) ? "System" : request.ChannelId;
             string userName = string.IsNullOrEmpty(request.UserName) ? "Guest" : request.UserName;
 
-            bool isNodeSync = IsValidNodeSyncRequest(userName, request.SyncToken);
-            if (!isNodeSync)
-            {
-                var access = _chainReadAccess.CanRead(new ChainReadAccessRequest(
-                    channelToRead,
-                    $"CHAIN:{channelToRead}",
-                    userName,
-                    request.UserPublicKey,
-                    request.AuthSignature,
-                    request.AuthTimestamp,
-                    request.AuthNonce));
+            var access = _chainReadAccess.CanRead(new ChainReadAccessRequest(
+                channelToRead,
+                $"CHAIN:{channelToRead}",
+                userName,
+                request.UserPublicKey,
+                request.AuthSignature,
+                request.AuthTimestamp,
+                request.AuthNonce));
 
-                if (!access.Allowed)
-                {
-                    _logger.LogWarning(
-                        "[Security] Rejected chain read request for channel {ChannelId}: {Reason}.",
-                        channelToRead,
-                        access.Reason);
-                    return Task.FromResult(response);
-                }
+            if (!access.Allowed)
+            {
+                _logger.LogWarning(
+                    "[Security] Rejected chain read request for channel {ChannelId}: {Reason}.",
+                    channelToRead,
+                    access.Reason);
+                return Task.FromResult(response);
             }
 
             int requestedCount = request.Count > 0 ? request.Count : 100;
@@ -383,24 +306,6 @@ namespace Blockchain.Node.Services
             }
 
             return Task.FromResult(response);
-        }
-
-        private bool IsValidNodeSyncRequest(string userName, string syncToken)
-        {
-            if (!string.Equals(userName, P2PNetworkService.NodeSyncUser, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            string configuredToken = _p2pOptions.SyncToken;
-            if (string.IsNullOrWhiteSpace(configuredToken) || string.IsNullOrWhiteSpace(syncToken))
-            {
-                return false;
-            }
-
-            byte[] left = System.Text.Encoding.UTF8.GetBytes(configuredToken);
-            byte[] right = System.Text.Encoding.UTF8.GetBytes(syncToken);
-            return CryptographicOperations.FixedTimeEquals(left, right);
         }
 
         private bool IsValidRegistrationToken(string suppliedToken)

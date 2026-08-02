@@ -14,10 +14,6 @@ x-node-env: &node-env
   OraclePublicKey: auto
   OraclePrivateKeyPassword: local-raft-oracle-password
   OracleKeyPath: /keys/oracle_key.dat
-  Consensus__EnableProofOfContributionValidation: "true"
-  Consensus__RequireProofOfWork: "false"
-  Consensus__AcceptP2PBlocksAsFinal: "false"
-  Consensus__FinalityMode: Raft
   Consensus__ProducerKeyPath: /keys/producer-key.dat
   Consensus__ProducerPrivateKeyPassword: local-raft-producer-password
   Raft__Transport: Iroh
@@ -33,7 +29,6 @@ x-node-env: &node-env
   Raft__IrohNodeListenEndPoint: 127.0.0.1:60410
   P2P__NodeRole: Full
   P2P__PublicUrl: ""
-  P2P__SyncToken: local-raft-sync-token
   P2P__RegistrationToken: local-raft-registration-token
   P2P__IdentityKeyPath: /data/node-identity.p256.key
   P2P__DiscoveryIntervalSeconds: 3600

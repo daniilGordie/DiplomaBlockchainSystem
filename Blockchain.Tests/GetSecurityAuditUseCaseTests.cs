@@ -1,5 +1,4 @@
 using Blockchain.Application.Analytics;
-using Blockchain.Core.Constants;
 
 namespace Blockchain.Tests;
 
@@ -24,17 +23,16 @@ public class GetSecurityAuditUseCaseTests
     }
 
     [Fact]
-    public void Execute_ShouldReportHashSignatureProofAndLinkageFindings()
+    public void Execute_ShouldReportHashSignatureFinalityAndLinkageFindings()
     {
         var reader = new FakeAnalyticsReader(new[]
         {
             CreateBlock(index: 0, hash: "hash-0", previousHash: "0"),
-            CreateBlock(index: 1, hash: "bad-hash", previousHash: "wrong-parent")
+            CreateBlock(index: 1, hash: "bad-hash", previousHash: "wrong-parent") with { FinalityMode = "", RaftLogIndex = null }
         });
         var verifier = new FakeBlockAuditVerifier(
             invalidHashes: new[] { "bad-hash" },
-            invalidSignatures: new[] { "bad-hash" },
-            invalidProofOfWork: new[] { "bad-hash" });
+            invalidSignatures: new[] { "bad-hash" });
         var useCase = new GetSecurityAuditUseCase(reader, verifier);
 
         var result = useCase.Execute("ProjectA");
@@ -42,60 +40,41 @@ public class GetSecurityAuditUseCaseTests
         Assert.False(result.ChainValid);
         Assert.Equal(1, result.InvalidHashes);
         Assert.Equal(1, result.InvalidSignatures);
-        Assert.Equal(1, result.InvalidProofOfWork);
+        Assert.Equal(1, result.InvalidFinalityMetadata);
         Assert.Equal(1, result.BrokenLinks);
         Assert.Equal(4, result.FindingCount);
     }
 
     [Fact]
-    public void Build_ShouldSkipProofOfWorkFindingWhenProofOfWorkIsDisabled()
+    public void Build_ShouldAcceptPersistedRaftFinalityMetadata()
     {
-        bool previous = NetworkParameters.RequireProofOfWork;
-        try
+        var blocks = new[]
         {
-            NetworkParameters.RequireProofOfWork = false;
-            var blocks = new[]
-            {
-                CreateBlock(index: 0, hash: "hash-0", previousHash: "0")
-            };
+            CreateBlock(index: 0, hash: "hash-0", previousHash: "0"),
+            CreateBlock(index: 1, hash: "hash-1", previousHash: "hash-0") with { FinalityMode = "Raft", RaftLogIndex = 1 }
+        };
 
-            var result = GetSecurityAuditUseCase.Build(
-                blocks.Select(block => block with { FinalityMode = "Raft", RaftLogIndex = 1 }).ToArray(),
-                new FakeBlockAuditVerifier(invalidProofOfWork: new[] { "hash-0" }));
+        var result = GetSecurityAuditUseCase.Build(blocks, new FakeBlockAuditVerifier());
 
-            Assert.True(result.ChainValid);
-            Assert.Equal(0, result.InvalidProofOfWork);
-            Assert.Contains(result.Items, item => item.Details.Contains("PoC/Raft-ready consensus metadata", StringComparison.Ordinal));
-        }
-        finally
-        {
-            NetworkParameters.RequireProofOfWork = previous;
-        }
+        Assert.True(result.ChainValid);
+        Assert.Equal(0, result.InvalidFinalityMetadata);
+        Assert.Contains(result.Items, item => item.Details.Contains("PoC/Raft finality", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Build_ShouldReportMissingFinalityMetadataWhenProofOfWorkIsDisabled()
+    public void Build_ShouldReportMissingFinalityMetadata()
     {
-        bool previous = NetworkParameters.RequireProofOfWork;
-        try
+        var blocks = new[]
         {
-            NetworkParameters.RequireProofOfWork = false;
-            var blocks = new[]
-            {
-                CreateBlock(index: 0, hash: "hash-0", previousHash: "0"),
-                CreateBlock(index: 1, hash: "hash-1", previousHash: "hash-0")
-            };
+            CreateBlock(index: 0, hash: "hash-0", previousHash: "0"),
+            CreateBlock(index: 1, hash: "hash-1", previousHash: "hash-0") with { FinalityMode = "", RaftLogIndex = null }
+        };
 
-            var result = GetSecurityAuditUseCase.Build(blocks, new FakeBlockAuditVerifier());
+        var result = GetSecurityAuditUseCase.Build(blocks, new FakeBlockAuditVerifier());
 
-            Assert.False(result.ChainValid);
-            Assert.Equal(1, result.InvalidFinalityMetadata);
-            Assert.Contains(result.Items, item => item.CheckName == "Finality metadata");
-        }
-        finally
-        {
-            NetworkParameters.RequireProofOfWork = previous;
-        }
+        Assert.False(result.ChainValid);
+        Assert.Equal(1, result.InvalidFinalityMetadata);
+        Assert.Contains(result.Items, item => item.CheckName == "Finality metadata");
     }
 
     private static BlockSnapshot CreateBlock(int index, string hash, string previousHash)
@@ -109,7 +88,9 @@ public class GetSecurityAuditUseCaseTests
             "validator",
             "signature",
             0,
-            "ProjectA");
+            "ProjectA",
+            FinalityMode: index > 0 ? "Raft" : string.Empty,
+            RaftLogIndex: index > 0 ? index : null);
     }
 
     private sealed class FakeAnalyticsReader : IProjectAnalyticsReader
@@ -133,22 +114,18 @@ public class GetSecurityAuditUseCaseTests
     {
         private readonly HashSet<string> _invalidHashes;
         private readonly HashSet<string> _invalidSignatures;
-        private readonly HashSet<string> _invalidProofOfWork;
 
         public FakeBlockAuditVerifier(
             IEnumerable<string>? invalidHashes = null,
-            IEnumerable<string>? invalidSignatures = null,
-            IEnumerable<string>? invalidProofOfWork = null)
+            IEnumerable<string>? invalidSignatures = null)
         {
             _invalidHashes = new HashSet<string>(invalidHashes ?? Array.Empty<string>(), StringComparer.Ordinal);
             _invalidSignatures = new HashSet<string>(invalidSignatures ?? Array.Empty<string>(), StringComparer.Ordinal);
-            _invalidProofOfWork = new HashSet<string>(invalidProofOfWork ?? Array.Empty<string>(), StringComparer.Ordinal);
         }
 
         public bool HasValidHash(BlockSnapshot block) => !_invalidHashes.Contains(block.Hash);
 
         public bool HasValidSignature(BlockSnapshot block) => !_invalidSignatures.Contains(block.Hash);
 
-        public bool HasValidProofOfWork(BlockSnapshot block) => !_invalidProofOfWork.Contains(block.Hash);
     }
 }

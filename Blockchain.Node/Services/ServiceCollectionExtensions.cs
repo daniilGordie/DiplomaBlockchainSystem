@@ -21,18 +21,20 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddNexusNodeServices(this IServiceCollection services, DatabaseManager databaseManager)
     {
         services.AddOptions<P2POptions>().BindConfiguration("P2P");
-        services.AddOptions<NexusNodeOptions>().BindConfiguration("Node");
+        services.AddOptions<NexusNodeOptions>()
+            .BindConfiguration("Node")
+            .Validate(
+                options => Enum.TryParse<NexusNodeRole>(options.Role, ignoreCase: true, out _),
+                $"Node:Role must be one of: {string.Join(", ", Enum.GetNames<NexusNodeRole>())}.")
+            .ValidateOnStart();
         services.AddOptions<NodeVersionOptions>().BindConfiguration("NodeVersion");
-        services.AddOptions<ConsensusOptions>().BindConfiguration("Consensus");
         services.AddOptions<RaftOptions>().BindConfiguration("Raft");
         services.AddHttpClient();
         services.AddSingleton<NexusSetupUseCases>();
         services.AddNexusInfrastructure(databaseManager);
 
-        services.AddSingleton<BlockMiner>();
         services.AddSingleton<PendingBlockConnector>();
         services.AddSingleton<PeerBlockValidator>();
-        services.AddSingleton<ChainAdoptionService>();
         services.AddSingleton<ContributionScoreService>();
         services.AddSingleton<ProducerSelector>();
         services.AddSingleton<BlockProposalFactory>();
@@ -45,11 +47,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IChainWriter>(),
             sp.GetRequiredService<IPendingBlockStore>(),
             sp.GetRequiredService<Blockchain.Core.Contracts.ISmartContractStateReader>(),
-            sp.GetRequiredService<IReplayStoreFactory>(),
-            sp.GetRequiredService<BlockMiner>(),
             sp.GetRequiredService<PendingBlockConnector>(),
-            sp.GetRequiredService<PeerBlockValidator>(),
-            sp.GetRequiredService<ChainAdoptionService>()));
+            sp.GetRequiredService<PeerBlockValidator>()));
 
         services.AddSingleton<P2PNetworkService>();
         services.AddSingleton<NodeIdentity>();
@@ -60,7 +59,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<EdgeCommittedBlockSyncService>();
         services.AddHostedService<NodeIdentityWarmupService>();
         services.AddHostedService<P2PBootstrapService>();
-        services.AddHostedService<IrohInboundPump>();
         services.AddHostedService(sp => sp.GetRequiredService<EdgeCommittedBlockSyncService>());
         services.AddSingleton<OracleIdentity>();
         services.AddSingleton<ProducerIdentity>();
@@ -76,14 +74,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<RaftCluster>(sp => sp.GetRequiredService<DotNextRaftClusterFactory>().CreateCluster());
         services.AddSingleton<IRaftCluster>(sp => sp.GetRequiredService<RaftCluster>());
         services.AddSingleton<IRaftCommandReplicator, DotNextRaftCommandReplicator>();
-        services.AddHostedService<ConsensusConfigurationValidationService>();
         services.AddHostedService<DotNextRaftClusterHostedService>();
         services.AddHostedService<RaftSnapshotCheckpointService>();
         services.AddSingleton<IBlockFinalitySubmitter>(sp =>
         {
             var nodeOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<NexusNodeOptions>>().Value;
-            var consensusOptions = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ConsensusOptions>>().Value;
-            ConsensusConfigurationPolicy.EnsureValid(consensusOptions, nodeOptions);
 
             if (nodeOptions.IsLocal)
             {
@@ -106,7 +101,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<GrpcBlockProcessor>();
         services.AddSingleton<IntentOutboxRetryService>();
         services.AddHostedService(sp => sp.GetRequiredService<IntentOutboxRetryService>());
-        services.AddSingleton<PeerChainSyncService>();
         services.AddSingleton<ProjectResponseCache>();
         services.AddSingleton<WebhookReplayGuard>();
         services.AddSingleton<IRequestReplayGuard>(sp => sp.GetRequiredService<WebhookReplayGuard>());
@@ -130,10 +124,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<GetGovernanceProposalsUseCase>();
         services.AddSingleton<GetProjectDocumentsUseCase>();
         services.AddSingleton<GetDocumentVersionsUseCase>();
-        services.AddSingleton<BroadcastLocalBlockUseCase>();
         services.AddSingleton<ReceivePeerBlockUseCase>();
-        services.AddSingleton<AdoptPeerChainUseCase>();
-        services.AddSingleton<MineAndAppendBlockUseCase>();
         services.AddSingleton<VerifyBlockProposalUseCase>();
 
         return services;

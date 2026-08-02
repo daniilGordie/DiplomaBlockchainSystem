@@ -6,15 +6,11 @@ package blockchain;
 
 service BlockchainService {
   rpc ReceiveBlock (BlockModel) returns (StatusReply);
-  rpc BroadcastBlock (BlockModel) returns (StatusReply);
   rpc GetLastBlock (EmptyRequest) returns (BlockModel);
   rpc GetChain (ChainRequest) returns (ChainResponse);
 
-  rpc AddPeer (PeerRequest) returns (StatusReply);
   rpc RegisterPeer (RegisterPeerRequest) returns (StatusReply);
-  rpc GetPeers (EmptyRequest) returns (PeerListResponse);
   rpc GetPeerDirectory (EmptyRequest) returns (PeerDirectoryResponse);
-  rpc GetKnownChannels (EmptyRequest) returns (KnownChannelsResponse);
 
   rpc GetProjectTasks (ProjectRequest) returns (TaskResponse);
   rpc GetAnalytics (ProjectRequest) returns (AnalyticsResponse);
@@ -51,12 +47,6 @@ message ContributionProofModel {
   repeated string evidence_block_hashes = 6;
 }
 
-message PeerRequest {
-  string url = 1;
-  string admin_token = 2;
-}
-message PeerListResponse { repeated string urls = 1; }
-
 message RegisterPeerRequest {
   string node_id = 1;
   string public_url = 2;
@@ -86,13 +76,11 @@ message PeerDirectoryResponse {
   repeated string bootstrap_peers = 5;
   bool iroh_enabled = 6;
   string iroh_sidecar_url = 7;
-  bool sync_token_configured = 8;
+  reserved 8;
   bool node_identity_configured = 9;
   bool registration_token_fallback_enabled = 10;
   int32 discovery_interval_seconds = 11;
 }
-message KnownChannelsResponse { repeated string channel_ids = 1; }
-
 message TaskHistoryRequest {
   string taskId = 1;
   string project_id = 2;
@@ -125,7 +113,7 @@ message ChainRequest {
   int32 count = 1;
   string channel_id = 2;
   string user_name = 3; 
-  string sync_token = 4;
+  reserved 4;
   string user_public_key = 5;
   string auth_signature = 6;
   string auth_timestamp = 7;
@@ -264,7 +252,7 @@ message SecurityAuditResponse {
   int32 checked_blocks = 2;
   int32 invalid_hashes = 3;
   int32 invalid_signatures = 4;
-  int32 invalid_proof_of_work = 5;
+  reserved 5;
   int32 broken_links = 6;
   repeated SecurityAuditItem items = 7;
   int32 invalid_finality_metadata = 8;

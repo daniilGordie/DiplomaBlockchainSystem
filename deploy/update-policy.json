@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "product": "Nexus Diploma Blockchain",
+  "product": "Nexus",
   "channel": "stable",
   "minimumSupportedNodeVersion": "0.1.0",
   "currentNodeVersion": "0.1.0",

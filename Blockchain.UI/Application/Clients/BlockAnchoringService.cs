@@ -124,7 +124,7 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         };
 
         var consensus = await _consensusClient.GetProducerInfoAsync(_nodeUrl, safeTargetChannel);
-        await FinalizeBlockHashLocal(block, consensus.RequireProofOfWork);
+        FinalizeBlockHash(block);
         if (consensus.ContributionProof != null)
         {
             block.ContributionProof = consensus.ContributionProof;
@@ -140,7 +140,7 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
 
         return new BlockAnchorResult(
             false,
-            $"{failurePrefix}: signed intent endpoint is unavailable. The action was not submitted through the legacy block path.");
+            $"{failurePrefix}: signed intent endpoint is unavailable.");
     }
 
     private async Task<SignedIntentSubmitResponse?> SubmitSignedIntentAsync(
@@ -369,10 +369,8 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         return fallback;
     }
 
-    private static async Task FinalizeBlockHashLocal(BlockModel block, bool requireProofOfWork)
+    private static void FinalizeBlockHash(BlockModel block)
     {
-        await Task.Delay(10);
-
         string timestampComponent = block.TimestampUnixSeconds > 0
             ? block.TimestampUnixSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : DateTime.Parse(block.Timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind).ToString("s");
@@ -381,31 +379,8 @@ public sealed class BlockAnchoringService : IBlockAnchoringService
         using var sha256 = SHA256.Create();
         string baseData = $"{block.Index}{timestampComponent}{block.Data}{block.PreviousHash}{block.ValidatorPublicKey}{block.Signature}";
 
-        if (!requireProofOfWork)
-        {
-            byte[] hashBytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(baseData + block.Nonce));
-            block.Hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-            return;
-        }
-
-        while (true)
-        {
-            block.Nonce++;
-            string rawData = baseData + block.Nonce;
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(rawData);
-            byte[] hashBytes = sha256.ComputeHash(bytes);
-            block.Hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-
-            if (block.Hash.StartsWith("000", StringComparison.Ordinal))
-            {
-                break;
-            }
-
-            if (block.Nonce % 500 == 0)
-            {
-                await Task.Yield();
-            }
-        }
+        byte[] hashBytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(baseData + block.Nonce));
+        block.Hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
 
     private static string BuildSubmitIntentJson(SignedIntentSubmitRequest request)

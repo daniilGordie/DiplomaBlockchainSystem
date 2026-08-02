@@ -72,8 +72,7 @@ try {
         --producer-password $producerPassword `
         --db-password $dbPassword `
         --submit-url "http://localhost:7042" `
-        --verify-urls "http://localhost:7042,http://localhost:7043" `
-        --sync-token "local-raft-sync-token" | Out-Host
+        --verify-urls "http://localhost:7042,http://localhost:7043" | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "RaftGrpcSmoke submit failed with exit code $LASTEXITCODE."
     }

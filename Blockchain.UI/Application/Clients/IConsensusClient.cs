@@ -8,8 +8,4 @@ public interface IConsensusClient
 }
 
 public sealed record ConsensusProducerInfo(
-    bool RequireProofOfWork,
-    ContributionProofModel? ContributionProof)
-{
-    public static ConsensusProducerInfo LegacyDefault() => new(true, null);
-}
+    ContributionProofModel? ContributionProof);

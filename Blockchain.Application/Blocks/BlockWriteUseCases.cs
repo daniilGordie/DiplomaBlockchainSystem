@@ -5,22 +5,6 @@ using Blockchain.Core.Contracts;
 
 namespace Blockchain.Application.Blocks;
 
-public sealed class BroadcastLocalBlockUseCase
-{
-    private readonly BlockchainManager _blockchainManager;
-
-    public BroadcastLocalBlockUseCase(BlockchainManager blockchainManager)
-    {
-        _blockchainManager = blockchainManager;
-    }
-
-    public BlockWriteResult Execute(Block block)
-    {
-        bool accepted = _blockchainManager.ProcessPeerBlock(block);
-        return new BlockWriteResult(accepted, accepted ? "Accepted" : "Rejected", block.ChannelId);
-    }
-}
-
 public sealed class ReceivePeerBlockUseCase
 {
     private readonly BlockchainManager _blockchainManager;
@@ -49,36 +33,6 @@ public sealed class ReceivePeerBlockUseCase
             command.Block.ChannelId);
     }
 
-}
-
-public sealed class AdoptPeerChainUseCase
-{
-    private readonly BlockchainManager _blockchainManager;
-
-    public AdoptPeerChainUseCase(BlockchainManager blockchainManager)
-    {
-        _blockchainManager = blockchainManager;
-    }
-
-    public bool Execute(string channelId, List<Block> candidateChain)
-    {
-        return _blockchainManager.TryAdoptChain(channelId, candidateChain);
-    }
-}
-
-public sealed class MineAndAppendBlockUseCase
-{
-    private readonly BlockchainManager _blockchainManager;
-
-    public MineAndAppendBlockUseCase(BlockchainManager blockchainManager)
-    {
-        _blockchainManager = blockchainManager;
-    }
-
-    public bool Execute(Block block)
-    {
-        return _blockchainManager.AddBlock(block);
-    }
 }
 
 public sealed record ReceivePeerBlockCommand(Block Block);

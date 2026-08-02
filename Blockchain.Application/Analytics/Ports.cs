@@ -10,5 +10,4 @@ public interface IBlockAuditVerifier
 {
     bool HasValidHash(BlockSnapshot block);
     bool HasValidSignature(BlockSnapshot block);
-    bool HasValidProofOfWork(BlockSnapshot block);
 }

@@ -10,7 +10,6 @@ namespace Blockchain.Node.Services
         private readonly P2POptions _options;
         private readonly P2PNetworkService _p2pService;
         private readonly IrohSidecarClient _irohSidecarClient;
-        private readonly PeerChainSyncService _peerChainSync;
         private readonly IPeerStore _peerStore;
         private readonly ILogger<P2PBootstrapService> _logger;
 
@@ -18,14 +17,12 @@ namespace Blockchain.Node.Services
             IOptions<P2POptions> options,
             P2PNetworkService p2pService,
             IrohSidecarClient irohSidecarClient,
-            PeerChainSyncService peerChainSync,
             IPeerStore peerStore,
             ILogger<P2PBootstrapService> logger)
         {
             _options = options.Value;
             _p2pService = p2pService;
             _irohSidecarClient = irohSidecarClient;
-            _peerChainSync = peerChainSync;
             _peerStore = peerStore;
             _logger = logger;
         }
@@ -77,10 +74,6 @@ namespace Blockchain.Node.Services
 
                 _p2pService.AddPeer(peer.Url);
                 _peerStore.SavePeer(peer);
-                if (!string.Equals(peer.Role, P2PNodeRole.Bootstrap.ToString(), StringComparison.OrdinalIgnoreCase))
-                {
-                    await _peerChainSync.SyncFromPeerAsync(peer.Url);
-                }
             }
         }
 

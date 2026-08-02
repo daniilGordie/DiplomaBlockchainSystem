@@ -147,19 +147,16 @@ public sealed class RaftBlockFinalitySubmitterTests
     [Fact]
     public async Task RaftCommittedBlockCommandApplier_ShouldApplyCommittedCommandToStorage()
     {
-        bool previousProofOfWork = NetworkParameters.RequireProofOfWork;
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-apply-{Guid.NewGuid():N}.db");
         string walPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-apply-wal-{Guid.NewGuid():N}");
         string snapshotPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-apply-snapshots-{Guid.NewGuid():N}");
 
         try
         {
-            NetworkParameters.RequireProofOfWork = false;
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["NodeDbPassword"] = "",
-                    ["P2P:SyncToken"] = "test-sync-token",
                     ["P2P:RegistrationToken"] = "test-registration-token",
                     ["P2P:NodeId"] = "test-node",
                     ["P2P:PublicUrl"] = "http://localhost:5999",
@@ -202,7 +199,7 @@ public sealed class RaftBlockFinalitySubmitterTests
                 Encoding.UTF8.GetBytes($"{block.Index}{block.TimestampUnixSeconds}{block.Data}{block.PreviousHash}"),
                 HashAlgorithmName.SHA256,
                 DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
-            manager.MineBlock(block);
+            BlockchainManager.FinalizeBlock(block);
 
             var proof = new ContributionProof(
                 "System",
@@ -253,7 +250,6 @@ public sealed class RaftBlockFinalitySubmitterTests
         }
         finally
         {
-            NetworkParameters.RequireProofOfWork = previousProofOfWork;
             TryDelete(dbPath);
             TryDelete(dbPath + "-wal");
             TryDelete(dbPath + "-shm");

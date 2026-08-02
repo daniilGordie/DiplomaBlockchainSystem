@@ -45,7 +45,6 @@
             <div class="network-panel__group p-3 border border-secondary rounded">
                 <div class="d-flex flex-wrap gap-2">
                     <span class="badge @ReadyBadge(Snapshot?.NodeIdentityConfigured == true)">identity</span>
-                    <span class="badge @ReadyBadge(Snapshot?.SyncTokenConfigured == true)">sync token</span>
                     <span class="badge @ReadyBadge(Snapshot?.IrohEnabled == true)">iroh</span>
                     <span class="badge @(Snapshot?.RegistrationTokenFallbackEnabled == true ? "bg-warning text-dark" : "bg-success")">signed registration</span>
                 </div>
@@ -74,8 +73,7 @@
                 <div class="text-white-50 small fw-semibold mb-2">Consensus</div>
                 <div class="small text-white fw-semibold">Engine: @ConsensusEngineLabel</div>
                 <div class="small text-white">Mode: @FinalityModeLabel</div>
-                <div class="small text-white">PoC validation: @PoCLabel</div>
-                <div class="small text-white">Local Raft: @LocalRaftLabel</div>
+                <div class="small text-white">Raft node: @RaftNodeLabel</div>
                 <div class="small text-white">Raft transport: @RaftTransportLabel</div>
                 <div class="small text-white">Raft endpoint: @RaftEndpointLabel</div>
             </div>
@@ -540,12 +538,12 @@
 
     private string ConsensusLabel => NetworkStatus == null
         ? "consensus unknown"
-        : NetworkStatus.LocalRaftRequested
-            ? NetworkStatus.LocalRaftConfigured ? "PoC + DotNext Raft" : "raft missing"
+        : NetworkStatus.RunsRaft
+            ? NetworkStatus.RaftConfigured ? "PoC + DotNext Raft" : "raft missing"
             : NetworkStatus.IsEdge ? "PoC + remote Raft" : NetworkStatus.ConsensusEngine;
     private string ConsensusBadge => NetworkStatus == null
         ? "bg-secondary"
-        : NetworkStatus.LocalRaftRequested && !NetworkStatus.LocalRaftConfigured
+        : NetworkStatus.RunsRaft && !NetworkStatus.RaftConfigured
             ? "bg-danger"
             : NetworkStatus.IsEdge
                 ? "bg-info"
@@ -556,12 +554,11 @@
         : "bg-secondary";
     private string FinalityModeLabel => string.IsNullOrWhiteSpace(NetworkStatus?.FinalityMode) ? "unknown" : NetworkStatus.FinalityMode;
     private string ConsensusEngineLabel => string.IsNullOrWhiteSpace(NetworkStatus?.ConsensusEngine) ? "unknown" : NetworkStatus.ConsensusEngine;
-    private string PoCLabel => NetworkStatus?.ProofOfContributionValidationEnabled == true ? "enabled" : "disabled";
-    private string LocalRaftLabel => NetworkStatus == null
+    private string RaftNodeLabel => NetworkStatus == null
         ? "unknown"
-        : NetworkStatus.LocalRaftRequested
-            ? NetworkStatus.LocalRaftConfigured ? "configured" : "missing configuration"
-            : "not local member";
+        : NetworkStatus.RunsRaft
+            ? NetworkStatus.RaftConfigured ? "configured" : "missing configuration"
+            : "not a Raft member";
     private string RaftTransportLabel => string.IsNullOrWhiteSpace(NetworkStatus?.RaftTransport) ? "Tcp" : NetworkStatus.RaftTransport;
     private string RaftEndpointLabel => string.IsNullOrWhiteSpace(NetworkStatus?.RaftPublicEndPoint) ? "none" : NetworkStatus.RaftPublicEndPoint;
     private string EdgeSyncStateLabel => NetworkStatus?.EdgeSync.Enabled == true ? NetworkStatus.EdgeSync.State : "not running";

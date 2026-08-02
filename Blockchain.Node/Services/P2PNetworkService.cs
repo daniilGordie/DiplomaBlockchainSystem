@@ -12,8 +12,6 @@ namespace Blockchain.Node.Services
 {
     public class P2PNetworkService
     {
-        public const string NodeSyncUser = "__P2P_SYNC__";
-
         private readonly ConcurrentDictionary<string, bool> _peers = new();
         private readonly ConcurrentDictionary<string, GrpcChannel> _channels = new();
         private readonly ILogger<P2PNetworkService> _logger;
@@ -31,10 +29,6 @@ namespace Blockchain.Node.Services
             _options = options.Value;
             _irohSidecarClient = irohSidecarClient;
             _nodeIdentity = nodeIdentity;
-            if (string.IsNullOrWhiteSpace(_options.SyncToken))
-            {
-                _logger.LogWarning("[P2P] Sync token is not configured. Secure chain sync reads from peers will be rejected.");
-            }
         }
 
         public void AddPeer(string url)
@@ -68,11 +62,6 @@ namespace Blockchain.Node.Services
             {
                 channel.Dispose();
             }
-        }
-
-        public List<string> GetPeers()
-        {
-            return new List<string>(_peers.Keys);
         }
 
         public async Task<StatusReply> RegisterWithBootstrapAsync(string bootstrapUrl)
@@ -133,110 +122,10 @@ namespace Blockchain.Node.Services
                 .ToList();
         }
 
-        public async Task BroadcastBlockAsync(Core.Block block)
-        {
-            if (_peers.IsEmpty) return;
-
-            var blockModel = ToBlockModel(block);
-            var irohPeers = _peers.Keys
-                .Where(IrohSidecarClient.IsIrohPeerUrl)
-                .ToArray();
-            var grpcPeers = _peers.Keys
-                .Where(peerUrl => !IrohSidecarClient.IsIrohPeerUrl(peerUrl))
-                .ToArray();
-
-            var tasks = grpcPeers.Select(peerUrl => BroadcastToPeerAsync(peerUrl, blockModel)).ToList();
-            if (irohPeers.Length > 0)
-            {
-                tasks.Add(_irohSidecarClient.BroadcastBlockAsync(irohPeers, block));
-            }
-
-            await Task.WhenAll(tasks);
-        }
-
-        public async Task<List<BlockModel>> FetchChainAsync(string peerUrl, string channelId)
-        {
-            if (IrohSidecarClient.IsIrohPeerUrl(peerUrl))
-            {
-                return (await _irohSidecarClient.FetchChainAsync(peerUrl, channelId)).ToList();
-            }
-
-            var client = CreateClient(peerUrl);
-            var blocks = new List<BlockModel>();
-            int afterIndex = -1;
-            const int pageSize = 500;
-
-            while (true)
-            {
-                var response = await client.GetChainAsync(new ChainRequest
-                {
-                    Count = pageSize,
-                    ChannelId = string.IsNullOrWhiteSpace(channelId) ? "System" : channelId,
-                    UserName = NodeSyncUser,
-                    SyncToken = _options.SyncToken,
-                    AfterIndex = afterIndex
-                });
-
-                if (response.Blocks.Count == 0)
-                {
-                    break;
-                }
-
-                blocks.AddRange(response.Blocks);
-                afterIndex = response.Blocks.Max(block => block.Index);
-
-                if (response.Blocks.Count < pageSize)
-                {
-                    break;
-                }
-            }
-
-            return blocks;
-        }
-
-        public async Task<List<string>> FetchKnownChannelsAsync(string peerUrl)
-        {
-            if (IrohSidecarClient.IsIrohPeerUrl(peerUrl))
-            {
-                return (await _irohSidecarClient.FetchKnownChannelsAsync(peerUrl)).ToList();
-            }
-
-            var client = CreateClient(peerUrl);
-            var response = await client.GetKnownChannelsAsync(new EmptyRequest());
-
-            return response.ChannelIds
-                .Where(channel => !string.IsNullOrWhiteSpace(channel))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
         public async Task<StatusReply> SubmitBlockAsync(string peerUrl, BlockModel block)
         {
             var client = CreateClient(peerUrl);
             return await client.ReceiveBlockAsync(block);
-        }
-
-        private async Task BroadcastToPeerAsync(string peerUrl, BlockModel block)
-        {
-            try
-            {
-                var client = CreateClient(peerUrl);
-                var response = await client.BroadcastBlockAsync(block);
-                if (response.Success)
-                {
-                    _logger.LogInformation("[P2P] Broadcasted block {BlockHash} ({ChannelId}#{Index}) to {PeerUrl}.",
-                        block.Hash, block.ChannelId, block.Index, peerUrl);
-                }
-                else
-                {
-                    _logger.LogWarning("[P2P] Peer {PeerUrl} rejected block {BlockHash}: {Message}",
-                        peerUrl, block.Hash, response.Message);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("[P2P] Failed to reach peer {PeerUrl}: {Message}", peerUrl, ex.Message);
-            }
         }
 
         private BlockchainService.BlockchainServiceClient CreateClient(string peerUrl)
@@ -265,21 +154,5 @@ namespace Blockchain.Node.Services
                 && string.Equals(publicUrl, P2POptions.NormalizeUrl(peerUrl), StringComparison.OrdinalIgnoreCase);
         }
 
-        private static BlockModel ToBlockModel(Core.Block block)
-        {
-            return new BlockModel
-            {
-                Index = block.Index,
-                Data = block.Data,
-                PreviousHash = block.PreviousHash,
-                Hash = block.Hash,
-                Timestamp = block.Timestamp.ToString("O"),
-                TimestampUnixSeconds = block.TimestampUnixSeconds,
-                ValidatorPublicKey = block.ValidatorPublicKey ?? "",
-                Signature = block.Signature ?? "",
-                Nonce = block.Nonce,
-                ChannelId = string.IsNullOrWhiteSpace(block.ChannelId) ? "System" : block.ChannelId
-            };
-        }
     }
 }

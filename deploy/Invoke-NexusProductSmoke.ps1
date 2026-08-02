@@ -320,6 +320,7 @@ function Invoke-IrohRaftSmoke {
             --verify-urls "http://localhost:7452,http://localhost:7453,http://localhost:7454" `
             --project-id "IrohSmoke_$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))" `
             --user "IrohSmokeUser" `
+            --timeout-seconds $TimeoutSeconds `
             --duplicate-check | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Iroh Raft signed intent commit failed." }
     }
@@ -438,6 +439,7 @@ try {
             --verify-urls "http://localhost:7442,http://localhost:7443" `
             --project-id "ProductSmoke_$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))" `
             --user "ProductSmokeUser" `
+            --timeout-seconds $TimeoutSeconds `
             --duplicate-check | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Signed intent duplicate-check failed." }
     }
@@ -511,10 +513,10 @@ try {
 catch {
     Write-Host ""
     Write-Host "Nexus product smoke failed: $($_.Exception.Message)"
-    docker compose -f $composeFile logs --tail=160 | Out-File -FilePath (Join-Path $dataRoot "docker-smoke.log") -Encoding utf8
+    $failureComposeFile = if ($RaftTransport -eq "Iroh") { $irohComposeFile } else { $composeFile }
+    docker compose -f $failureComposeFile logs --tail=160 | Out-File -FilePath (Join-Path $dataRoot "docker-smoke.log") -Encoding utf8
     if (-not $KeepContainersOnFailure) {
-        docker compose -f $composeFile down --remove-orphans | Out-Host
-        docker compose -f $irohComposeFile down --remove-orphans | Out-Host
+        docker compose -f $failureComposeFile down --remove-orphans | Out-Host
     }
     $env:RAFT_SMOKE_DATA_ROOT = $previousRaftSmokeDataRoot
     $env:IROH_RAFT_SMOKE_DATA_ROOT = $previousIrohRaftSmokeDataRoot

@@ -135,4 +135,4 @@ Expected product behavior:
 - Edge proposal forwarding tries approved Iroh peers first, then falls back to outgoing gRPC `ReceiveBlock` calls to configured bootstrap/consensus peers.
 - Bootstrap/Consensus nodes using Raft must show valid Raft node id and public endpoint.
 - Bootstrap nodes may start with no remote Raft peers; diagnostics should show a single-member warning, not an error.
-- `CONSENSUS_REQUIRE_PROOF_OF_WORK` should be `false` for product network profiles.
+- Consensus mode is role-derived and cannot be overridden: shared-network roles use PoC + DotNext Raft.

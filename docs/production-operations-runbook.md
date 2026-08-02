@@ -170,6 +170,6 @@ UPDATE_MANIFEST_URL=https://updates.example.com/nexus/update-manifest.json
 
 ## Smoke Tests
 
-Локальний Docker-сценарій описаний у `docs/docker-p2p-smoke-runbook.md`.
+Локальні профілі та перевірки описані у `docs/nexus-install-profiles.md`.
 
 Сценарій запуску двох фізичних машин описаний у `docs/two-machine-install-runbook.md`.

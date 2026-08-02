@@ -47,7 +47,7 @@ public class GetProjectAnalyticsUseCaseTests
         var blocks = new[]
         {
             CreateBlock(0, "hash-0", "0", "{}"),
-            CreateBlock(1, "bad-hash", "wrong-parent", "{}")
+            CreateBlock(1, "bad-hash", "wrong-parent", "{}") with { FinalityMode = "", RaftLogIndex = null }
         };
         var useCase = new GetProjectAnalyticsUseCase(
             new FakeAnalyticsReader(blocks, EmptyState()),
@@ -69,7 +69,9 @@ public class GetProjectAnalyticsUseCaseTests
             "validator",
             "signature",
             0,
-            "ProjectA");
+            "ProjectA",
+            FinalityMode: index > 0 ? "Raft" : string.Empty,
+            RaftLogIndex: index > 0 ? index : null);
     }
 
     private static ProjectAnalyticsState EmptyState()
@@ -99,7 +101,6 @@ public class GetProjectAnalyticsUseCaseTests
 
         public bool HasValidSignature(BlockSnapshot block) => true;
 
-        public bool HasValidProofOfWork(BlockSnapshot block) => true;
     }
 
     private sealed class InvalidBadHashVerifier : IBlockAuditVerifier
@@ -108,6 +109,5 @@ public class GetProjectAnalyticsUseCaseTests
 
         public bool HasValidSignature(BlockSnapshot block) => block.Hash != "bad-hash";
 
-        public bool HasValidProofOfWork(BlockSnapshot block) => block.Hash != "bad-hash";
     }
 }

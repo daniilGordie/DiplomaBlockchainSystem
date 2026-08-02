@@ -24,17 +24,12 @@ services:
       OraclePublicKey: ${ORACLE_PUBLIC_KEY}
       OraclePrivateKeyPassword: ${ORACLE_PRIVATE_KEY_PASSWORD}
       OracleKeyPath: ${ORACLE_KEY_PATH:-/data/oracle_key.dat}
-      Consensus__EnableProofOfContributionValidation: ${CONSENSUS_ENABLE_POC:-false}
-      Consensus__RequireProofOfWork: ${CONSENSUS_REQUIRE_PROOF_OF_WORK:-false}
-      Consensus__AcceptP2PBlocksAsFinal: ${CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL:-false}
-      Consensus__FinalityMode: ${CONSENSUS_FINALITY_MODE:-Immediate}
       Consensus__ProducerKeyPath: ${CONSENSUS_PRODUCER_KEY_PATH:-}
       Consensus__ProducerPrivateKeyPassword: ${CONSENSUS_PRODUCER_KEY_PASSWORD:-}
       P2P__NodeRole: Full
       P2P__NodeId: ${P2P_NODE_ID:-}
       P2P__PublicUrl: ""
       P2P__BootstrapPeers__0: ${P2P_BOOTSTRAP_GRPC_URL:-}
-      P2P__SyncToken: ${P2P_SYNC_TOKEN}
       P2P__RegistrationToken: ${P2P_REGISTRATION_TOKEN:-}
       P2P__IdentityKeyPath: ${P2P_IDENTITY_KEY_PATH:-/data/node-identity.p256.key}
       P2P__DiscoveryIntervalSeconds: ${P2P_DISCOVERY_INTERVAL_SECONDS:-60}

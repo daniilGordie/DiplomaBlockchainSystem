@@ -15,7 +15,7 @@
                     <option value="QA">QA</option>
                     <option value="Observer">Observer</option>
                 </select>
-                <button class="btn btn-primary fw-semibold" @onclick="OnInviteMember" disabled="@(!CanManageMembers || IsMining)">Grant Access</button>
+                <button class="btn btn-primary fw-semibold" @onclick="OnInviteMember" disabled="@(!CanManageMembers || IsSubmitting)">Grant Access</button>
             </div>
             <div class="mt-2">
                 <input value="@NewMemberPublicKey"
@@ -48,7 +48,7 @@
     [Parameter] public string NewMemberRole { get; set; } = "Developer";
     [Parameter] public string NewMemberPublicKey { get; set; } = "";
     [Parameter] public string NewMemberPublicKeyFingerprint { get; set; } = "";
-    [Parameter] public bool IsMining { get; set; }
+    [Parameter] public bool IsSubmitting { get; set; }
     [Parameter] public bool IsLoggedIn { get; set; }
     [Parameter] public string CurrentUserRole { get; set; } = "None";
     [Parameter] public bool CanManageMembers { get; set; }

@@ -30,7 +30,7 @@ namespace Blockchain.Core.Contracts
 
                 if (evt.Type == "Mint")
                 {
-                    Console.WriteLine("[SmartContract] Minting rejected: Only Proof-of-Work events can mint NXP.");
+                    Console.WriteLine("[SmartContract] Minting rejected: Only verified contribution events can mint NXP.");
                     return false;
                 }
 

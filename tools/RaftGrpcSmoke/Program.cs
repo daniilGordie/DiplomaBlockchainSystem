@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using Blockchain.Core;
 using Blockchain.Core.Consensus;
-using Blockchain.Core.Constants;
 using Blockchain.Infrastructure.Persistence;
 using Blockchain.Node;
 using Blockchain.Node.Services;
@@ -16,7 +15,6 @@ const string DefaultProjectId = "RaftSmokeProject";
 const string DefaultUserName = "Alice";
 const string DefaultPassword = "local-raft-producer-password";
 const string DefaultDbPassword = "local-raft-db-password";
-const string DefaultSyncToken = "local-raft-sync-token";
 
 if (args.Length == 0)
 {
@@ -43,8 +41,6 @@ catch (Exception ex)
 
 static int Prepare(CliOptions options)
 {
-    NetworkParameters.RequireProofOfWork = false;
-
     string dataRoot = options.GetRequired("data-root");
     string projectId = options.Get("project-id", DefaultProjectId);
     string userName = options.Get("user", DefaultUserName);
@@ -82,18 +78,16 @@ static string[] GetNodeNames(CliOptions options) =>
 
 static async Task<int> SubmitAsync(CliOptions options)
 {
-    NetworkParameters.RequireProofOfWork = false;
-
     string dataRoot = options.GetRequired("data-root");
     string projectId = options.Get("project-id", DefaultProjectId);
     string userName = options.Get("user", DefaultUserName);
     string producerKeyPath = options.Get("producer-key-path", Path.Combine(dataRoot, "shared", "producer-key.dat"));
     string producerPassword = options.Get("producer-password", DefaultPassword);
     string dbPassword = options.Get("db-password", DefaultDbPassword);
-    string syncToken = options.Get("sync-token", DefaultSyncToken);
     string submitUrl = options.Get("submit-url", "http://localhost:7042");
     string[] verifyUrls = options.Get("verify-urls", "http://localhost:7042,http://localhost:7043")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    TimeSpan replicaTimeout = GetTimeout(options);
     bool duplicateCheck = bool.TryParse(options.Get("duplicate-check", "false"), out var parsedDuplicateCheck) && parsedDuplicateCheck;
 
     using var producerKey = LoadOrCreateProducerKey(producerKeyPath, producerPassword);
@@ -162,7 +156,7 @@ static async Task<int> SubmitAsync(CliOptions options)
         throw new InvalidOperationException("ReceiveBlock was rejected by all candidate nodes because no contacted node accepted Raft leadership.");
     }
 
-    await WaitForFollowersAsync(verifyUrls, projectId, syncToken, block.Hash);
+    await WaitForNetworkStatusHashAsync(verifyUrls, projectId, block.Hash, replicaTimeout);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         accepted = true,
@@ -178,13 +172,12 @@ static async Task<int> SubmitAsync(CliOptions options)
 
 static async Task<int> CreateProjectAsync(CliOptions options)
 {
-    NetworkParameters.RequireProofOfWork = false;
-
     string submitUrl = options.Get("submit-url", "http://localhost:7041");
     string projectId = options.Get("project-id", "SmokeProject_" + Guid.NewGuid().ToString("N")[..8]);
     string userName = options.Get("user", "SmokeUser");
     string[] verifyUrls = options.Get("verify-urls", submitUrl)
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    TimeSpan replicaTimeout = GetTimeout(options);
     bool duplicateCheck = bool.TryParse(options.Get("duplicate-check", "false"), out var parsedDuplicateCheck) && parsedDuplicateCheck;
 
     using var userKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -252,7 +245,7 @@ static async Task<int> CreateProjectAsync(CliOptions options)
         throw new InvalidOperationException("CreateProject signed intent was rejected by all candidate nodes because no contacted node accepted Raft leadership.");
     }
 
-    await WaitForNetworkStatusHashAsync(verifyUrls, "System", block.Hash);
+    await WaitForNetworkStatusHashAsync(verifyUrls, "System", block.Hash, replicaTimeout);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         accepted = true,
@@ -366,66 +359,31 @@ static async Task<SignedIntentSubmitResponse> SubmitSignedIntentAsync(
     return body;
 }
 
-static async Task WaitForFollowersAsync(string[] urls, string projectId, string syncToken, string expectedHash)
+static async Task WaitForNetworkStatusHashAsync(
+    string[] urls,
+    string channelId,
+    string expectedHash,
+    TimeSpan timeout)
 {
-    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+    using var timeoutSource = new CancellationTokenSource(timeout);
     var pending = new HashSet<string>(urls, StringComparer.OrdinalIgnoreCase);
 
-    while (pending.Count > 0 && !timeout.IsCancellationRequested)
-    {
-        foreach (string url in pending.ToArray())
-        {
-            var chain = await SendGrpcWebUnaryAsync(
-                url,
-                "GetChain",
-                new ChainRequest
-            {
-                ChannelId = projectId,
-                Count = 20,
-                UserName = P2PNetworkService.NodeSyncUser,
-                SyncToken = syncToken
-            },
-                () => new ChainResponse());
-
-            if (chain.Blocks.Any(block => string.Equals(block.Hash, expectedHash, StringComparison.Ordinal)))
-            {
-                pending.Remove(url);
-            }
-        }
-
-        if (pending.Count > 0)
-        {
-            await Task.Delay(1000, timeout.Token).ContinueWith(_ => { });
-        }
-    }
-
-    if (pending.Count > 0)
-    {
-        throw new InvalidOperationException($"Committed block did not appear on: {string.Join(", ", pending)}");
-    }
-}
-
-static async Task WaitForNetworkStatusHashAsync(string[] urls, string channelId, string expectedHash)
-{
-    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-    var pending = new HashSet<string>(urls, StringComparer.OrdinalIgnoreCase);
-
-    while (pending.Count > 0 && !timeout.IsCancellationRequested)
+    while (pending.Count > 0 && !timeoutSource.IsCancellationRequested)
     {
         foreach (string url in pending.ToArray())
         {
             try
             {
                 using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-                using var response = await httpClient.GetAsync($"{url.TrimEnd('/')}/api/network/status", timeout.Token);
+                using var response = await httpClient.GetAsync($"{url.TrimEnd('/')}/api/network/status", timeoutSource.Token);
                 response.EnsureSuccessStatusCode();
-                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeoutSource.Token));
                 if (TryFindChannelHash(json.RootElement, channelId, expectedHash))
                 {
                     pending.Remove(url);
                 }
             }
-            catch when (!timeout.IsCancellationRequested)
+            catch when (!timeoutSource.IsCancellationRequested)
             {
                 // Keep polling until the smoke timeout expires.
             }
@@ -433,7 +391,7 @@ static async Task WaitForNetworkStatusHashAsync(string[] urls, string channelId,
 
         if (pending.Count > 0)
         {
-            await Task.Delay(1000, timeout.Token).ContinueWith(_ => { });
+            await Task.Delay(1000, timeoutSource.Token).ContinueWith(_ => { });
         }
     }
 
@@ -441,6 +399,17 @@ static async Task WaitForNetworkStatusHashAsync(string[] urls, string channelId,
     {
         throw new InvalidOperationException($"Committed block {expectedHash} did not appear in network status on: {string.Join(", ", pending)}");
     }
+}
+
+static TimeSpan GetTimeout(CliOptions options)
+{
+    string value = options.Get("timeout-seconds", "60");
+    if (!int.TryParse(value, out int seconds) || seconds <= 0)
+    {
+        throw new InvalidOperationException("--timeout-seconds must be a positive integer.");
+    }
+
+    return TimeSpan.FromSeconds(Math.Min(seconds, 3600));
 }
 
 static bool TryFindChannelHash(JsonElement root, string channelId, string expectedHash)
@@ -633,7 +602,7 @@ static Block CreateSignedBlock(
         Encoding.UTF8.GetBytes(signableData),
         HashAlgorithmName.SHA256,
         DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
-    new BlockMiner().Mine(block);
+    BlockchainManager.FinalizeBlock(block);
     return block;
 }
 

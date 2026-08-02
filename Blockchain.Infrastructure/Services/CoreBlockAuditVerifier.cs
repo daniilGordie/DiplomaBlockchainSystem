@@ -1,6 +1,5 @@
 using Blockchain.Application.Analytics;
 using Blockchain.Core;
-using Blockchain.Core.Constants;
 
 namespace Blockchain.Infrastructure.Services;
 
@@ -15,16 +14,6 @@ public sealed class CoreBlockAuditVerifier : IBlockAuditVerifier
     public bool HasValidSignature(BlockSnapshot block)
     {
         return ToCoreBlock(block).VerifySignature();
-    }
-
-    public bool HasValidProofOfWork(BlockSnapshot block)
-    {
-        if (!NetworkParameters.RequireProofOfWork)
-        {
-            return true;
-        }
-
-        return block.Hash.StartsWith(NetworkParameters.TargetPrefix, StringComparison.Ordinal);
     }
 
     private static Block ToCoreBlock(BlockSnapshot block)

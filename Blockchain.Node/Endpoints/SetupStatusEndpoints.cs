@@ -30,7 +30,6 @@ public static class SetupStatusEndpoints
                 options.Role.ToString(),
                 options.NormalizedPublicUrl,
                 options.NormalizedBootstrapPeers.ToArray(),
-                !string.IsNullOrWhiteSpace(options.SyncToken),
                 !string.IsNullOrWhiteSpace(options.EffectiveIdentityKeyPath),
                 Fingerprint(nodeIdentity.PublicKey),
                 options.AllowRegistrationTokenFallback,
@@ -51,19 +50,17 @@ public static class SetupStatusEndpoints
             IConfiguration configuration,
             IOptions<NexusNodeOptions> node,
             IOptions<P2POptions> p2p,
-            IOptions<ConsensusOptions> consensus,
             IOptions<RaftOptions> raft,
             NodeIdentity nodeIdentity,
             IrohSidecarClient irohSidecar) =>
         {
             var nodeValue = node.Value;
             var p2pValue = p2p.Value;
-            var consensusValue = consensus.Value;
             var raftValue = raft.Value;
             var irohStatus = p2pValue.Iroh.Enabled
                 ? await irohSidecar.GetStatusAsync()
                 : null;
-            var diagnostics = BuildNodeDiagnostics(configuration, nodeValue, p2pValue, consensusValue, raftValue);
+            var diagnostics = BuildNodeDiagnostics(configuration, nodeValue, p2pValue, raftValue);
 
             return Results.Json(new NodeStatusResponse(
                 nodeValue.EffectiveRole.ToString(),
@@ -83,12 +80,9 @@ public static class SetupStatusEndpoints
                 irohStatus?.ConnectionPath ?? string.Empty,
                 irohStatus?.TransportMode ?? string.Empty,
                 irohStatus?.DirectAddresses?.Length ?? 0,
-                consensusValue.FinalityMode,
-                ConsensusConfigurationPolicy.GetEngineName(nodeValue),
-                consensusValue.EnableProofOfContributionValidation,
-                consensusValue.RequireProofOfWork,
-                consensusValue.AcceptP2PBlocksAsFinal,
-                string.Equals(consensusValue.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase) && nodeValue.IsConsensusMember,
+                ConsensusPolicy.GetFinalityMode(nodeValue),
+                ConsensusPolicy.GetEngineName(nodeValue),
+                nodeValue.IsConsensusMember,
                 raftValue.Transport,
                 raftValue.HasMinimumConfiguration,
                 raftValue.NodeId,
@@ -102,7 +96,6 @@ public static class SetupStatusEndpoints
             IConfiguration configuration,
             IOptions<NexusNodeOptions> node,
             IOptions<P2POptions> p2p,
-            IOptions<ConsensusOptions> consensus,
             IOptions<RaftOptions> raft,
             NodeIdentity nodeIdentity,
             IrohSidecarClient irohSidecar,
@@ -113,12 +106,11 @@ public static class SetupStatusEndpoints
         {
             var nodeValue = node.Value;
             var p2pValue = p2p.Value;
-            var consensusValue = consensus.Value;
             var raftValue = raft.Value;
             var irohStatus = p2pValue.Iroh.Enabled
                 ? await irohSidecar.GetStatusAsync()
                 : null;
-            var diagnostics = BuildNodeDiagnostics(configuration, nodeValue, p2pValue, consensusValue, raftValue);
+            var diagnostics = BuildNodeDiagnostics(configuration, nodeValue, p2pValue, raftValue);
             var peers = peerStore.LoadAllPeerInfos()
                 .Select(peer => new NetworkPeerResponse(
                     peer.Url,
@@ -175,10 +167,9 @@ public static class SetupStatusEndpoints
                 irohStatus?.DirectAddresses?.Length ?? 0,
                 p2pValue.NormalizedBootstrapPeers.ToArray(),
                 peers,
-                consensusValue.FinalityMode,
-                ConsensusConfigurationPolicy.GetEngineName(nodeValue),
-                consensusValue.EnableProofOfContributionValidation,
-                string.Equals(consensusValue.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase) && nodeValue.IsConsensusMember,
+                ConsensusPolicy.GetFinalityMode(nodeValue),
+                ConsensusPolicy.GetEngineName(nodeValue),
+                nodeValue.IsConsensusMember,
                 raftValue.Transport,
                 raftValue.HasMinimumConfiguration,
                 raftValue.NodeId,
@@ -519,10 +510,9 @@ public static class SetupStatusEndpoints
             IConfiguration configuration,
             IOptions<NexusNodeOptions> node,
             IOptions<P2POptions> p2p,
-            IOptions<ConsensusOptions> consensus,
             IOptions<RaftOptions> raft) =>
         {
-            var diagnostics = BuildNodeDiagnostics(configuration, node.Value, p2p.Value, consensus.Value, raft.Value);
+            var diagnostics = BuildNodeDiagnostics(configuration, node.Value, p2p.Value, raft.Value);
             return Results.Json(new SetupDiagnosticsResponse(
                 diagnostics.Errors.Count == 0,
                 diagnostics.Errors,
@@ -546,7 +536,6 @@ public static class SetupStatusEndpoints
             {
                 new("database-path", !string.IsNullOrWhiteSpace(dbPath), dbPath),
                 new("node-identity-path", !string.IsNullOrWhiteSpace(options.EffectiveIdentityKeyPath), options.EffectiveIdentityKeyPath),
-                new("sync-token", !string.IsNullOrWhiteSpace(options.SyncToken), "configured=" + !string.IsNullOrWhiteSpace(options.SyncToken)),
                 new("signed-registration", !options.AllowRegistrationTokenFallback, "fallback=" + options.AllowRegistrationTokenFallback),
                 new("bootstrap-peers", options.Role == P2PNodeRole.Bootstrap || options.NormalizedBootstrapPeers.Count > 0, string.Join(",", options.NormalizedBootstrapPeers)),
             };
@@ -660,18 +649,14 @@ public static class SetupStatusEndpoints
         IConfiguration configuration,
         NexusNodeOptions node,
         P2POptions p2p,
-        ConsensusOptions consensus,
         RaftOptions raft)
     {
         var errors = new List<string>();
         var warnings = new List<string>();
-        bool raftFinality = string.Equals(consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase);
-
         AddValueDiagnostics(configuration, "Node:Role", errors, warnings);
         AddValueDiagnostics(configuration, "NodeDbPassword", errors, warnings);
         AddValueDiagnostics(configuration, "NodeAdminToken", errors, warnings);
         AddValueDiagnostics(configuration, "WebhookSecret", errors, warnings);
-        AddValueDiagnostics(configuration, "Consensus:FinalityMode", errors, warnings);
         AddValueDiagnostics(configuration, "Consensus:ProducerPrivateKeyPassword", errors, warnings);
         AddValueDiagnostics(configuration, "OraclePrivateKeyPassword", errors, warnings);
         AddValueDiagnostics(configuration, "Network:Id", errors, warnings);
@@ -680,15 +665,12 @@ public static class SetupStatusEndpoints
         AddValueDiagnostics(configuration, "Network:BootstrapIrohUrl", errors, warnings);
         AddValueDiagnostics(configuration, "Network:TrustedBootstrapNodeId", errors, warnings);
         AddValueDiagnostics(configuration, "Network:TrustedBootstrapFingerprint", errors, warnings);
-        AddValueDiagnostics(configuration, "P2P:SyncToken", errors, warnings);
         AddValueDiagnostics(configuration, "P2P:Iroh:LocalApiToken", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:NodeId", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:Transport", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:PublicEndPoint", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:Peers:0:Id", errors, warnings);
         AddValueDiagnostics(configuration, "Raft:Peers:0:EndPoint", errors, warnings);
-        errors.AddRange(ConsensusConfigurationPolicy.Validate(consensus, node));
-
         if (node.IsEdge && !p2p.Iroh.Enabled)
         {
             errors.Add("Node:Role=Edge requires P2P:Iroh:Enabled=true.");
@@ -704,22 +686,22 @@ public static class SetupStatusEndpoints
             warnings.Add("Edge node has no trusted bootstrap fingerprint. Use a connection invite from the bootstrap node.");
         }
 
-        if (node.IsEdge && raftFinality && raft.HasMinimumConfiguration)
+        if (node.IsEdge && raft.HasMinimumConfiguration)
         {
             warnings.Add("Edge nodes ignore local Raft configuration. Use Consensus or Bootstrap role for Raft membership.");
         }
 
-        if (node.IsConsensusMember && raftFinality && !raft.HasMinimumConfiguration)
+        if (node.IsConsensusMember && !raft.HasMinimumConfiguration)
         {
-            errors.Add("Consensus/Bootstrap nodes with Consensus:FinalityMode=Raft require Raft:NodeId and Raft:PublicEndPoint.");
+            errors.Add("Consensus/Bootstrap nodes require Raft:NodeId and a transport endpoint.");
         }
 
-        if (node.IsConsensusMember && raftFinality && !raft.UsesSupportedTransport)
+        if (node.IsConsensusMember && !raft.UsesSupportedTransport)
         {
             errors.Add($"Raft:Transport={raft.Transport} is not supported. Use Tcp or Iroh.");
         }
 
-        if (node.IsConsensusMember && raftFinality && raft.UsesIrohTransport)
+        if (node.IsConsensusMember && raft.UsesIrohTransport)
         {
             if (!p2p.Iroh.Enabled)
             {
@@ -737,7 +719,7 @@ public static class SetupStatusEndpoints
             }
         }
 
-        if (node.IsConsensusMember && raftFinality && raft.HasMinimumConfiguration && !raft.HasRemotePeers)
+        if (node.IsConsensusMember && raft.HasMinimumConfiguration && !raft.HasRemotePeers)
         {
             warnings.Add("Raft is configured as a single-member cluster. Blocks can be finalized, but add consensus peers for fault tolerance.");
         }
@@ -825,14 +807,9 @@ public static class SetupStatusEndpoints
             "ORACLE_PUBLIC_KEY=" + (string.IsNullOrWhiteSpace(request.OraclePublicKey) ? "auto" : request.OraclePublicKey.Trim()),
             "ORACLE_PRIVATE_KEY_PASSWORD=" + NewSecret(),
             "ORACLE_KEY_PATH=/data/oracle_key.dat",
-            "CONSENSUS_ENABLE_POC=" + (mode == "local" ? "false" : "true"),
-            "CONSENSUS_REQUIRE_PROOF_OF_WORK=false",
-            "CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL=false",
-            "CONSENSUS_FINALITY_MODE=" + (mode == "local" ? ConsensusFinalityModes.Immediate : ConsensusFinalityModes.Raft),
             "CONSENSUS_PRODUCER_KEY_PATH=/data/producer-key.dat",
             "CONSENSUS_PRODUCER_KEY_PASSWORD=" + NewSecret(),
             "P2P_NODE_ID=" + nodeId,
-            "P2P_SYNC_TOKEN=" + NewSecret(),
             "P2P_REGISTRATION_TOKEN=",
             "P2P_ALLOW_REGISTRATION_TOKEN_FALLBACK=false",
             "P2P_IDENTITY_KEY_PATH=/data/node-identity.p256.key",
@@ -1149,7 +1126,6 @@ public sealed record SetupStatusResponse(
     string Role,
     string PublicUrl,
     string[] BootstrapPeers,
-    bool SyncTokenConfigured,
     bool NodeIdentityConfigured,
     string NodeIdentityFingerprint,
     bool RegistrationTokenFallbackEnabled,
@@ -1185,12 +1161,9 @@ public sealed record NodeStatusResponse(
     int IrohDirectAddressCount,
     string FinalityMode,
     string ConsensusEngine,
-    bool ProofOfContributionValidationEnabled,
-    bool RequireProofOfWork,
-    bool AcceptP2PBlocksAsFinal,
-    bool LocalRaftRequested,
+    bool RunsRaft,
     string RaftTransport,
-    bool LocalRaftConfigured,
+    bool RaftConfigured,
     string RaftNodeId,
     string RaftPublicEndPoint,
     IReadOnlyList<NodeStatusRaftPeer> RaftPeers,
@@ -1219,10 +1192,9 @@ public sealed record NetworkStatusResponse(
     IReadOnlyList<NetworkPeerResponse> KnownPeers,
     string FinalityMode,
     string ConsensusEngine,
-    bool ProofOfContributionValidationEnabled,
-    bool LocalRaftRequested,
+    bool RunsRaft,
     string RaftTransport,
-    bool LocalRaftConfigured,
+    bool RaftConfigured,
     string RaftNodeId,
     string RaftPublicEndPoint,
     IReadOnlyList<NetworkChannelStatusResponse> Channels,

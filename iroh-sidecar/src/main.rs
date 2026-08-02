@@ -1,11 +1,8 @@
-use std::{
-    collections::VecDeque, fs, net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc,
-    time::Duration,
-};
+use std::{fs, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -22,7 +19,6 @@ use serde_json::{json, Value};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::Mutex,
 };
 use tracing::{info, warn};
 
@@ -65,7 +61,6 @@ struct AppState {
     endpoint: Endpoint,
     node_url: String,
     local_api_token: String,
-    inbound_blocks: Arc<Mutex<VecDeque<Value>>>,
     http: reqwest::Client,
     raft_node_listen: Option<SocketAddr>,
     transport_mode: IrohTransportMode,
@@ -74,13 +69,6 @@ struct AppState {
 #[derive(Debug, Deserialize)]
 struct PeerRequest {
     peer: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChainRequest {
-    peer: String,
-    #[serde(rename = "channelId")]
-    channel_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,17 +88,6 @@ struct SubmitBlockRequest {
     peer: String,
     block: Value,
     auth: Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct BroadcastRequest {
-    peers: Vec<String>,
-    block: Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct EventsQuery {
-    limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,11 +146,6 @@ impl IrohTransportMode {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct EventsResponse {
-    blocks: Vec<Value>,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -215,7 +187,6 @@ async fn main() -> Result<()> {
         endpoint: endpoint.clone(),
         node_url: args.node_url.trim_end_matches('/').to_string(),
         local_api_token: local_api_token.to_string(),
-        inbound_blocks: Arc::new(Mutex::new(VecDeque::new())),
         raft_node_listen: args.raft_node_listen,
         transport_mode,
         http: reqwest::Client::builder()
@@ -261,10 +232,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/status", get(status))
-        .route("/events", get(events))
-        .route("/broadcast-block", post(broadcast_block))
         .route("/known-channels", post(known_channels))
-        .route("/chain", post(chain))
         .route("/committed-since", post(committed_since))
         .route("/submit-block", post(submit_block))
         .with_state(state);
@@ -433,48 +401,6 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     })
 }
 
-async fn events(
-    State(state): State<AppState>,
-    Query(query): Query<EventsQuery>,
-) -> Json<EventsResponse> {
-    let limit = query.limit.unwrap_or(100).clamp(1, 500);
-    let mut queue = state.inbound_blocks.lock().await;
-    let mut blocks = Vec::new();
-    for _ in 0..limit {
-        match queue.pop_front() {
-            Some(block) => blocks.push(block),
-            None => break,
-        }
-    }
-
-    Json(EventsResponse { blocks })
-}
-
-async fn broadcast_block(
-    State(state): State<AppState>,
-    Json(request): Json<BroadcastRequest>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let message = WireMessage {
-        kind: "BroadcastBlock".to_string(),
-        payload: request.block,
-    };
-
-    let mut accepted = 0usize;
-    let mut failures = Vec::new();
-    for peer in request.peers {
-        match send_wire_message(&state, &peer, &message).await {
-            Ok(response) if response.success => accepted += 1,
-            Ok(response) => failures.push(format!("{peer}: {}", response.message)),
-            Err(err) => failures.push(format!("{peer}: {err:#}")),
-        }
-    }
-
-    Ok(Json(json!({
-        "accepted": accepted,
-        "failures": failures,
-    })))
-}
-
 async fn known_channels(
     State(state): State<AppState>,
     Json(request): Json<PeerRequest>,
@@ -485,28 +411,6 @@ async fn known_channels(
         &WireMessage {
             kind: "KnownChannelsRequest".to_string(),
             payload: json!({}),
-        },
-    )
-    .await
-    .map_err(internal_error)?;
-
-    if response.success {
-        Ok(Json(response.payload))
-    } else {
-        Err((StatusCode::BAD_GATEWAY, response.message))
-    }
-}
-
-async fn chain(
-    State(state): State<AppState>,
-    Json(request): Json<ChainRequest>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let response = send_wire_message(
-        &state,
-        &request.peer,
-        &WireMessage {
-            kind: "ChainRequest".to_string(),
-            payload: json!({ "channelId": request.channel_id }),
         },
     )
     .await
@@ -587,14 +491,6 @@ async fn handle_iroh_connection(
 
 async fn handle_wire_message(state: AppState, message: WireMessage) -> WireResponse {
     match message.kind.as_str() {
-        "BroadcastBlock" => {
-            state.inbound_blocks.lock().await.push_back(message.payload);
-            WireResponse {
-                success: true,
-                message: "accepted".to_string(),
-                payload: json!({}),
-            }
-        }
         "KnownChannelsRequest" => match local_get(&state, "/api/p2p/iroh/known-channels").await {
             Ok(payload) => WireResponse {
                 success: true,
@@ -607,30 +503,6 @@ async fn handle_wire_message(state: AppState, message: WireMessage) -> WireRespo
                 payload: json!({}),
             },
         },
-        "ChainRequest" => {
-            let channel_id = message
-                .payload
-                .get("channelId")
-                .and_then(Value::as_str)
-                .unwrap_or("System");
-            match local_get(
-                &state,
-                &format!("/api/p2p/iroh/chain/{}", urlencoding::encode(channel_id)),
-            )
-            .await
-            {
-                Ok(payload) => WireResponse {
-                    success: true,
-                    message: "ok".to_string(),
-                    payload,
-                },
-                Err(err) => WireResponse {
-                    success: false,
-                    message: format!("{err:#}"),
-                    payload: json!({}),
-                },
-            }
-        }
         "CommittedSinceRequest" => {
             let channel_id = message
                 .payload

@@ -100,7 +100,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     private string unlockMessage = "";
     private bool isRestoreMode = false;
     private bool isUploading = false;
-    private bool isMining = false;
+    private bool isSubmitting;
     private bool isSyncing = false;
     private bool isBrowserQueueRetrying = false;
     private string workspaceSnapshotKey = "";
@@ -1136,7 +1136,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
     {
         try
         {
-            isMining = true;
+            isSubmitting = true;
             StateHasChanged();
 
             var result = await BlockAnchoringService.AnchorJsonStringAsync(payloadJson, targetChannel);
@@ -1159,7 +1159,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
             statusMessage = "Action queued locally. It will be submitted when this browser can reach the local node.";
             return false;
         }
-        finally { isMining = false; StateHasChanged(); }
+        finally { isSubmitting = false; StateHasChanged(); }
     }
 
     private static bool ShouldQueueBrowserOperation(string message) =>
@@ -1717,7 +1717,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         }
     }
 
-    private async Task HandleTaskSigningAndMining(TaskSigningRequest args)
+    private async Task HandleTaskSigningAndSubmit(TaskSigningRequest args)
     {
         try
         {
@@ -1746,7 +1746,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
 
             args.Event.Assignee = normalizedAssignee;
 
-            isMining = true;
+            isSubmitting = true;
             statusMessage = "Finalizing block (PoC)...";
             StateHasChanged();
 
@@ -1779,7 +1779,7 @@ public partial class BlockchainDashboard : ComponentBase, IAsyncDisposable
         }
         finally
         {
-            isMining = false;
+            isSubmitting = false;
             StateHasChanged();
         }
     }

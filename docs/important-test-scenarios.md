@@ -1,4 +1,4 @@
-# Important Test Scenarios (Section 4 Support)
+# Product Test Scenarios
 
 This file documents additional verification scenarios for the "Important" block:
 
@@ -35,7 +35,8 @@ Covers (non-exhaustive):
 - RBAC and identity spoofing rejection,
 - role assignment key-binding constraints,
 - replay-guard duplicate webhook suppression,
-- secure chain-adoption rejection on invalid contract replay.
+- rejection of blocks with invalid hashes, signatures, or channel bindings,
+- PoC proposal verification and DotNext Raft commit application.
 
 ## 3) Manual rate-limit abuse check
 
@@ -48,12 +49,16 @@ Expected:
 - short bursts are served,
 - sustained flooding receives `429 Too many requests`.
 
-## 4) Manual scalability check (prototype)
+## 4) Raft replication check
 
-1. Start two nodes with `P2P:SyncToken` configured.
+1. Start the maintained two-node Raft topology.
 2. Create high-frequency task/document updates in one project.
-3. Add the second node as peer through node bootstrap configuration or a server-side admin path with `NodeAdminToken`.
-4. Validate:
-   - project chain sync completes,
+3. Validate:
+   - every proposal reaches majority commit,
+   - both state machines reach the same applied index,
    - analytics block throughput is non-zero,
    - security audit remains chain-valid.
+
+```powershell
+deploy\Invoke-NexusProductSmoke.ps1 -RaftTransport Tcp
+```

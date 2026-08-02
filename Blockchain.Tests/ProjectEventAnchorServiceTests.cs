@@ -5,7 +5,6 @@ using Blockchain.Infrastructure.Persistence;
 using Blockchain.Node;
 using Blockchain.Node.Services;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Options;
 
 namespace Blockchain.Tests;
 
@@ -20,7 +19,7 @@ public sealed class ProjectEventAnchorServiceTests
         try
         {
             var database = new DatabaseManager(dbPath);
-            var manager = new BlockchainManager(database, database, database, database, new NoopReplayStoreFactory());
+            var manager = new BlockchainManager(database, database, database, database);
             using var aliceKey = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
             var alicePublicKey = Convert.ToBase64String(aliceKey.ExportSubjectPublicKeyInfo());
 
@@ -64,15 +63,9 @@ public sealed class ProjectEventAnchorServiceTests
                 manager,
                 oracle,
                 new ProducerIdentity(new ConfigurationBuilder().Build()),
-                Options.Create(new ConsensusOptions
-                {
-                    EnableProofOfContributionValidation = true,
-                    FinalityMode = ConsensusFinalityModes.Raft
-                }),
                 proposalFactory,
                 verifier,
-                new NoopFinalitySubmitter(),
-                null!);
+                new NoopFinalitySubmitter());
 
             var result = await service.AnchorAsync(
                 "ProjectA",
@@ -108,12 +101,6 @@ public sealed class ProjectEventAnchorServiceTests
         {
             return Task.FromResult(new BlockWriteResult(true, "noop", proposal.Block.ChannelId));
         }
-    }
-
-    private sealed class NoopReplayStoreFactory : IReplayStoreFactory
-    {
-        public IBlockchainStore CreateReplayStore() => throw new NotSupportedException();
-        public void CleanupReplayStore(IBlockchainStore replayStore) { }
     }
 
     private static void TryDelete(string path)

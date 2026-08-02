@@ -29,7 +29,7 @@
                      UserNameInput="@userNameInput"
                      IsRestoreMode="isRestoreMode"
                      RestoreMnemonic="@restoreMnemonic"
-                     IsMining="isMining"
+                     IsSubmitting="isSubmitting"
                      IsGenesisModeActive="isGenesisModeActive"
                      UserName="@MyKeyService.UserName"
                      PublicKey="@MyKeyService.PublicKey"
@@ -162,7 +162,7 @@
                          NewMemberRole="@newMemberRole"
                          NewMemberPublicKey="@newMemberPublicKey"
                          NewMemberPublicKeyFingerprint="@newMemberPublicKeyFingerprint"
-                         IsMining="isMining"
+                         IsSubmitting="isSubmitting"
                          CurrentUserRole="@CurrentUserRoleLabel"
                          CanManageMembers="CanManageMembers"
                          NewMemberNameChanged="OnNewMemberNameChanged"
@@ -178,7 +178,7 @@
                                CurrentUserName="@(MyKeyService.UserName ?? string.Empty)"
                                NewProposalTitle="@newProposalTitle"
                                NewProposalDescription="@newProposalDescription"
-                               IsMining="isMining"
+                               IsSubmitting="isSubmitting"
                                CanUseGovernance="CanCreateTask"
                                CanCreateTaskFromAccepted="CanCreateTask"
                                ImplementedProposalIds="implementedProposalIds"
@@ -194,7 +194,7 @@
             {
                 <DocumentsTab CurrentProjectId="@CurrentProjectId"
                               CanEdit="CanCreateTask"
-                              IsMining="isMining"
+                              IsSubmitting="isSubmitting"
                               Documents="documents"
                               Versions="documentVersions"
                               SelectedDocumentId="@selectedDocumentId"
@@ -292,14 +292,14 @@
         </div>
     }
 
-    @if (isMining)
+    @if (isSubmitting)
     {
         <div class="modal-backdrop-custom" style="z-index: 9999;">
             <div class="glass-card p-5 text-center">
                 <div class="spinner-border text-primary mb-4" style="width: 3rem; height: 3rem; border-width: 0.25em;" role="status"></div>
                 <h3 class="text-white fw-semibold mb-2">Anchoring state</h3>
                 <p class="text-muted font-monospace small mb-1">Validating Proof of Contribution event and block hash</p>
-                <p class="text-warning font-monospace small mb-0">Hash target: 000</p>
+                <p class="text-warning font-monospace small mb-0">Awaiting consensus finality</p>
             </div>
         </div>
     }
@@ -308,7 +308,7 @@
                 IsNewTask="isNewTask"
                 TaskModel="editingTask"
                 ProjectMembers="projectMembers"
-                OnSaveWithCredentials="HandleTaskSigningAndMining" />
+                OnSaveWithCredentials="HandleTaskSigningAndSubmit" />
 
     @if (viewingHistory != null)
     {

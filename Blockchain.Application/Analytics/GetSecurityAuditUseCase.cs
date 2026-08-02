@@ -1,7 +1,5 @@
 namespace Blockchain.Application.Analytics;
 
-using Blockchain.Core.Constants;
-
 public sealed class GetSecurityAuditUseCase
 {
     private readonly IProjectAnalyticsReader _reader;
@@ -26,7 +24,6 @@ public sealed class GetSecurityAuditUseCase
     {
         int invalidHashes = 0;
         int invalidSignatures = 0;
-        int invalidProofOfWork = 0;
         int brokenLinks = 0;
         int invalidFinalityMetadata = 0;
         var items = new List<SecurityAuditFinding>();
@@ -47,18 +44,12 @@ public sealed class GetSecurityAuditUseCase
                 items.Add(new SecurityAuditFinding("Critical", "ECDSA signature", $"Block #{current.Index} signature is invalid."));
             }
 
-            if (NetworkParameters.RequireProofOfWork && !verifier.HasValidProofOfWork(current))
-            {
-                invalidProofOfWork++;
-                items.Add(new SecurityAuditFinding("High", "Proof of work", $"Block #{current.Index} does not satisfy the target prefix."));
-            }
-            else if (!NetworkParameters.RequireProofOfWork && current.Index > 0 && string.IsNullOrWhiteSpace(current.FinalityMode))
+            if (current.Index > 0 && string.IsNullOrWhiteSpace(current.FinalityMode))
             {
                 invalidFinalityMetadata++;
                 items.Add(new SecurityAuditFinding("High", "Finality metadata", $"Block #{current.Index} is missing persisted PoC/Raft finality metadata."));
             }
-            else if (!NetworkParameters.RequireProofOfWork &&
-                     current.Index > 0 &&
+            else if (current.Index > 0 &&
                      string.Equals(current.FinalityMode, "Raft", StringComparison.OrdinalIgnoreCase) &&
                      !current.RaftLogIndex.HasValue)
             {
@@ -76,16 +67,12 @@ public sealed class GetSecurityAuditUseCase
 
         bool chainValid = invalidHashes == 0
             && invalidSignatures == 0
-            && invalidProofOfWork == 0
             && brokenLinks == 0
             && invalidFinalityMetadata == 0;
 
         if (chainValid)
         {
-            string consensusCheck = NetworkParameters.RequireProofOfWork
-                ? "proof-of-work"
-                : "PoC/Raft-ready consensus metadata";
-            items.Add(new SecurityAuditFinding("Info", "Audit result", $"All checked blocks passed hash, signature, {consensusCheck}, and linkage validation."));
+            items.Add(new SecurityAuditFinding("Info", "Audit result", "All checked blocks passed hash, signature, PoC/Raft finality, and linkage validation."));
         }
 
         return new SecurityAuditResult(
@@ -93,7 +80,6 @@ public sealed class GetSecurityAuditUseCase
             orderedBlocks.Count,
             invalidHashes,
             invalidSignatures,
-            invalidProofOfWork,
             brokenLinks,
             invalidFinalityMetadata,
             items);

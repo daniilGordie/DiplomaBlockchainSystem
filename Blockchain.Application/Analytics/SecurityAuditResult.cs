@@ -10,10 +10,9 @@ public sealed record SecurityAuditResult(
     int CheckedBlocks,
     int InvalidHashes,
     int InvalidSignatures,
-    int InvalidProofOfWork,
     int BrokenLinks,
     int InvalidFinalityMetadata,
     IReadOnlyList<SecurityAuditFinding> Items)
 {
-    public int FindingCount => InvalidHashes + InvalidSignatures + InvalidProofOfWork + BrokenLinks + InvalidFinalityMetadata;
+    public int FindingCount => InvalidHashes + InvalidSignatures + BrokenLinks + InvalidFinalityMetadata;
 }

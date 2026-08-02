@@ -56,7 +56,7 @@
             <div class="input-group input-group-sm dashboard-header__project-create">
                 <span class="input-group-text">New project</span>
                 <input value="@NewProjectName" @oninput="OnNewProjectNameInput" class="form-control" placeholder="Enter project name" aria-label="New project name" />
-                <button class="btn btn-primary fw-semibold" @onclick="OnCreateProject" disabled="@IsMining">Create</button>
+                <button class="btn btn-primary fw-semibold" @onclick="OnCreateProject" disabled="@IsSubmitting">Create</button>
             </div>
         </div>
     }
@@ -109,7 +109,7 @@
     [Parameter] public string UserNameInput { get; set; } = "";
     [Parameter] public bool IsRestoreMode { get; set; }
     [Parameter] public string RestoreMnemonic { get; set; } = "";
-    [Parameter] public bool IsMining { get; set; }
+    [Parameter] public bool IsSubmitting { get; set; }
     [Parameter] public bool IsGenesisModeActive { get; set; }
     [Parameter] public string UserName { get; set; } = "Guest";
     [Parameter] public string? PublicKey { get; set; }

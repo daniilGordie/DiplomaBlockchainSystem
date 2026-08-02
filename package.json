@@ -1,4 +1,6 @@
 {
+  "name": "nexus-blockchain",
+  "private": true,
   "scripts": {
     "e2e": "playwright test -c e2e/playwright.config.ts",
     "e2e:headed": "playwright test -c e2e/playwright.config.ts --headed",

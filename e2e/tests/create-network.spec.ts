@@ -34,8 +34,8 @@ test('create network through UI persists Iroh setup after restart', async ({ pag
     await expect(page.getByRole('button', { name: 'Copy invite' })).toBeVisible();
     const inviteText = await page.locator('textarea[readonly]').inputValue();
     const invite = JSON.parse(inviteText);
-    expect(invite.NetworkName).toBe(networkName);
-    expect(invite.SupportedRaftTransports).toContain('Iroh');
+    expect(invite.networkName).toBe(networkName);
+    expect(invite.supportedRaftTransports).toContain('Iroh');
 
     node = await restartNode(node);
     const state = await waitForJson(`${node.url}/api/setup/state`);

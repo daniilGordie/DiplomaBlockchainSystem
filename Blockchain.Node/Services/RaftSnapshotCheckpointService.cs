@@ -9,7 +9,6 @@ namespace Blockchain.Node.Services;
 public sealed class RaftSnapshotCheckpointService : BackgroundService
 {
     private readonly IServiceProvider _services;
-    private readonly ConsensusOptions _consensus;
     private readonly NexusNodeOptions _node;
     private readonly RaftOptions _raft;
     private readonly ILogger<RaftSnapshotCheckpointService> _logger;
@@ -17,13 +16,11 @@ public sealed class RaftSnapshotCheckpointService : BackgroundService
 
     public RaftSnapshotCheckpointService(
         IServiceProvider services,
-        IOptions<ConsensusOptions> consensus,
         IOptions<NexusNodeOptions> node,
         IOptions<RaftOptions> raft,
         ILogger<RaftSnapshotCheckpointService> logger)
     {
         _services = services;
-        _consensus = consensus.Value;
         _node = node.Value;
         _raft = raft.Value;
         _logger = logger;
@@ -32,8 +29,7 @@ public sealed class RaftSnapshotCheckpointService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_raft.Snapshot.Enabled ||
-            !_node.IsConsensusMember ||
-            !string.Equals(_consensus.FinalityMode, ConsensusFinalityModes.Raft, StringComparison.OrdinalIgnoreCase))
+            !_node.IsConsensusMember)
         {
             return;
         }

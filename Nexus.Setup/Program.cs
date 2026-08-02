@@ -77,7 +77,6 @@ SetValue(lines, "NODE_ADMIN_TOKEN", NewSecret());
 SetValue(lines, "WEBHOOK_SECRET", NewSecret());
 SetValue(lines, "ORACLE_PRIVATE_KEY_PASSWORD", NewSecret());
 SetValue(lines, "CONSENSUS_PRODUCER_KEY_PASSWORD", NewSecret());
-SetValue(lines, "P2P_SYNC_TOKEN", NewSecret());
 SetValue(lines, "P2P_REGISTRATION_TOKEN", string.Empty);
 SetValue(lines, "P2P_ALLOW_REGISTRATION_TOKEN_FALLBACK", "false");
 SetValue(lines, "NETWORK_ID", networkId);
@@ -226,7 +225,7 @@ static async Task<int> CheckNodeAsync(IReadOnlyDictionary<string, string?> optio
         Console.WriteLine($"Role: {GetString(root, "nodeRole")}");
         Console.WriteLine($"Network: {GetString(root, "networkId")}");
         string raftTransport = GetString(root, "raftTransport");
-        Console.WriteLine($"Consensus: {GetString(root, "finalityMode")}, local raft requested={GetBool(root, "localRaftRequested")}, raft transport={(string.IsNullOrWhiteSpace(raftTransport) ? "Tcp" : raftTransport)}");
+        Console.WriteLine($"Consensus: {GetString(root, "finalityMode")}, raft member={GetBool(root, "runsRaft")}, raft transport={(string.IsNullOrWhiteSpace(raftTransport) ? "Tcp" : raftTransport)}");
         Console.WriteLine($"Iroh: enabled={GetBool(root, "irohEnabled")}, healthy={GetBool(root, "irohSidecarHealthy")}");
         Console.WriteLine($"Peers: {GetArrayLength(root, "knownPeers")}");
         Console.WriteLine($"Channels: {GetArrayLength(root, "channels")}");
@@ -306,7 +305,6 @@ static int ValidateEnvFile(IReadOnlyDictionary<string, string?> options, string 
     var warnings = new List<string>(parseWarnings);
     string role = GetEnv(values, "NODE_ROLE", "Edge");
     bool localRole = IsRole(role, "Local");
-    string finality = GetEnv(values, "CONSENSUS_FINALITY_MODE", localRole ? "Immediate" : "Raft");
     var criticalSecretKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "NODE_DB_PASSWORD",
@@ -314,7 +312,6 @@ static int ValidateEnvFile(IReadOnlyDictionary<string, string?> options, string 
         "WEBHOOK_SECRET",
         "ORACLE_PRIVATE_KEY_PASSWORD",
         "CONSENSUS_PRODUCER_KEY_PASSWORD",
-        "P2P_SYNC_TOKEN",
         "IROH_LOCAL_API_TOKEN"
     };
 
@@ -324,7 +321,6 @@ static int ValidateEnvFile(IReadOnlyDictionary<string, string?> options, string 
     RequireSecret(values, "WEBHOOK_SECRET", errors, warnings);
     RequireSecret(values, "ORACLE_PRIVATE_KEY_PASSWORD", errors, warnings);
     RequireSecret(values, "CONSENSUS_PRODUCER_KEY_PASSWORD", errors, warnings);
-    RequireSecret(values, "P2P_SYNC_TOKEN", errors, warnings);
     RequireNoPlaceholder(values, "NETWORK_ID", warnings);
 
     if (IsRole(role, "Edge"))
@@ -339,89 +335,58 @@ static int ValidateEnvFile(IReadOnlyDictionary<string, string?> options, string 
 
     if (IsRole(role, "Bootstrap") || IsRole(role, "Consensus"))
     {
-        if (string.Equals(finality, "Raft", StringComparison.OrdinalIgnoreCase))
+        string raftTransport = GetEnv(values, "RAFT_TRANSPORT", "Tcp");
+        bool tcpTransport = string.Equals(raftTransport, "Tcp", StringComparison.OrdinalIgnoreCase);
+        bool irohTransport = string.Equals(raftTransport, "Iroh", StringComparison.OrdinalIgnoreCase);
+        if (!tcpTransport && !irohTransport)
         {
-            string raftTransport = GetEnv(values, "RAFT_TRANSPORT", "Tcp");
-            bool tcpTransport = string.Equals(raftTransport, "Tcp", StringComparison.OrdinalIgnoreCase);
-            bool irohTransport = string.Equals(raftTransport, "Iroh", StringComparison.OrdinalIgnoreCase);
-            if (!tcpTransport && !irohTransport)
-            {
-                errors.Add("RAFT_TRANSPORT must be Tcp or Iroh.");
-            }
+            errors.Add("RAFT_TRANSPORT must be Tcp or Iroh.");
+        }
 
-            RequireValue(values, "RAFT_NODE_ID", errors);
-            if (tcpTransport)
-            {
-                RequireValue(values, "RAFT_PUBLIC_ENDPOINT", errors);
-            }
-            else if (irohTransport)
-            {
-                RequireValue(values, "RAFT_IROH_NODE_ID", errors);
-                RequireSecret(values, "IROH_LOCAL_API_TOKEN", errors, warnings);
-                RequireValue(values, "IROH_RAFT_LISTEN", errors);
-                RequireValue(values, "IROH_RAFT_NODE_LISTEN", errors);
-            }
-            if (string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")))
-            {
-                warnings.Add("RAFT_PEER_ENDPOINT is empty. This node will start as a single-member Raft cluster without fault tolerance.");
-            }
+        RequireValue(values, "RAFT_NODE_ID", errors);
+        if (tcpTransport)
+        {
+            RequireValue(values, "RAFT_PUBLIC_ENDPOINT", errors);
+        }
+        else if (irohTransport)
+        {
+            RequireValue(values, "RAFT_IROH_NODE_ID", errors);
+            RequireSecret(values, "IROH_LOCAL_API_TOKEN", errors, warnings);
+            RequireValue(values, "IROH_RAFT_LISTEN", errors);
+            RequireValue(values, "IROH_RAFT_NODE_LISTEN", errors);
+        }
+        if (string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")))
+        {
+            warnings.Add("RAFT_PEER_ENDPOINT is empty. This node will start as a single-member Raft cluster without fault tolerance.");
+        }
 
-            if (irohTransport &&
-                !string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")) &&
-                !GetEnv(values, "RAFT_PEER_ENDPOINT").StartsWith("iroh://", StringComparison.OrdinalIgnoreCase))
-            {
-                errors.Add("RAFT_PEER_ENDPOINT must use iroh://<node-id> when RAFT_TRANSPORT=Iroh.");
-            }
+        if (irohTransport &&
+            !string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")) &&
+            !GetEnv(values, "RAFT_PEER_ENDPOINT").StartsWith("iroh://", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add("RAFT_PEER_ENDPOINT must use iroh://<node-id> when RAFT_TRANSPORT=Iroh.");
+        }
 
-            if (!string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ID")) &&
-                string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")))
-            {
-                errors.Add("RAFT_PEER_ENDPOINT is required when RAFT_PEER_ID is configured.");
-            }
+        if (!string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ID")) &&
+            string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")))
+        {
+            errors.Add("RAFT_PEER_ENDPOINT is required when RAFT_PEER_ID is configured.");
+        }
 
-            if (string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ID")) &&
-                !string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")))
-            {
-                errors.Add("RAFT_PEER_ID is required when RAFT_PEER_ENDPOINT is configured.");
-            }
+        if (string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ID")) &&
+            !string.IsNullOrWhiteSpace(GetEnv(values, "RAFT_PEER_ENDPOINT")))
+        {
+            errors.Add("RAFT_PEER_ID is required when RAFT_PEER_ENDPOINT is configured.");
         }
     }
 
     if (localRole)
     {
-        if (!string.Equals(finality, "Immediate", StringComparison.OrdinalIgnoreCase))
-        {
-            errors.Add("Local nodes must use CONSENSUS_FINALITY_MODE=Immediate.");
-        }
-
         if (!string.IsNullOrWhiteSpace(GetEnv(values, "P2P_BOOTSTRAP_GRPC_URL")))
         {
             warnings.Add("Local node has P2P_BOOTSTRAP_GRPC_URL configured; it will not run as an isolated private node.");
         }
     }
-    else
-    {
-        if (!string.Equals(finality, "Raft", StringComparison.OrdinalIgnoreCase))
-        {
-            errors.Add("Network nodes must use CONSENSUS_FINALITY_MODE=Raft.");
-        }
-
-        if (!string.Equals(GetEnv(values, "CONSENSUS_ENABLE_POC", "true"), "true", StringComparison.OrdinalIgnoreCase))
-        {
-            errors.Add("Network nodes must set CONSENSUS_ENABLE_POC=true.");
-        }
-
-        if (!string.Equals(GetEnv(values, "CONSENSUS_REQUIRE_PROOF_OF_WORK", "false"), "false", StringComparison.OrdinalIgnoreCase))
-        {
-            errors.Add("Network nodes must set CONSENSUS_REQUIRE_PROOF_OF_WORK=false.");
-        }
-
-        if (!string.Equals(GetEnv(values, "CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL", "false"), "false", StringComparison.OrdinalIgnoreCase))
-        {
-            errors.Add("Network nodes must set CONSENSUS_ACCEPT_P2P_BLOCKS_AS_FINAL=false.");
-        }
-    }
-
     foreach (var (key, value) in values)
     {
         if (!string.Equals(value, value.Trim(), StringComparison.Ordinal))
@@ -437,7 +402,7 @@ static int ValidateEnvFile(IReadOnlyDictionary<string, string?> options, string 
 
     Console.WriteLine($"Env: {path}");
     Console.WriteLine($"Role: {role}");
-    Console.WriteLine($"Finality: {finality}");
+    Console.WriteLine($"Consensus: {(localRole ? "local PoC validation" : "Proof of Contribution + DotNext Raft")}");
     PrintList("Errors", errors);
     PrintList("Warnings", warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
     Console.WriteLine(errors.Count == 0 ? "Result: ready" : "Result: not ready");

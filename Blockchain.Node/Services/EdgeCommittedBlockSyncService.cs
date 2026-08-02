@@ -9,7 +9,6 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
 {
     private readonly NexusNodeOptions _nodeOptions;
     private readonly P2POptions _p2pOptions;
-    private readonly ConsensusOptions _consensusOptions;
     private readonly string _networkBootstrapHttpUrl;
     private readonly IPeerStore _peerStore;
     private readonly IChainReader _chainReader;
@@ -22,7 +21,6 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
     public EdgeCommittedBlockSyncService(
         IOptions<NexusNodeOptions> nodeOptions,
         IOptions<P2POptions> p2pOptions,
-        IOptions<ConsensusOptions> consensusOptions,
         IConfiguration configuration,
         IPeerStore peerStore,
         IChainReader chainReader,
@@ -32,7 +30,6 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
     {
         _nodeOptions = nodeOptions.Value;
         _p2pOptions = p2pOptions.Value;
-        _consensusOptions = consensusOptions.Value;
         _networkBootstrapHttpUrl = P2POptions.NormalizeUrl(configuration["Network:BootstrapHttpUrl"]);
         _peerStore = peerStore;
         _chainReader = chainReader;
@@ -170,7 +167,6 @@ public sealed class EdgeCommittedBlockSyncService : BackgroundService
             var result = await _committedBlockApplier.ApplyAsync(
                 block,
                 envelope.Block,
-                broadcastToPeers: false,
                 finalityMetadata: metadata);
             if (!result.Success)
             {

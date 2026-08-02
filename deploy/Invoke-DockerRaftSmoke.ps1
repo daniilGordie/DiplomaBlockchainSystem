@@ -104,8 +104,7 @@ try {
         --producer-password $producerPassword `
         --db-password $dbPassword `
         --submit-url "http://localhost:7442" `
-        --verify-urls "http://localhost:7442,http://localhost:7443" `
-        --sync-token "local-raft-sync-token" | Out-Host
+        --verify-urls "http://localhost:7442,http://localhost:7443" | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "RaftGrpcSmoke submit failed with exit code $LASTEXITCODE."
     }

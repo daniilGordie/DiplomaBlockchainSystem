@@ -39,7 +39,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SqliteTaskProjectionStore>();
         services.AddSingleton<SqliteDocumentStore>();
         services.AddSingleton<SqliteGovernanceStore>();
-        services.AddSingleton<IReplayStoreFactory, DatabaseReplayStoreFactory>();
 
         services.AddSingleton<IProjectMembershipReader, DatabaseProjectMembershipReader>();
         services.AddSingleton<ISignatureVerifier, EcdsaSignatureVerifier>();

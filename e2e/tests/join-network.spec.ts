@@ -42,7 +42,7 @@ test('edge join setup accepts signed invite through UI without Raft endpoint', a
 
     const edgeStateResponse = await fetch(`${edge.url}/api/setup/state`);
     expect(edgeStateResponse.ok).toBe(true);
-    expect(JSON.parse(inviteText).SupportedRaftTransports).toContain('Iroh');
+    expect(JSON.parse(inviteText).supportedRaftTransports).toContain('Iroh');
     await expectNoBrowserErrors([...browserErrors, ...edgeErrors]);
   } finally {
     await attachRuntimeLogs(testInfo, bootstrap.process, edge.process, ui.process);

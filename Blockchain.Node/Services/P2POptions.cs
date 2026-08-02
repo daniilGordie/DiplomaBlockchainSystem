@@ -11,7 +11,6 @@ public sealed class P2POptions
     public string NodeRole { get; set; } = nameof(P2PNodeRole.Full);
     public string NodeId { get; set; } = string.Empty;
     public string PublicUrl { get; set; } = string.Empty;
-    public string SyncToken { get; set; } = string.Empty;
     public string RegistrationToken { get; set; } = string.Empty;
     public string[] BootstrapPeers { get; set; } = Array.Empty<string>();
     public int DiscoveryIntervalSeconds { get; set; } = 60;

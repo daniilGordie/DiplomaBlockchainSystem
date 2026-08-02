@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using Blockchain.Core.Contracts;
-using Blockchain.Core.Constants;
 
 namespace Blockchain.Core
 {
@@ -11,19 +10,12 @@ namespace Blockchain.Core
         private readonly IChainWriter _chainWriter;
         private readonly IPendingBlockStore _pendingBlockStore;
         private readonly ISmartContractStateReader _smartContractState;
-        private readonly BlockMiner _blockMiner;
         private readonly PendingBlockConnector _pendingBlockConnector;
         private readonly PeerBlockValidator _peerBlockValidator;
-        private readonly ChainAdoptionService _chainAdoptionService;
         private static readonly DateTime GenesisTimestamp = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         public BlockchainManager(IBlockchainStore store)
-            : this(store, store, store, store, new UnsupportedReplayStoreFactory())
-        {
-        }
-
-        public BlockchainManager(IBlockchainStore store, IReplayStoreFactory replayStoreFactory)
-            : this(store, store, store, store, replayStoreFactory)
+            : this(store, store, store, store)
         {
         }
 
@@ -31,18 +23,14 @@ namespace Blockchain.Core
             IChainReader chainReader,
             IChainWriter chainWriter,
             IPendingBlockStore pendingBlockStore,
-            ISmartContractStateReader smartContractState,
-            IReplayStoreFactory replayStoreFactory)
+            ISmartContractStateReader smartContractState)
             : this(
                 chainReader,
                 chainWriter,
                 pendingBlockStore,
                 smartContractState,
-                replayStoreFactory,
-                new BlockMiner(),
                 new PendingBlockConnector(pendingBlockStore),
-                new PeerBlockValidator(chainReader, smartContractState),
-                new ChainAdoptionService(chainReader, chainWriter, replayStoreFactory))
+                new PeerBlockValidator(chainReader, smartContractState))
         {
         }
 
@@ -51,20 +39,15 @@ namespace Blockchain.Core
             IChainWriter chainWriter,
             IPendingBlockStore pendingBlockStore,
             ISmartContractStateReader smartContractState,
-            IReplayStoreFactory replayStoreFactory,
-            BlockMiner blockMiner,
             PendingBlockConnector pendingBlockConnector,
-            PeerBlockValidator peerBlockValidator,
-            ChainAdoptionService chainAdoptionService)
+            PeerBlockValidator peerBlockValidator)
         {
             _chainReader = chainReader;
             _chainWriter = chainWriter;
             _pendingBlockStore = pendingBlockStore;
             _smartContractState = smartContractState;
-            _blockMiner = blockMiner;
             _pendingBlockConnector = pendingBlockConnector;
             _peerBlockValidator = peerBlockValidator;
-            _chainAdoptionService = chainAdoptionService;
 
             if (!_chainReader.HasBlocks("System"))
             {
@@ -92,38 +75,8 @@ namespace Blockchain.Core
                 TimestampUnixSeconds = new DateTimeOffset(GenesisTimestamp).ToUnixTimeSeconds(),
                 ChannelId = "System"
             };
-            MineBlock(genesisBlock);
+            FinalizeBlock(genesisBlock);
             _chainWriter.SaveBlock(genesisBlock);
-        }
-
-        public bool AddBlock(Block newBlock)
-        {
-            var latestBlock = GetLatestBlock(newBlock.ChannelId);
-
-            int expectedIndex = latestBlock != null ? latestBlock.Index + 1 : 0;
-            string expectedPrevHash = latestBlock != null ? latestBlock.Hash : "0";
-
-            if (newBlock.Index != expectedIndex)
-            {
-                Console.WriteLine($"[Blockchain] Invalid Index. Expected {expectedIndex}, got {newBlock.Index}");
-                return false;
-            }
-
-            if (newBlock.PreviousHash != expectedPrevHash)
-            {
-                Console.WriteLine("[Blockchain] Invalid PreviousHash.");
-                return false;
-            }
-
-            if (!newBlock.VerifySignature())
-            {
-                Console.WriteLine("[Blockchain] Block signature verification failed!");
-                return false;
-            }
-
-            MineBlock(newBlock);
-            _chainWriter.SaveBlock(newBlock, newBlock.ChannelId);
-            return true;
         }
 
         public bool ProcessPeerBlock(Block peerBlock)
@@ -152,19 +105,10 @@ namespace Blockchain.Core
             return true;
         }
 
-        private static bool IsPayloadChannelConsistent(string data, string channelId)
+        public static void FinalizeBlock(Block block)
         {
-            return BlockPayloadChannelPolicy.IsConsistent(data, channelId);
-        }
-
-        public bool TryAdoptChain(string channelId, List<Block> candidateChain)
-        {
-            return _chainAdoptionService.TryAdoptChain(channelId, candidateChain);
-        }
-
-        public void MineBlock(Block block)
-        {
-            _blockMiner.Mine(block);
+            block.Nonce = 0;
+            block.Hash = block.CalculateHash();
         }
 
         public bool IsValidChain(string channelId = "System")
@@ -177,22 +121,10 @@ namespace Blockchain.Core
 
                 if (currentBlock.Hash != currentBlock.CalculateHash()) return false;
                 if (currentBlock.PreviousHash != previousBlock.Hash) return false;
-                if (NetworkParameters.RequireProofOfWork && !currentBlock.Hash.StartsWith(NetworkParameters.TargetPrefix)) return false;
                 if (!currentBlock.VerifySignature()) return false;
             }
             return true;
         }
 
-        private sealed class UnsupportedReplayStoreFactory : IReplayStoreFactory
-        {
-            public IBlockchainStore CreateReplayStore()
-            {
-                throw new InvalidOperationException("Replay store factory is not configured.");
-            }
-
-            public void CleanupReplayStore(IBlockchainStore replayStore)
-            {
-            }
-        }
     }
 }

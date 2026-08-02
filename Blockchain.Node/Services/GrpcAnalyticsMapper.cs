@@ -37,7 +37,6 @@ public static class GrpcAnalyticsMapper
             CheckedBlocks = audit.CheckedBlocks,
             InvalidHashes = audit.InvalidHashes,
             InvalidSignatures = audit.InvalidSignatures,
-            InvalidProofOfWork = audit.InvalidProofOfWork,
             BrokenLinks = audit.BrokenLinks,
             InvalidFinalityMetadata = audit.InvalidFinalityMetadata
         };

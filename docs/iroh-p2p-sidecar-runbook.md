@@ -83,7 +83,7 @@ The full-node compose file persists:
 ## Demo
 
 ```powershell
-docker compose -f docker-compose.iroh-demo.yml up --build
+docker compose -f deploy/docker-compose.iroh-raft-smoke.yml up --build
 ```
 
 The demo starts:

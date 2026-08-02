@@ -44,8 +44,6 @@ public sealed class NexusSetupUseCases
         }
 
         var config = BaseConfig(request.NetworkName, networkId, nodeId, local ? "Local" : "Bootstrap");
-        config["Consensus:FinalityMode"] = local ? "Immediate" : "Raft";
-        config["Consensus:EnableProofOfContributionValidation"] = (!local).ToString().ToLowerInvariant();
         config["P2P:Iroh:Enabled"] = (!local).ToString().ToLowerInvariant();
         config["P2P:Iroh:LocalApiToken"] = local ? string.Empty : NewSecret();
         config["P2P:PublicUrl"] = request.PublicHttpUrl ?? string.Empty;
@@ -79,8 +77,6 @@ public sealed class NexusSetupUseCases
         string role = NormalizeMode(request.Role) == "consensus" ? "ConsensusCandidate" : "Edge";
         string nodeId = string.IsNullOrWhiteSpace(request.NodeId) ? NewNodeId("edge") : request.NodeId.Trim();
         var config = BaseConfig(invite.NetworkName, invite.NetworkId, nodeId, role == "Edge" ? "Edge" : "Edge");
-        config["Consensus:FinalityMode"] = "Raft";
-        config["Consensus:EnableProofOfContributionValidation"] = "true";
         config["P2P:Iroh:Enabled"] = "true";
         config["P2P:Iroh:LocalApiToken"] = NewSecret();
         config["P2P:BootstrapPeers:0"] = invite.BootstrapIrohUrl;
@@ -149,13 +145,10 @@ public sealed class NexusSetupUseCases
         ["OraclePublicKey"] = "auto",
         ["OraclePrivateKeyPassword"] = NewSecret(),
         ["OracleKeyPath"] = "oracle_key.dat",
-        ["Consensus:RequireProofOfWork"] = "false",
-        ["Consensus:AcceptP2PBlocksAsFinal"] = "false",
         ["Consensus:ProducerKeyPath"] = "producer-key.dat",
         ["Consensus:ProducerPrivateKeyPassword"] = NewSecret(),
         ["P2P:NodeId"] = nodeId,
         ["P2P:IdentityKeyPath"] = "node-identity.p256.key",
-        ["P2P:SyncToken"] = NewSecret(),
         ["P2P:DiscoveryIntervalSeconds"] = "60"
     };
 

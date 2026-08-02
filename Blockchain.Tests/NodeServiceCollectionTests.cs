@@ -9,11 +9,54 @@ using DotNext.Net.Cluster.Consensus.Raft.StateMachine;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 #pragma warning disable DOTNEXT001
 
 public class NodeServiceCollectionTests
 {
+    [Fact]
+    public void AddNexusNodeServices_ShouldRejectUnknownNodeRole()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"nexus-di-invalid-role-{Guid.NewGuid():N}.db");
+
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["NodeDbPassword"] = "test-password",
+                    ["NodeDatabase"] = dbPath,
+                    ["Node:Role"] = "Unknown"
+                })
+                .Build();
+            var services = new ServiceCollection();
+            services.AddSingleton<IConfiguration>(configuration);
+            services.AddSingleton<IHostApplicationLifetime, TestHostApplicationLifetime>();
+            services.AddLogging();
+            services.AddSignalR();
+            services.AddNexusNodeServices(new DatabaseManager(dbPath, "test-password"));
+
+            using var provider = services.BuildServiceProvider();
+            Assert.Throws<OptionsValidationException>(() =>
+                provider.GetRequiredService<IOptions<NexusNodeOptions>>().Value);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(dbPath))
+                {
+                    File.Delete(dbPath);
+                }
+            }
+            catch (IOException)
+            {
+                // SQLite may keep a pooled handle briefly on Windows after DI validation.
+            }
+        }
+    }
+
     [Fact]
     public async Task AddNexusNodeServices_RegistersApplicationPorts()
     {
@@ -26,9 +69,7 @@ public class NodeServiceCollectionTests
                 {
                     ["NodeDbPassword"] = "test-password",
                     ["NodeDatabase"] = dbPath,
-                    ["Node:Role"] = "Local",
-                    ["Consensus:FinalityMode"] = "Immediate",
-                    ["Consensus:AcceptP2PBlocksAsFinal"] = "false"
+                    ["Node:Role"] = "Local"
                 })
                 .Build();
 
@@ -105,7 +146,6 @@ public class NodeServiceCollectionTests
                 {
                     ["NodeDbPassword"] = "test-password",
                     ["NodeDatabase"] = dbPath,
-                    ["Consensus:FinalityMode"] = "Raft",
                     ["Raft:NodeId"] = "node-a",
                     ["Raft:PublicEndPoint"] = "http://localhost:6041",
                     ["Raft:LogPath"] = raftLogPath,
@@ -197,8 +237,7 @@ public class NodeServiceCollectionTests
                     ["NodeDatabase"] = dbPath,
                     ["Node:Role"] = "Edge",
                     ["P2P:Iroh:Enabled"] = "true",
-                    ["P2P:Iroh:LocalApiToken"] = "test-iroh-token",
-                    ["Consensus:FinalityMode"] = "Raft"
+                    ["P2P:Iroh:LocalApiToken"] = "test-iroh-token"
                 })
                 .Build();
 

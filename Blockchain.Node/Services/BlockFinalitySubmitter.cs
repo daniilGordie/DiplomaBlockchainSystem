@@ -28,8 +28,7 @@ public sealed class ImmediateBlockFinalitySubmitter : IBlockFinalitySubmitter
         cancellationToken.ThrowIfCancellationRequested();
         return _committedBlockApplier.ApplyAsync(
             proposal.Block,
-            sourceModel,
-            broadcastToPeers: true);
+            sourceModel);
     }
 }
 

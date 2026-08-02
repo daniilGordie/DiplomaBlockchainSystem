@@ -71,7 +71,7 @@
             <div class="d-flex justify-content-between align-items-center gap-3">
                 <button class="btn btn-primary fw-semibold"
                         @onclick="OnSaveDocument"
-                        disabled="@(!CanEdit || IsMining || string.IsNullOrWhiteSpace(DocumentTitle))">
+                        disabled="@(!CanEdit || IsSubmitting || string.IsNullOrWhiteSpace(DocumentTitle))">
                     @(string.IsNullOrWhiteSpace(SelectedDocumentId) ? "Create Document" : "Save New Version")
                 </button>
                 @if (SelectedDocument != null)
@@ -106,7 +106,7 @@
 @code {
     [Parameter] public string CurrentProjectId { get; set; } = "System";
     [Parameter] public bool CanEdit { get; set; }
-    [Parameter] public bool IsMining { get; set; }
+    [Parameter] public bool IsSubmitting { get; set; }
     [Parameter] public List<DocumentSummary> Documents { get; set; } = new();
     [Parameter] public List<DocumentVersionItem> Versions { get; set; } = new();
     [Parameter] public string SelectedDocumentId { get; set; } = "";

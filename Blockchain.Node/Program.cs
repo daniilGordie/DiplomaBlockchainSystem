@@ -29,8 +29,6 @@ if (!autoOraclePublicKey)
 }
 
 string webhookSecret = fullNodeConfigured ? GetRequiredConfiguration(builder.Configuration, "WebhookSecret") : string.Empty;
-Blockchain.Core.Constants.NetworkParameters.RequireProofOfWork =
-    builder.Configuration.GetValue("Consensus:RequireProofOfWork", true);
 
 builder.Services.AddCors(o => o.AddPolicy("AllowAll", policy =>
 {

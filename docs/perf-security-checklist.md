@@ -28,7 +28,7 @@ Expected:
 - rejected requests,
 - explicit security status messages/logs.
 
-## Manual performance checks (prototype level)
+## Manual performance checks
 
 1. Create high-frequency task/document updates.
 2. Measure block throughput in Analytics (`Blocks / Minute`).

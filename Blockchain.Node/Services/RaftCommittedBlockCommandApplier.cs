@@ -48,7 +48,6 @@ public sealed class RaftCommittedBlockCommandApplier
         return await _committedBlockApplier.ApplyAsync(
             block,
             model,
-            broadcastToPeers: false,
             finalityMetadata: new Blockchain.Core.BlockFinalityMetadata(
                 block.Hash,
                 block.ChannelId,

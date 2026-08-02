@@ -20,8 +20,7 @@ public class P2PNetworkDiscoveryTests
                 ["P2P:NodeRole"] = "Bootstrap",
                 ["P2P:NodeId"] = "bootstrap",
                 ["P2P:PublicUrl"] = "https://bootstrap.example.test",
-                ["P2P:RegistrationToken"] = "registration-secret",
-                ["P2P:SyncToken"] = "sync-secret"
+                ["P2P:RegistrationToken"] = "registration-secret"
             });
 
             var result = await service.RegisterPeer(CreateSignedRegistration(
@@ -59,8 +58,7 @@ public class P2PNetworkDiscoveryTests
                 ["P2P:NodeRole"] = "Bootstrap",
                 ["P2P:NodeId"] = "bootstrap",
                 ["P2P:PublicUrl"] = "https://bootstrap.example.test",
-                ["P2P:RegistrationToken"] = "registration-secret",
-                ["P2P:SyncToken"] = "sync-secret"
+                ["P2P:RegistrationToken"] = "registration-secret"
             });
 
             var result = await service.RegisterPeer(CreateSignedRegistration(
@@ -93,8 +91,7 @@ public class P2PNetworkDiscoveryTests
             {
                 ["P2P:NodeRole"] = "Bootstrap",
                 ["P2P:PublicUrl"] = "https://bootstrap.example.test",
-                ["P2P:RegistrationToken"] = "registration-secret",
-                ["P2P:SyncToken"] = "sync-secret"
+                ["P2P:RegistrationToken"] = "registration-secret"
             });
 
             var result = await service.RegisterPeer(new RegisterPeerRequest
@@ -125,8 +122,7 @@ public class P2PNetworkDiscoveryTests
             var service = CreateGrpcService(dbPath, new Dictionary<string, string?>
             {
                 ["P2P:NodeRole"] = "Bootstrap",
-                ["P2P:PublicUrl"] = "https://bootstrap.example.test",
-                ["P2P:SyncToken"] = "sync-secret"
+                ["P2P:PublicUrl"] = "https://bootstrap.example.test"
             });
 
             var request = CreateSignedRegistration("node-a", "https://node-a.example.test", "Full");
@@ -155,8 +151,7 @@ public class P2PNetworkDiscoveryTests
                 ["P2P:NodeRole"] = "Bootstrap",
                 ["P2P:PublicUrl"] = "https://bootstrap.example.test",
                 ["P2P:RegistrationToken"] = "registration-secret",
-                ["P2P:AllowRegistrationTokenFallback"] = "true",
-                ["P2P:SyncToken"] = "sync-secret"
+                ["P2P:AllowRegistrationTokenFallback"] = "true"
             });
 
             var result = await service.RegisterPeer(new RegisterPeerRequest
@@ -191,8 +186,7 @@ public class P2PNetworkDiscoveryTests
             {
                 ["P2P:NodeRole"] = "Bootstrap",
                 ["P2P:PublicUrl"] = "https://bootstrap.example.test",
-                ["P2P:RegistrationToken"] = "registration-secret",
-                ["P2P:SyncToken"] = "sync-secret"
+                ["P2P:RegistrationToken"] = "registration-secret"
             });
 
             var result = await service.RegisterPeer(CreateSignedRegistration(
@@ -275,9 +269,7 @@ public class P2PNetworkDiscoveryTests
             ["NodeAdminToken"] = "admin-secret",
             ["OraclePublicKey"] = "test-oracle",
             ["WebhookSecret"] = "test-webhook",
-            ["Node:Role"] = "Local",
-            ["Consensus:FinalityMode"] = "Immediate",
-            ["Consensus:AcceptP2PBlocksAsFinal"] = "false"
+            ["Node:Role"] = "Local"
         };
 
         var configuration = new ConfigurationBuilder()

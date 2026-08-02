@@ -106,7 +106,7 @@
                 <div>
                     <button class="btn btn-outline-secondary me-2 fw-semibold" @onclick="Close">Cancel</button>
                     <button class="btn btn-primary fw-semibold"
-                            @onclick="HandleSaveAndMine"
+                            @onclick="HandleSaveAndSubmit"
                             disabled="@(!CanSubmitTask())">
                         @(IsNewTask ? "Sign & Create" : "Sign & Save")
                     </button>
@@ -157,7 +157,7 @@
         }
     }
 
-    private async Task HandleSaveAndMine()
+    private async Task HandleSaveAndSubmit()
     {
         errorMessage = null;
 

@@ -34,7 +34,6 @@ public sealed class PeerNetworkClient : IPeerNetworkClient
             response.BootstrapPeers.ToArray(),
             response.IrohEnabled,
             response.IrohSidecarUrl,
-            response.SyncTokenConfigured,
             response.NodeIdentityConfigured,
             response.RegistrationTokenFallbackEnabled,
             response.DiscoveryIntervalSeconds,

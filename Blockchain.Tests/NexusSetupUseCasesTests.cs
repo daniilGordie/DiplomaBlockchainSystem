@@ -41,7 +41,7 @@ public sealed class NexusSetupUseCasesTests
     }
 
     [Fact]
-    public void JoinNetwork_ShouldEnableProofOfContributionUsingRuntimeConfigurationKey()
+    public void JoinNetwork_ShouldNotPersistConsensusModeSwitches()
     {
         var setup = new NexusSetupUseCases();
         var created = setup.CreateNetwork(new CreateNetworkSetupRequest(
@@ -62,66 +62,16 @@ public sealed class NexusSetupUseCasesTests
             "edge-a"));
 
         Assert.True(joined.Success, joined.Message);
-        Assert.Equal("true", joined.Configuration["Consensus:EnableProofOfContributionValidation"]);
-        Assert.False(joined.Configuration.ContainsKey("Consensus:EnablePoC"));
-        Assert.Equal("Raft", joined.Configuration["Consensus:FinalityMode"]);
+        Assert.DoesNotContain(joined.Configuration.Keys, key => key.Contains("FinalityMode", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(joined.Configuration.Keys, key => key.Contains("EnableProof", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void ConsensusPolicy_ShouldRejectEveryLegacyNetworkBypass()
+    public void ConsensusPolicy_ShouldDeriveFinalityFromNodeRole()
     {
-        var consensus = new ConsensusOptions
-        {
-            FinalityMode = ConsensusFinalityModes.Immediate,
-            EnableProofOfContributionValidation = false,
-            RequireProofOfWork = true,
-            AcceptP2PBlocksAsFinal = true
-        };
-
-        var errors = ConsensusConfigurationPolicy.Validate(
-            consensus,
-            new NexusNodeOptions { Role = "Consensus" });
-
-        Assert.Equal(4, errors.Count);
-        Assert.Contains(errors, error => error.Contains("FinalityMode=Raft", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("EnableProofOfContributionValidation", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("RequireProofOfWork", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("AcceptP2PBlocksAsFinal", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void ConsensusPolicy_ShouldAllowImmediateFinalityOnlyForIsolatedLocalNode()
-    {
-        var errors = ConsensusConfigurationPolicy.Validate(
-            new ConsensusOptions
-            {
-                FinalityMode = ConsensusFinalityModes.Immediate,
-                EnableProofOfContributionValidation = false,
-                RequireProofOfWork = false,
-                AcceptP2PBlocksAsFinal = false
-            },
-            new NexusNodeOptions { Role = "Local" });
-
-        Assert.Empty(errors);
-    }
-
-    [Fact]
-    public async Task ConsensusValidationService_ShouldFailStartupForLegacyNetworkConfiguration()
-    {
-        var service = new ConsensusConfigurationValidationService(
-            Microsoft.Extensions.Options.Options.Create(new ConsensusOptions
-            {
-                FinalityMode = ConsensusFinalityModes.Immediate,
-                EnableProofOfContributionValidation = false,
-                RequireProofOfWork = true,
-                AcceptP2PBlocksAsFinal = true
-            }),
-            Microsoft.Extensions.Options.Options.Create(new NexusNodeOptions { Role = "Bootstrap" }));
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.StartAsync(CancellationToken.None));
-
-        Assert.Contains("Invalid consensus configuration", error.Message, StringComparison.Ordinal);
-        Assert.Contains("DotNext Raft", error.Message, StringComparison.Ordinal);
+        Assert.Equal(ConsensusFinalityModes.Raft, ConsensusPolicy.GetFinalityMode(new NexusNodeOptions { Role = "Consensus" }));
+        Assert.Equal(ConsensusFinalityModes.Raft, ConsensusPolicy.GetFinalityMode(new NexusNodeOptions { Role = "Edge" }));
+        Assert.Equal(ConsensusFinalityModes.Immediate, ConsensusPolicy.GetFinalityMode(new NexusNodeOptions { Role = "Local" }));
+        Assert.Equal(ConsensusPolicy.NetworkEngine, ConsensusPolicy.GetEngineName(new NexusNodeOptions { Role = "Bootstrap" }));
     }
 }

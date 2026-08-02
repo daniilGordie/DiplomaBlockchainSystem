@@ -7,7 +7,6 @@ public sealed record PeerDirectorySnapshot(
     IReadOnlyList<string> BootstrapPeers,
     bool IrohEnabled,
     string IrohSidecarUrl,
-    bool SyncTokenConfigured,
     bool NodeIdentityConfigured,
     bool RegistrationTokenFallbackEnabled,
     int DiscoveryIntervalSeconds,

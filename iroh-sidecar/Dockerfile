@@ -1,8 +1,9 @@
 FROM rust:1.89 AS build
 WORKDIR /src
 COPY iroh-sidecar/Cargo.toml ./
+COPY iroh-sidecar/Cargo.lock ./
 COPY iroh-sidecar/src ./src
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
 WORKDIR /app

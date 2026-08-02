@@ -502,3 +502,6 @@ appsettings.Local.json
 oracle_key.dat
 *.pem
 **/target/
+raft-log/
+raft-membership/
+raft-snapshots/

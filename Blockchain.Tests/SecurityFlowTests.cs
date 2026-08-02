@@ -174,7 +174,7 @@ public sealed class SecurityFlowTests
                 Signature = Convert.ToBase64String(signatureBytes),
                 ChannelId = "System"
             };
-            manager.MineBlock(peerBlock);
+            BlockchainManager.FinalizeBlock(peerBlock);
 
             bool accepted = manager.ProcessPeerBlock(peerBlock);
 
@@ -321,49 +321,6 @@ public sealed class SecurityFlowTests
 
             bool accepted = manager.ProcessPeerBlock(peerBlock);
             Assert.False(accepted);
-        }
-        finally
-        {
-            TryDelete(dbPath);
-            TryDelete(dbPath + "-wal");
-            TryDelete(dbPath + "-shm");
-        }
-    }
-
-    [Fact]
-    public void TryAdoptChain_ShouldRejectWhenContractReplayFails()
-    {
-        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_adopt_reject_{Guid.NewGuid():N}.db");
-        try
-        {
-            var manager = CreateBlockchainManager(dbPath);
-
-            using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-            string publicKey = Convert.ToBase64String(ecdsa.ExportSubjectPublicKeyInfo());
-
-            string data = "{\"Type\":\"Create\",\"TaskId\":\"T-UNAUTH\",\"ProjectId\":\"Alpha\",\"User\":\"Bob\",\"Title\":\"Unauthorized\"}";
-            DateTime ts = DateTime.UtcNow;
-            string signableData = $"{0}{ts:O}{data}0";
-            byte[] signatureBytes = ecdsa.SignData(
-                System.Text.Encoding.UTF8.GetBytes(signableData),
-                HashAlgorithmName.SHA256,
-                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-
-            var block = new Block
-            {
-                Index = 0,
-                Timestamp = ts,
-                Data = data,
-                PreviousHash = "0",
-                ValidatorPublicKey = publicKey,
-                Signature = Convert.ToBase64String(signatureBytes),
-                ChannelId = "Alpha"
-            };
-            manager.MineBlock(block);
-
-            bool adopted = manager.TryAdoptChain("Alpha", new List<Block> { block });
-
-            Assert.False(adopted);
         }
         finally
         {
@@ -1331,26 +1288,6 @@ public sealed class SecurityFlowTests
         }
     }
 
-    [Fact]
-    public void BlockchainGrpcService_ShouldValidateAdminTokenInConstantTimePath()
-    {
-        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus_admin_token_{Guid.NewGuid():N}.db");
-        try
-        {
-            var service = CreateGrpcService(dbPath, nodeAdminToken: "admin-secret");
-
-            Assert.True(InvokeAdminTokenValidation(service, "admin-secret"));
-            Assert.False(InvokeAdminTokenValidation(service, "wrong-secret"));
-            Assert.False(InvokeAdminTokenValidation(service, ""));
-        }
-        finally
-        {
-            TryDelete(dbPath);
-            TryDelete(dbPath + "-wal");
-            TryDelete(dbPath + "-shm");
-        }
-    }
-
     private static BlockchainGrpcService CreateGrpcService(string dbPath, string nodeAdminToken)
     {
         var configuration = new ConfigurationBuilder()
@@ -1359,9 +1296,7 @@ public sealed class SecurityFlowTests
                 ["ConnectionStrings:DefaultNodeDb"] = dbPath,
                 ["NodeDbPassword"] = "test-db-password",
                 ["NodeAdminToken"] = nodeAdminToken,
-                ["Node:Role"] = "Local",
-                ["Consensus:FinalityMode"] = "Immediate",
-                ["Consensus:AcceptP2PBlocksAsFinal"] = "false"
+                ["Node:Role"] = "Local"
             })
             .Build();
 
@@ -1378,7 +1313,7 @@ public sealed class SecurityFlowTests
 
     private static BlockchainManager CreateBlockchainManager(string dbPath)
     {
-        return new BlockchainManager(new DatabaseManager(dbPath, ""), new DatabaseReplayStoreFactory());
+        return new BlockchainManager(new DatabaseManager(dbPath, ""));
     }
 
     private static bool InvokeReadAuthorization(
@@ -1394,13 +1329,6 @@ public sealed class SecurityFlowTests
         var method = typeof(BlockchainGrpcService).GetMethod("IsAuthorizedReadRequest", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
         return (bool)method!.Invoke(service, new object[] { db, scope, userName, publicKey, signature, timestamp, nonce })!;
-    }
-
-    private static bool InvokeAdminTokenValidation(BlockchainGrpcService service, string token)
-    {
-        var method = typeof(BlockchainGrpcService).GetMethod("IsValidAdminToken", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(method);
-        return (bool)method!.Invoke(service, new object[] { token })!;
     }
 
     private static string SignRead(ECDsa key, string scope, string userName, string publicKey, string timestamp, string nonce)

@@ -23,26 +23,6 @@ public static class IrohP2PEndpoints
             return Results.Json(new IrohKnownChannelsResponse(chainReader.GetKnownChannels().ToArray()));
         });
 
-        endpoints.MapGet("/api/p2p/iroh/chain/{channelId}", (
-            string channelId,
-            HttpContext context,
-            IChainReader chainReader,
-            IOptions<P2POptions> options) =>
-        {
-            if (!IsAuthorized(context, options.Value))
-            {
-                return Results.Unauthorized();
-            }
-
-            string channelToRead = string.IsNullOrWhiteSpace(channelId) ? "System" : channelId;
-            var blocks = chainReader.LoadChain(channelToRead)
-                .OrderBy(block => block.Index)
-                .Select(GrpcProjectMapper.ToBlockModel)
-                .ToArray();
-
-            return Results.Json(new IrohChainResponse(blocks));
-        });
-
         endpoints.MapGet("/api/p2p/iroh/committed-since/{channelId}", (
             string channelId,
             int? afterIndex,

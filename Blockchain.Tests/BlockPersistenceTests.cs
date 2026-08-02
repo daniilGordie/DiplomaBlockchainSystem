@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using Blockchain.Core;
-using Blockchain.Core.Constants;
 using Blockchain.Infrastructure.Persistence;
 
 public class BlockPersistenceTests
@@ -35,12 +34,7 @@ public class BlockPersistenceTests
                 HashAlgorithmName.SHA256,
                 DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
 
-            do
-            {
-                block.Nonce++;
-                block.Hash = block.CalculateHash();
-            }
-            while (!block.Hash.StartsWith(NetworkParameters.TargetPrefix, StringComparison.Ordinal));
+            BlockchainManager.FinalizeBlock(block);
 
             var db = new DatabaseManager(dbPath, "");
             db.SaveBlock(block, block.ChannelId);

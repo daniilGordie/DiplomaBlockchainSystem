@@ -21,7 +21,7 @@
                 <textarea value="@NewProposalDescription" @oninput="OnNewProposalDescriptionInput" class="form-control" rows="4" placeholder="Describe the proposal and expected outcome" aria-label="Proposal description"></textarea>
             </div>
 
-            <button class="btn btn-primary fw-semibold w-100" @onclick="OnCreateProposal" disabled="@(!CanUseGovernance || IsMining)">Create Proposal</button>
+            <button class="btn btn-primary fw-semibold w-100" @onclick="OnCreateProposal" disabled="@(!CanUseGovernance || IsSubmitting)">Create Proposal</button>
 
             @if (!CanUseGovernance)
             {
@@ -87,7 +87,7 @@
                                         else
                                         {
                                             <button class="btn btn-sm btn-primary"
-                                                    disabled="@(!CanCreateTaskFromAccepted || IsMining)"
+                                                    disabled="@(!CanCreateTaskFromAccepted || IsSubmitting)"
                                                     @onclick="() => OnCreateTaskFromProposal.InvokeAsync(proposal.ProposalId)">
                                                 Create Task From Proposal
                                             </button>
@@ -113,7 +113,7 @@
     [Parameter] public string CurrentUserName { get; set; } = "";
     [Parameter] public string NewProposalTitle { get; set; } = "";
     [Parameter] public string NewProposalDescription { get; set; } = "";
-    [Parameter] public bool IsMining { get; set; }
+    [Parameter] public bool IsSubmitting { get; set; }
     [Parameter] public bool CanUseGovernance { get; set; }
     [Parameter] public bool CanCreateTaskFromAccepted { get; set; }
     [Parameter] public List<GovernanceProposalItem> Proposals { get; set; } = new();

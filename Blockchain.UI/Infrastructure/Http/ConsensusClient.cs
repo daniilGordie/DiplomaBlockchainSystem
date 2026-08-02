@@ -24,21 +24,20 @@ public sealed class ConsensusClient : IConsensusClient
                 IntegrationApiJsonContext.Default.JsonDocument);
             if (doc == null)
             {
-                return ConsensusProducerInfo.LegacyDefault();
+                return new ConsensusProducerInfo(null);
             }
 
             var root = doc.RootElement;
-            bool requireProofOfWork = ReadBool(root, "requireProofOfWork", "RequireProofOfWork", defaultValue: true);
             bool hasEligibleProducer = ReadBool(root, "hasEligibleProducer", "HasEligibleProducer");
             if (!hasEligibleProducer)
             {
-                return new ConsensusProducerInfo(requireProofOfWork, null);
+                return new ConsensusProducerInfo(null);
             }
 
             if (!TryGetProperty(root, "contributionProof", "ContributionProof", out var proofElement) ||
                 proofElement.ValueKind != JsonValueKind.Object)
             {
-                return new ConsensusProducerInfo(requireProofOfWork, null);
+                return new ConsensusProducerInfo(null);
             }
 
             var proof = new ContributionProofModel
@@ -60,12 +59,12 @@ public sealed class ConsensusClient : IConsensusClient
             }
 
             return string.IsNullOrWhiteSpace(proof.ProducerPublicKey)
-                ? new ConsensusProducerInfo(requireProofOfWork, null)
-                : new ConsensusProducerInfo(requireProofOfWork, proof);
+                ? new ConsensusProducerInfo(null)
+                : new ConsensusProducerInfo(proof);
         }
         catch
         {
-            return ConsensusProducerInfo.LegacyDefault();
+            return new ConsensusProducerInfo(null);
         }
     }
 
@@ -84,9 +83,9 @@ public sealed class ConsensusClient : IConsensusClient
     private static long ReadInt64(JsonElement element, string camelName, string pascalName) =>
         TryGetProperty(element, camelName, pascalName, out var value) && value.TryGetInt64(out var result) ? result : 0;
 
-    private static bool ReadBool(JsonElement element, string camelName, string pascalName, bool defaultValue = false) =>
+    private static bool ReadBool(JsonElement element, string camelName, string pascalName) =>
         TryGetProperty(element, camelName, pascalName, out var value) &&
         value.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? value.GetBoolean()
-            : defaultValue;
+            : false;
 }

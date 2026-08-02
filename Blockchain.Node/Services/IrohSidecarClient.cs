@@ -1,6 +1,5 @@
 using System.Net.Http.Json;
 using System.Text.Json;
-using Blockchain.Core;
 
 namespace Blockchain.Node.Services;
 
@@ -53,32 +52,6 @@ public sealed class IrohSidecarClient
         }
 
         return string.IsNullOrWhiteSpace(status?.NodeId) ? string.Empty : $"iroh://{status.NodeId}";
-    }
-
-    public async Task BroadcastBlockAsync(IEnumerable<string> peerUrls, Block block, CancellationToken cancellationToken = default)
-    {
-        if (!Enabled) return;
-
-        var peers = peerUrls
-            .Select(ParseIrohPeerAddress)
-            .Where(peer => !string.IsNullOrWhiteSpace(peer))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (peers.Length == 0) return;
-
-        var request = new IrohBroadcastBlockRequest(peers, GrpcProjectMapper.ToBlockModel(block));
-        var response = await _httpClient.PostAsJsonAsync(
-            $"{_options.Iroh.NormalizedSidecarUrl}/broadcast-block",
-            request,
-            JsonOptions,
-            cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            string body = await response.Content.ReadAsStringAsync(cancellationToken);
-            _logger.LogWarning("[Iroh] Broadcast failed with HTTP {StatusCode}: {Body}", (int)response.StatusCode, body);
-        }
     }
 
     public async Task<IReadOnlyList<string>> FetchKnownChannelsAsync(string peerUrl, CancellationToken cancellationToken = default)
@@ -138,22 +111,6 @@ public sealed class IrohSidecarClient
             _logger.LogWarning("[P2P] Fetch known channels over HTTP from {PeerUrl} failed: {Message}", normalizedPeerUrl, ex.Message);
             return Array.Empty<string>();
         }
-    }
-
-    public async Task<IReadOnlyList<BlockModel>> FetchChainAsync(string peerUrl, string channelId, CancellationToken cancellationToken = default)
-    {
-        string peer = ParseIrohPeerAddress(peerUrl);
-        if (!Enabled || string.IsNullOrWhiteSpace(peer)) return Array.Empty<BlockModel>();
-
-        var response = await _httpClient.PostAsJsonAsync(
-            $"{_options.Iroh.NormalizedSidecarUrl}/chain",
-            new IrohChainRequest(peer, channelId),
-            JsonOptions,
-            cancellationToken);
-        await EnsureSuccessAsync(response, $"chain/{channelId}", cancellationToken);
-
-        var chain = await response.Content.ReadFromJsonAsync<IrohChainResponse>(JsonOptions, cancellationToken);
-        return chain?.Blocks ?? Array.Empty<BlockModel>();
     }
 
     public async Task<IReadOnlyList<IrohCommittedBlockEnvelope>> FetchCommittedSinceAsync(
@@ -240,17 +197,6 @@ public sealed class IrohSidecarClient
             ?? new IrohSubmitBlockResponse(false, "Iroh SubmitBlock returned an empty response.", block.ChannelId);
     }
 
-    public async Task<IReadOnlyList<BlockModel>> DrainEventsAsync(CancellationToken cancellationToken = default)
-    {
-        if (!Enabled) return Array.Empty<BlockModel>();
-
-        var events = await _httpClient.GetFromJsonAsync<IrohEventsResponse>(
-            $"{_options.Iroh.NormalizedSidecarUrl}/events?limit=100",
-            JsonOptions,
-            cancellationToken);
-        return events?.Blocks ?? Array.Empty<BlockModel>();
-    }
-
     public static bool IsIrohPeerUrl(string url) =>
         !string.IsNullOrWhiteSpace(url) && url.StartsWith("iroh://", StringComparison.OrdinalIgnoreCase);
 
@@ -282,15 +228,11 @@ public sealed record IrohStatus(
     string ConnectionPath = "",
     string TransportMode = "");
 public sealed record IrohPeerRequest(string Peer);
-public sealed record IrohChainRequest(string Peer, string ChannelId);
 public sealed record IrohCommittedSinceRequest(string Peer, string ChannelId, int AfterIndex, string AfterHash, IrohMessageAuth Auth);
 public sealed record IrohCommittedSincePayload(string ChannelId, int AfterIndex, string AfterHash, IrohMessageAuth Auth);
 public sealed record IrohSubmitBlockRequest(string Peer, BlockModel Block, IrohMessageAuth Auth);
 public sealed record IrohSubmitBlockPayload(BlockModel Block, IrohMessageAuth Auth);
-public sealed record IrohBroadcastBlockRequest(string[] Peers, BlockModel Block);
 public sealed record IrohKnownChannelsResponse(string[] ChannelIds);
-public sealed record IrohChainResponse(BlockModel[] Blocks);
-public sealed record IrohEventsResponse(BlockModel[] Blocks);
 public sealed record IrohSubmitBlockResponse(bool Success, string Message, string ChannelId);
 public sealed record IrohCommittedSinceResponse(IrohCommittedBlockEnvelope[] Blocks);
 public sealed record IrohCommittedBlockEnvelope(BlockModel Block, IrohFinalityMetadataModel Finality);

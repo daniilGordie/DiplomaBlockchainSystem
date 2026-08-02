@@ -34,7 +34,7 @@ test('local private node setup works without Raft or Iroh', async ({ page }, tes
     const network = await waitForJson(`${node.url}/api/network/status`);
     expect(network.finalityMode).toBe('Immediate');
     expect(network.irohEnabled).toBe(false);
-    expect(network.localRaftRequested).toBe(false);
+    expect(network.runsRaft).toBe(false);
     await expectNoBrowserErrors(browserErrors);
   } finally {
     await attachRuntimeLogs(testInfo, node.process, ui.process);
