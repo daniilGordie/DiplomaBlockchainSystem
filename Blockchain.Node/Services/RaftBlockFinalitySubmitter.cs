@@ -2,6 +2,7 @@ using Blockchain.Application.Blocks;
 using Blockchain.Core;
 using Blockchain.Core.Consensus;
 using DotNext.Net.Cluster.Consensus.Raft;
+using Microsoft.Extensions.Options;
 using System.Text.Json;
 
 namespace Blockchain.Node.Services;
@@ -9,17 +10,23 @@ namespace Blockchain.Node.Services;
 public sealed class RaftBlockFinalitySubmitter : IBlockFinalitySubmitter
 {
     private readonly IRaftCommandReplicator _replicator;
+    private readonly RaftOptions _options;
     private readonly ILogger<RaftBlockFinalitySubmitter> _logger;
 
     public RaftBlockFinalitySubmitter(
         IRaftCommandReplicator replicator,
+        IOptions<RaftOptions> options,
         ILogger<RaftBlockFinalitySubmitter> logger)
     {
         _replicator = replicator;
+        _options = options.Value;
         _logger = logger;
     }
 
-    public async Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel)
+    public async Task<BlockWriteResult> SubmitAsync(
+        BlockProposal proposal,
+        BlockModel sourceModel,
+        CancellationToken cancellationToken = default)
     {
         _ = sourceModel;
         var command = RaftBlockCommitCommand.FromProposal(proposal);
@@ -27,13 +34,20 @@ public sealed class RaftBlockFinalitySubmitter : IBlockFinalitySubmitter
 
         try
         {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1000, _options.RequestTimeoutMilliseconds * 2L)));
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(command);
-            committed = await _replicator.ReplicateAsync(payload, proposal.Block.Hash, CancellationToken.None);
+            committed = await _replicator.ReplicateAsync(payload, proposal.Block.Hash, timeout.Token);
         }
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning(ex, "[Raft] Block proposal {BlockHash} was not accepted by the current node.", proposal.Block.Hash);
             return new BlockWriteResult(false, "Raft leader is unavailable on this node", proposal.Block.ChannelId);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("[Raft] Timed out while replicating block proposal {BlockHash}.", proposal.Block.Hash);
+            return new BlockWriteResult(false, "Raft majority commit timed out", proposal.Block.ChannelId);
         }
 
         if (!committed)

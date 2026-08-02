@@ -51,18 +51,54 @@ public sealed class RaftSnapshotCheckpointService : BackgroundService
                 }
 
                 var diagnostics = stateMachine.GetDiagnostics();
-                long threshold = Math.Max(1, _raft.Snapshot.EntryThreshold);
-                if (diagnostics.LastAppliedIndex - _lastCheckpointIndex < threshold)
+                if (!diagnostics.StateMachineHealthy)
+                {
+                    _logger.LogCritical(
+                        "[Raft] Snapshot checkpoint stopped because the state machine is faulted: {Failure}",
+                        diagnostics.StateMachineFailure);
+                    return;
+                }
+
+                if (diagnostics.CurrentSnapshotIndex is not { } snapshotIndex)
                 {
                     continue;
                 }
 
+                long publishedSnapshotIndex = diagnostics.PublishedSnapshotIndex ?? 0L;
+                if (publishedSnapshotIndex >= snapshotIndex)
+                {
+                    _lastCheckpointIndex = Math.Max(_lastCheckpointIndex, publishedSnapshotIndex);
+                    continue;
+                }
+
+                if (cluster.LeadershipToken.IsCancellationRequested)
+                {
+                    continue;
+                }
+
+                bool checkpointCommitted = await cluster.ReplicateAsync(
+                    RaftBlockStateMachine.SnapshotCheckpointPayload,
+                    $"snapshot-checkpoint:{snapshotIndex}",
+                    stoppingToken);
+                if (!checkpointCommitted)
+                {
+                    _logger.LogWarning("[Raft] Snapshot checkpoint entry for index {SnapshotIndex} did not reach majority commit.", snapshotIndex);
+                    continue;
+                }
+
+                using var publishTimeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                publishTimeout.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1000, _raft.RequestTimeoutMilliseconds * 2L)));
+                while ((stateMachine.GetDiagnostics().PublishedSnapshotIndex ?? 0L) < snapshotIndex)
+                {
+                    await Task.Delay(50, publishTimeout.Token);
+                }
+
                 await cluster.ApplyReadBarrierAsync(stoppingToken);
                 await wal.FlushAsync(stoppingToken);
-                _lastCheckpointIndex = diagnostics.LastAppliedIndex;
+                _lastCheckpointIndex = snapshotIndex;
                 _logger.LogInformation(
-                    "[Raft] Snapshot checkpoint requested at applied index {AppliedIndex}.",
-                    diagnostics.LastAppliedIndex);
+                    "[Raft] Snapshot checkpoint published and flushed at index {SnapshotIndex}.",
+                    snapshotIndex);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

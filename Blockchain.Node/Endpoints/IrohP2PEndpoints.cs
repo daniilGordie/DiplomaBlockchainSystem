@@ -154,7 +154,7 @@ public static class IrohP2PEndpoints
                     request.Block.ChannelId));
             }
 
-            var result = await blockProcessor.ProcessReceivedAsync(request.Block);
+            var result = await blockProcessor.ProcessReceivedAsync(request.Block, context.RequestAborted);
             return Results.Json(new IrohSubmitBlockResponse(
                 result.Success,
                 result.Message,

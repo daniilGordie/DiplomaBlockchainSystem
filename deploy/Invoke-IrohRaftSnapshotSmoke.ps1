@@ -27,6 +27,10 @@ function Read-Json([string]$Url) {
 }
 
 function Assert-Snapshot([object]$Status, [string]$Url) {
+    if (-not $Status.operational) {
+        throw "$Url is not operational: $($Status.operationalStatus)."
+    }
+
     if ($Status.configuration.transport -ne "Iroh") {
         throw "$Url is not using Raft transport Iroh."
     }
@@ -35,8 +39,8 @@ function Assert-Snapshot([object]$Status, [string]$Url) {
         throw "$Url did not expose snapshot diagnostics."
     }
 
-    if ($null -eq $Status.snapshot.currentSnapshotIndex) {
-        throw "$Url has no current DotNext snapshot. Last applied index: $($Status.snapshot.lastAppliedIndex)."
+    if ($null -eq $Status.snapshot.publishedSnapshotIndex) {
+        throw "$Url has no published DotNext snapshot. Last applied index: $($Status.snapshot.lastAppliedIndex)."
     }
 }
 
@@ -67,7 +71,7 @@ try {
         try {
             $statuses = @($statusUrls | ForEach-Object { Read-Json $_ })
             $last = $statuses
-            if (($statuses | Where-Object { $null -ne $_.snapshot.currentSnapshotIndex }).Count -eq $statuses.Count) {
+            if (($statuses | Where-Object { $null -ne $_.snapshot.publishedSnapshotIndex }).Count -eq $statuses.Count) {
                 foreach ($i in 0..($statuses.Count - 1)) {
                     Assert-Snapshot $statuses[$i] $statusUrls[$i]
                 }

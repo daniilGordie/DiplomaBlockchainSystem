@@ -18,7 +18,7 @@ public sealed class RaftCommittedBlockCommandApplier
         _logger = logger;
     }
 
-    public async Task<BlockWriteResult> ApplyAsync(ReadOnlyMemory<byte> payload, long raftLogIndex)
+    public async Task<BlockWriteResult> ApplyAsync(ReadOnlyMemory<byte> payload, long raftLogIndex, long raftTerm)
     {
         RaftBlockCommitCommand? command;
         try
@@ -54,7 +54,7 @@ public sealed class RaftCommittedBlockCommandApplier
                 block.ChannelId,
                 ConsensusFinalityModes.Raft,
                 raftLogIndex,
-                null,
+                raftTerm,
                 DateTime.UtcNow));
     }
 }

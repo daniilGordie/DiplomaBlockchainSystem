@@ -4,15 +4,20 @@ using Blockchain.Core.Constants;
 using Blockchain.Infrastructure.Persistence;
 using Blockchain.Node;
 using Blockchain.Node.Services;
+using DotNext.Net.Cluster.Consensus.Raft;
+using DotNext.Net.Cluster.Consensus.Raft.StateMachine;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
 namespace Blockchain.Tests;
+
+#pragma warning disable DOTNEXT001
 
 public sealed class RaftBlockFinalitySubmitterTests
 {
@@ -87,6 +92,7 @@ public sealed class RaftBlockFinalitySubmitterTests
         var replicator = new CapturingRaftCommandReplicator(committed: true);
         var submitter = new RaftBlockFinalitySubmitter(
             replicator,
+            Options.Create(new RaftOptions()),
             NullLogger<RaftBlockFinalitySubmitter>.Instance);
 
         var result = await submitter.SubmitAsync(proposal, new BlockModel { ChannelId = "ProjectA" });
@@ -126,6 +132,7 @@ public sealed class RaftBlockFinalitySubmitterTests
             Array.Empty<string>());
         var submitter = new RaftBlockFinalitySubmitter(
             new CapturingRaftCommandReplicator(committed: false),
+            Options.Create(new RaftOptions()),
             NullLogger<RaftBlockFinalitySubmitter>.Instance);
 
         var result = await submitter.SubmitAsync(
@@ -142,6 +149,8 @@ public sealed class RaftBlockFinalitySubmitterTests
     {
         bool previousProofOfWork = NetworkParameters.RequireProofOfWork;
         string dbPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-apply-{Guid.NewGuid():N}.db");
+        string walPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-apply-wal-{Guid.NewGuid():N}");
+        string snapshotPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-apply-snapshots-{Guid.NewGuid():N}");
 
         try
         {
@@ -157,7 +166,9 @@ public sealed class RaftBlockFinalitySubmitterTests
                     ["P2P:IdentityKeyPath"] = Path.Combine(Path.GetTempPath(), $"nexus-node-key-{Guid.NewGuid():N}.p256.key"),
                     ["OraclePrivateKeyPassword"] = "test-oracle-password",
                     ["OraclePublicKey"] = "auto",
-                    ["WebhookSecret"] = "test-webhook-secret"
+                    ["WebhookSecret"] = "test-webhook-secret",
+                    ["Raft:SnapshotPath"] = snapshotPath,
+                    ["Raft:Snapshot:EntryThreshold"] = "2"
                 })
                 .Build();
             var services = new ServiceCollection();
@@ -203,10 +214,15 @@ public sealed class RaftBlockFinalitySubmitterTests
             var payload = JsonSerializer.SerializeToUtf8Bytes(
                 RaftBlockCommitCommand.FromProposal(new BlockProposal(block, proof, DateTime.UtcNow)));
 
-            var applier = provider.GetRequiredService<RaftCommittedBlockCommandApplier>();
-            var result = await applier.ApplyAsync(payload, raftLogIndex: 42);
+            var stateMachine = provider.GetRequiredService<RaftBlockStateMachine>();
+            await stateMachine.RestoreAsync();
+            await using var wal = new WriteAheadLog(
+                new WriteAheadLog.Options { Location = walPath },
+                stateMachine);
+            long raftLogIndex = await wal.AppendAsync(new BinaryLogEntry { Content = payload, Term = 7 });
+            await wal.CommitAsync(raftLogIndex);
+            await wal.WaitForApplyAsync(raftLogIndex);
 
-            Assert.True(result.Success, result.Message);
             var stored = database.GetLatestBlock("System");
             Assert.NotNull(stored);
             Assert.Equal(block.Hash, stored!.Hash);
@@ -214,7 +230,26 @@ public sealed class RaftBlockFinalitySubmitterTests
             var metadata = database.GetFinalityMetadata(block.Hash);
             Assert.NotNull(metadata);
             Assert.Equal(ConsensusFinalityModes.Raft, metadata!.FinalityMode);
-            Assert.Equal(42, metadata.RaftLogIndex);
+            Assert.Equal(raftLogIndex, metadata.RaftLogIndex);
+            Assert.Equal(7, metadata.RaftTerm);
+            Assert.Null(stateMachine.GetDiagnostics().CurrentSnapshotIndex);
+
+            long duplicateIndex = await wal.AppendAsync(new BinaryLogEntry { Content = payload, Term = 7 });
+            await wal.CommitAsync(duplicateIndex);
+            await wal.WaitForApplyAsync(duplicateIndex);
+            long checkpointIndex = await wal.AppendAsync(new BinaryLogEntry
+            {
+                Content = RaftBlockStateMachine.SnapshotCheckpointPayload,
+                Term = 7
+            });
+            await wal.CommitAsync(checkpointIndex);
+            await wal.WaitForApplyAsync(checkpointIndex);
+            var diagnostics = stateMachine.GetDiagnostics();
+            Assert.True(diagnostics.StateMachineHealthy, diagnostics.StateMachineFailure);
+            Assert.Equal(checkpointIndex, diagnostics.LastAppliedIndex);
+            Assert.Equal(duplicateIndex, diagnostics.CurrentSnapshotIndex);
+            Assert.Equal(duplicateIndex, diagnostics.PublishedSnapshotIndex);
+            Assert.True(File.Exists(Path.Combine(snapshotPath, $"{duplicateIndex}-7")));
         }
         finally
         {
@@ -222,6 +257,66 @@ public sealed class RaftBlockFinalitySubmitterTests
             TryDelete(dbPath);
             TryDelete(dbPath + "-wal");
             TryDelete(dbPath + "-shm");
+            TryDeleteDirectory(walPath);
+            TryDeleteDirectory(snapshotPath);
+        }
+    }
+
+    [Fact]
+    public async Task RaftBlockStateMachine_ShouldFaultWithoutAdvancingAppliedIndexForRejectedCommittedCommand()
+    {
+        string dbPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-reject-{Guid.NewGuid():N}.db");
+        string walPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-reject-wal-{Guid.NewGuid():N}");
+        string snapshotPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-reject-snapshots-{Guid.NewGuid():N}");
+
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["NodeDbPassword"] = "",
+                    ["NodeDatabase"] = dbPath,
+                    ["Raft:SnapshotPath"] = snapshotPath,
+                    ["Raft:Snapshot:Enabled"] = "false"
+                })
+                .Build();
+            var services = new ServiceCollection();
+            services.AddSingleton<IConfiguration>(configuration);
+            services.AddSingleton<IHostApplicationLifetime, TestHostApplicationLifetime>();
+            services.AddLogging();
+            services.AddSignalR();
+            services.AddNexusNodeServices(new DatabaseManager(dbPath));
+
+            await using var provider = services.BuildServiceProvider();
+            var stateMachine = provider.GetRequiredService<RaftBlockStateMachine>();
+            await stateMachine.RestoreAsync();
+            await using var wal = new WriteAheadLog(
+                new WriteAheadLog.Options { Location = walPath },
+                stateMachine);
+            long raftLogIndex = await wal.AppendAsync(new BinaryLogEntry
+            {
+                Content = "{}"u8.ToArray(),
+                Term = 9
+            });
+
+            await wal.CommitAsync(raftLogIndex);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => wal.WaitForApplyAsync(raftLogIndex).AsTask());
+
+            var diagnostics = stateMachine.GetDiagnostics();
+            Assert.False(diagnostics.StateMachineHealthy);
+            Assert.Contains($"Log index {raftLogIndex}, term 9", diagnostics.StateMachineFailure);
+            Assert.Equal(0, diagnostics.LastAppliedIndex);
+            Assert.Equal(0, wal.LastAppliedIndex);
+            Assert.Equal(raftLogIndex, wal.LastCommittedEntryIndex);
+        }
+        finally
+        {
+            TryDelete(dbPath);
+            TryDelete(dbPath + "-wal");
+            TryDelete(dbPath + "-shm");
+            TryDeleteDirectory(walPath);
+            TryDeleteDirectory(snapshotPath);
         }
     }
 
@@ -261,6 +356,20 @@ public sealed class RaftBlockFinalitySubmitterTests
         }
     }
 
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime
     {
         private readonly CancellationTokenSource _started = new();
@@ -277,3 +386,5 @@ public sealed class RaftBlockFinalitySubmitterTests
         }
     }
 }
+
+#pragma warning restore DOTNEXT001

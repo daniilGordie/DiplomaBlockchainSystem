@@ -90,7 +90,9 @@ POST /api/network/intents/submit
 
 ## Raft Transport Policy
 
-Production consensus core підтримує `RAFT_TRANSPORT=Tcp` і staging-tested `RAFT_TRANSPORT=Iroh`. TCP залишається default для публічних стабільних серверів. Iroh consensus transport вимагає persistent sidecar identity, `RAFT_IROH_NODE_ID`, локальні control/listen endpoints і approved consensus peer mapping. Вузли за NAT, які не затверджені як consensus members, повинні працювати як Edge nodes: вони відправляють intents/proposals через Iroh forwarding і синхронізують committed log без участі в Raft majority.
+Production consensus core підтримує `RAFT_TRANSPORT=Tcp` і `RAFT_TRANSPORT=Iroh`; обидва режими проходять product smoke з majority commit та відновленням кластера після restart. TCP залишається default для публічних стабільних серверів. Iroh consensus transport вимагає persistent sidecar identity, `RAFT_IROH_NODE_ID`, локальні control/listen endpoints і approved consensus peer mapping. Вузли за NAT, які не затверджені як consensus members, повинні працювати як Edge nodes: вони відправляють intents/proposals через Iroh forwarding і синхронізують committed log без участі в Raft majority.
+
+Після запуску або оновлення кожна consensus node має повертати `operational=true` з `GET /api/consensus/raft/status`. Додатково перевіряються однаковий leader на всіх вузлах, `lastCommittedIndex == lastAppliedIndex`, `snapshot.stateMachineHealthy=true` та, після створення checkpoint, `snapshot.publishedSnapshotIndex == snapshot.currentSnapshotIndex`. Значення `currentSnapshotIndex` без `publishedSnapshotIndex` означає pending snapshot, який ще не можна вважати готовим до recovery.
 
 ## Update Policy
 

@@ -316,7 +316,7 @@ namespace Blockchain.Node.Services
 
         public override async Task<StatusReply> ReceiveBlock(BlockModel request, ServerCallContext context)
         {
-            var result = await _blockProcessor.ProcessReceivedAsync(request);
+            var result = await _blockProcessor.ProcessReceivedAsync(request, context.CancellationToken);
             if (result.Success)
             {
                 TrackPayloadForAnalytics(request.Data);

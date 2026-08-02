@@ -83,7 +83,7 @@ public sealed class IntentOutboxRetryService : BackgroundService
                 record.CommittedBlockIndex,
                 record.ProposalId);
 
-            var result = await _blockProcessor.ProcessReceivedAsync(block);
+            var result = await _blockProcessor.ProcessReceivedAsync(block, cancellationToken);
             if (result.Success)
             {
                 _intentStore.UpdateIntentStatus(

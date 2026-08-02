@@ -37,7 +37,7 @@ public sealed class IrohInboundPump : BackgroundService
             {
                 foreach (var block in await _sidecarClient.DrainEventsAsync(stoppingToken))
                 {
-                    var result = await _blockProcessor.ProcessReceivedAsync(block);
+                    var result = await _blockProcessor.ProcessReceivedAsync(block, stoppingToken);
                     if (result.Success)
                     {
                         _projectResponseCache.InvalidateProject(result.ChannelId);

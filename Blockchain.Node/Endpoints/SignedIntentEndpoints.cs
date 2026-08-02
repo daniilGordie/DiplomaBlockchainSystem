@@ -124,7 +124,7 @@ public static class SignedIntentEndpoints
                 null,
                 proposalId);
 
-            var result = await blockProcessor.ProcessReceivedAsync(request.Block);
+            var result = await blockProcessor.ProcessReceivedAsync(request.Block, cancellationToken);
             var status = result.Success
                 ? IntentStatus.Committed
                 : IsRetryable(result.Message) ? IntentStatus.FailedRetryable : IntentStatus.FailedPermanent;

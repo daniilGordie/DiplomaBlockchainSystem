@@ -90,16 +90,42 @@ public static class ConsensusEndpoints
             var cluster = TryGetRaftCluster(consensus, node, raft, services);
             bool clusterRegistered = cluster != null;
             var baseStatus = BuildRaftStatus(consensus, node, raft, clusterRegistered);
+            var stateMachine = services.GetService<RaftBlockStateMachine>()?.GetDiagnostics();
+            var wal = cluster?.AuditTrail as DotNext.Net.Cluster.Consensus.Raft.StateMachine.WriteAheadLog;
+            long? lastCommittedIndex = wal?.LastCommittedEntryIndex;
+            long? lastAppliedIndex = wal?.LastAppliedIndex;
+            string? leader = GetLeader(cluster);
+            bool readinessCompleted = cluster != null && cluster.Readiness.IsCompletedSuccessfully;
+            bool operational = baseStatus.Ready &&
+                               readinessCompleted &&
+                               !string.IsNullOrWhiteSpace(leader) &&
+                               stateMachine?.StateMachineHealthy == true &&
+                               lastCommittedIndex == lastAppliedIndex;
+            string operationalStatus = !baseStatus.Ready
+                ? baseStatus.Status
+                : !readinessCompleted
+                    ? "cluster_starting"
+                    : string.IsNullOrWhiteSpace(leader)
+                        ? "leader_unavailable"
+                        : stateMachine?.StateMachineHealthy != true
+                            ? "state_machine_faulted"
+                            : lastCommittedIndex != lastAppliedIndex
+                                ? "state_machine_catching_up"
+                                : "operational";
 
             return Results.Json(new RaftRuntimeStatusResponse(
                 baseStatus,
                 cluster?.Term,
-                cluster != null && cluster.Readiness.IsCompletedSuccessfully,
+                readinessCompleted,
                 cluster != null && !cluster.LeadershipToken.IsCancellationRequested,
                 cluster != null && !cluster.ConsensusToken.IsCancellationRequested,
-                GetLeader(cluster),
+                operational,
+                operationalStatus,
+                lastCommittedIndex,
+                lastAppliedIndex,
+                leader,
                 GetMembers(cluster),
-                services.GetService<RaftBlockStateMachine>()?.GetDiagnostics(),
+                stateMachine,
                 new RaftTransportProofResponse(
                     raft.UsesIrohTransport ? "Iroh" : "Tcp",
                     raft.UsesIrohTransport ? "Iroh" : "Tcp",
@@ -148,8 +174,12 @@ public static class ConsensusEndpoints
 
             var diagnostics = services.GetService<RaftBlockStateMachine>()?.GetDiagnostics();
             return Results.Json(new RaftSnapshotTriggerResponse(
-                diagnostics?.CurrentSnapshotIndex != null,
-                diagnostics?.CurrentSnapshotIndex != null ? "Snapshot checkpoint flushed." : "Snapshot checkpoint flushed, but DotNext did not publish a snapshot index.",
+                diagnostics?.PublishedSnapshotIndex != null,
+                diagnostics?.PublishedSnapshotIndex != null
+                    ? "Published snapshot checkpoint flushed."
+                    : diagnostics?.CurrentSnapshotIndex != null
+                        ? "Snapshot serialization completed and is waiting for checkpoint publication."
+                        : "Snapshot checkpoint flushed, but DotNext did not create a snapshot.",
                 diagnostics));
         });
 
@@ -310,6 +340,10 @@ public sealed record RaftRuntimeStatusResponse(
     bool ReadinessCompleted,
     bool LocalNodeIsLeader,
     bool HasLeaderConnection,
+    bool Operational,
+    string OperationalStatus,
+    long? LastCommittedIndex,
+    long? LastAppliedIndex,
     string? Leader,
     IReadOnlyList<RaftMemberRuntimeResponse> Members,
     RaftSnapshotDiagnostics? Snapshot,

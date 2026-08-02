@@ -273,18 +273,26 @@ function Invoke-IrohRaftSmoke {
 
     Step "Start 3-node Raft-over-Iroh stack" {
         docker compose -f $irohComposeFile down --remove-orphans | Out-Host
-        docker compose -f $irohComposeFile up -d --build | Out-Host
+        if ($SkipBuild) {
+            docker compose -f $irohComposeFile up -d --no-build | Out-Host
+        }
+        else {
+            docker compose -f $irohComposeFile up -d --build | Out-Host
+        }
         if ($LASTEXITCODE -ne 0) { throw "Iroh Raft compose up failed." }
     }
 
     Step "Wait for Iroh Raft election" {
+        $a = $null
+        $b = $null
+        $c = $null
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         do {
             try {
                 $a = Require-HttpJson "http://localhost:7452/api/consensus/raft/status"
                 $b = Require-HttpJson "http://localhost:7453/api/consensus/raft/status"
                 $c = Require-HttpJson "http://localhost:7454/api/consensus/raft/status"
-                if ($a.configuration.ready -and $b.configuration.ready -and $c.configuration.ready -and
+                if ($a.operational -and $b.operational -and $c.operational -and
                     -not [string]::IsNullOrWhiteSpace([string]$a.leader) -and
                     [string]$a.leader -eq [string]$b.leader -and
                     [string]$a.leader -eq [string]$c.leader) {
@@ -297,8 +305,11 @@ function Invoke-IrohRaftSmoke {
             Start-Sleep -Seconds 2
         } while ((Get-Date) -lt $deadline)
 
-        $raft = Require-HttpJson "http://localhost:7452/api/consensus/raft/status"
-        if (-not $raft.configuration.ready -or [string]::IsNullOrWhiteSpace([string]$raft.leader)) {
+        if ($null -eq $a -or $null -eq $b -or $null -eq $c -or
+            -not $a.operational -or -not $b.operational -or -not $c.operational -or
+            [string]::IsNullOrWhiteSpace([string]$a.leader) -or
+            [string]$a.leader -ne [string]$b.leader -or
+            [string]$a.leader -ne [string]$c.leader) {
             throw "Iroh Raft leader was not elected before timeout."
         }
     }
@@ -316,8 +327,34 @@ function Invoke-IrohRaftSmoke {
     Step "Restart Iroh Raft leader candidates and verify recovery" {
         docker compose -f $irohComposeFile restart node-a node-b node-c sidecar-a sidecar-b sidecar-c | Out-Host
         Start-Sleep -Seconds 10
-        $raft = Require-HttpJson "http://localhost:7452/api/consensus/raft/status"
-        if (-not $raft.configuration.ready) { throw "Iroh Raft did not recover after restart." }
+        $a = $null
+        $b = $null
+        $c = $null
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        do {
+            try {
+                $a = Require-HttpJson "http://localhost:7452/api/consensus/raft/status"
+                $b = Require-HttpJson "http://localhost:7453/api/consensus/raft/status"
+                $c = Require-HttpJson "http://localhost:7454/api/consensus/raft/status"
+                if ($a.operational -and $b.operational -and $c.operational -and
+                    -not [string]::IsNullOrWhiteSpace([string]$a.leader) -and
+                    [string]$a.leader -eq [string]$b.leader -and
+                    [string]$a.leader -eq [string]$c.leader) {
+                    break
+                }
+            }
+            catch {
+            }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $deadline)
+
+        if ($null -eq $a -or $null -eq $b -or $null -eq $c -or
+            -not $a.operational -or -not $b.operational -or -not $c.operational -or
+            [string]::IsNullOrWhiteSpace([string]$a.leader) -or
+            [string]$a.leader -ne [string]$b.leader -or
+            [string]$a.leader -ne [string]$c.leader) {
+            throw "Iroh Raft did not recover to an operational state after restart."
+        }
     }
 }
 
@@ -362,7 +399,7 @@ try {
         Require-HttpJson "http://localhost:7442/api/network/status" | Out-Null
         Require-HttpJson "http://localhost:7442/api/setup/diagnostics" | Out-Null
         $raft = Require-HttpJson "http://localhost:7442/api/consensus/raft/status"
-        if (-not $raft.configuration.ready) { throw "Raft configuration is not ready." }
+        if (-not $raft.operational) { throw "Raft cluster is not operational: $($raft.operationalStatus)." }
         Require-HttpJson "http://localhost:7442/api/network/intents" | Out-Null
         Require-HttpJson "http://localhost:7442/api/network/membership" | Out-Null
     }
@@ -449,17 +486,21 @@ try {
     Step "Restart Bootstrap/Consensus and verify recovery" {
         docker compose -f $composeFile restart node-a node-b | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "docker restart failed." }
+        $raft = $null
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         do {
             try {
                 $raft = Require-HttpJson "http://localhost:7442/api/consensus/raft/status"
-                if ($raft.configuration.ready) { break }
+                if ($raft.operational) { break }
             }
             catch {
                 Start-Sleep -Seconds 2
             }
             Start-Sleep -Seconds 2
         } while ((Get-Date) -lt $deadline)
+        if ($null -eq $raft -or -not $raft.operational) {
+            throw "Raft cluster did not recover to an operational state after restart."
+        }
         $network = Require-HttpJson "http://localhost:7442/api/network/status"
         if ($network.channels.Count -eq 0) { throw "No committed channels after restart." }
     }

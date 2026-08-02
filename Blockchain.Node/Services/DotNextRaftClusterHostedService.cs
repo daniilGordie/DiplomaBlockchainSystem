@@ -1,7 +1,10 @@
 using DotNext.Net.Cluster.Consensus.Raft;
+using DotNext.Net.Cluster.Consensus.Raft.StateMachine;
 using Microsoft.Extensions.Options;
 
 namespace Blockchain.Node.Services;
+
+#pragma warning disable DOTNEXT001
 
 public sealed class DotNextRaftClusterHostedService : IHostedService
 {
@@ -57,7 +60,19 @@ public sealed class DotNextRaftClusterHostedService : IHostedService
         _logger.LogInformation("[Raft] Stopping DotNext cluster host.");
         if (_raftCluster != null)
         {
-            await _raftCluster.StopAsync(cancellationToken);
+            try
+            {
+                await _raftCluster.StopAsync(cancellationToken);
+            }
+            finally
+            {
+                if (_raftCluster.AuditTrail is WriteAheadLog wal)
+                {
+                    await wal.DisposeAsync();
+                }
+            }
         }
     }
 }
+
+#pragma warning restore DOTNEXT001

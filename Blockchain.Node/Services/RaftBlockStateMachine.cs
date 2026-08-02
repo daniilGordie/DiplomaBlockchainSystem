@@ -15,18 +15,23 @@ namespace Blockchain.Node.Services;
 public sealed class RaftBlockStateMachine : SimpleStateMachine
 {
     private const int SnapshotSchemaVersion = 1;
+    private static readonly byte[] SnapshotCheckpointPayloadBytes = "NEXUS_RAFT_SNAPSHOT_CHECKPOINT_V1"u8.ToArray();
 
     private readonly RaftCommittedBlockCommandApplier _commandApplier;
     private readonly IBlockchainStore _blockStore;
     private readonly ILogger<RaftBlockStateMachine> _logger;
     private readonly string _snapshotPath;
+    private readonly RaftSnapshotOptions _snapshotOptions;
     private long _lastAppliedIndex;
     private long _lastAppliedTerm;
+    private long _bytesSinceSnapshot;
     private long? _currentSnapshotIndex;
     private long? _currentSnapshotTerm;
     private string _currentSnapshotChecksum = string.Empty;
     private long? _currentSnapshotSizeBytes;
     private DateTimeOffset? _lastSnapshotCreatedAtUtc;
+    private volatile bool _healthy = true;
+    private string _failureMessage = string.Empty;
 
     public RaftBlockStateMachine(
         IOptions<RaftOptions> raftOptions,
@@ -39,21 +44,29 @@ public sealed class RaftBlockStateMachine : SimpleStateMachine
         _blockStore = blockStore;
         _logger = logger;
         _snapshotPath = Path.GetFullPath(raftOptions.Value.SnapshotPath);
+        _snapshotOptions = raftOptions.Value.Snapshot;
     }
 
     public RaftSnapshotDiagnostics GetDiagnostics()
     {
+        PruneSnapshots();
+        long? publishedSnapshotIndex = ((ISnapshotManager)this).Snapshot?.Index;
         return new RaftSnapshotDiagnostics(
             _snapshotPath,
             _currentSnapshotIndex,
+            publishedSnapshotIndex,
             _currentSnapshotTerm,
             _lastAppliedIndex,
             _lastAppliedTerm,
             _currentSnapshotSizeBytes,
             _currentSnapshotChecksum,
             _lastSnapshotCreatedAtUtc,
-            _currentSnapshotIndex != null ? "Available" : "NotCreated");
+            _healthy,
+            _failureMessage,
+            !_healthy ? "Faulted" : _currentSnapshotIndex != null ? "Available" : "NotCreated");
     }
+
+    public static ReadOnlyMemory<byte> SnapshotCheckpointPayload => SnapshotCheckpointPayloadBytes;
 
     protected override async ValueTask<bool> ApplyAsync(LogEntry entry, CancellationToken token)
     {
@@ -72,12 +85,11 @@ public sealed class RaftBlockStateMachine : SimpleStateMachine
         {
             _logger.LogError(
                 ex,
-                "[Raft] Failed to read committed log entry payload at index {Index}, term {Term}. The entry will be skipped to keep the node diagnosable.",
+                "[Raft] Failed to read committed log entry payload at index {Index}, term {Term}. The state machine is faulted to prevent divergent state.",
                 entry.Index,
                 entry.Term);
-            _lastAppliedIndex = Math.Max(_lastAppliedIndex, entry.Index);
-            _lastAppliedTerm = Math.Max(_lastAppliedTerm, entry.Term);
-            return false;
+            MarkFault(entry, ex.Message);
+            throw new InvalidDataException($"Unable to read committed Raft entry {entry.Index}.", ex);
         }
 
         if (payload.Length == 0)
@@ -85,21 +97,32 @@ public sealed class RaftBlockStateMachine : SimpleStateMachine
             _logger.LogDebug("[Raft] Empty log entry {Index} reached block state machine.", entry.Index);
             _lastAppliedIndex = Math.Max(_lastAppliedIndex, entry.Index);
             _lastAppliedTerm = Math.Max(_lastAppliedTerm, entry.Term);
+            return ShouldCreateSnapshot(entry.Index, 0L);
+        }
+
+        if (payload.AsSpan().SequenceEqual(SnapshotCheckpointPayloadBytes))
+        {
+            _lastAppliedIndex = Math.Max(_lastAppliedIndex, entry.Index);
+            _lastAppliedTerm = Math.Max(_lastAppliedTerm, entry.Term);
+            _logger.LogInformation("[Raft] Published pending state machine snapshot at checkpoint entry {Index}.", entry.Index);
             return false;
         }
 
-        var result = await _commandApplier.ApplyAsync(payload, entry.Index);
+        var result = await _commandApplier.ApplyAsync(payload, entry.Index, entry.Term);
         if (!result.Success)
         {
-            _logger.LogWarning(
-                "[Raft] Committed block command {Index} was rejected by local validation and will be skipped: {Message}",
+            _logger.LogCritical(
+                "[Raft] Committed block command {Index} was rejected by local validation. The state machine is faulted: {Message}",
                 entry.Index,
                 result.Message);
+            MarkFault(entry, result.Message);
+            throw new InvalidOperationException(
+                $"Committed Raft command {entry.Index} could not be applied: {result.Message}");
         }
 
         _lastAppliedIndex = Math.Max(_lastAppliedIndex, entry.Index);
         _lastAppliedTerm = Math.Max(_lastAppliedTerm, entry.Term);
-        return result.Success;
+        return ShouldCreateSnapshot(entry.Index, payload.LongLength);
     }
 
     protected override async ValueTask PersistAsync(IAsyncBinaryWriter writer, CancellationToken token)
@@ -125,6 +148,7 @@ public sealed class RaftBlockStateMachine : SimpleStateMachine
             _currentSnapshotChecksum = checksum;
             _currentSnapshotSizeBytes = snapshotSize;
             _lastSnapshotCreatedAtUtc = content.CreatedAtUtc;
+            _bytesSinceSnapshot = 0L;
             _logger.LogInformation(
                 "[Raft] Persisted state machine snapshot at log index {LastAppliedIndex}, term {LastAppliedTerm}, size {SnapshotSizeBytes} bytes, channels {ChannelCount}, checksum {Checksum}.",
                 content.LastIncludedLogIndex,
@@ -180,6 +204,10 @@ public sealed class RaftBlockStateMachine : SimpleStateMachine
         _currentSnapshotChecksum = actualChecksum;
         _currentSnapshotSizeBytes = snapshotFile.Length;
         _lastSnapshotCreatedAtUtc = snapshot.Content.CreatedAtUtc;
+        _bytesSinceSnapshot = 0L;
+        _healthy = true;
+        _failureMessage = string.Empty;
+        PruneSnapshots();
         _logger.LogInformation(
             "[Raft] Restored state machine snapshot index {LastAppliedIndex}, checksum {Checksum}, channels {ChannelCount}.",
             _lastAppliedIndex,
@@ -244,6 +272,59 @@ public sealed class RaftBlockStateMachine : SimpleStateMachine
             channels);
     }
 
+    private bool ShouldCreateSnapshot(long appliedIndex, long payloadSize)
+    {
+        if (!_snapshotOptions.Enabled)
+        {
+            return false;
+        }
+
+        _bytesSinceSnapshot = checked(_bytesSinceSnapshot + Math.Max(0L, payloadSize));
+        long snapshotIndex = _currentSnapshotIndex ?? 0L;
+        bool entryThresholdReached = appliedIndex - snapshotIndex >= Math.Max(1, _snapshotOptions.EntryThreshold);
+        bool sizeThresholdReached = _snapshotOptions.SizeThresholdBytes > 0L &&
+                                    _bytesSinceSnapshot >= _snapshotOptions.SizeThresholdBytes;
+        return entryThresholdReached || sizeThresholdReached;
+    }
+
+    private void MarkFault(LogEntry entry, string message)
+    {
+        _failureMessage = $"Log index {entry.Index}, term {entry.Term}: {message}";
+        _healthy = false;
+    }
+
+    private void PruneSnapshots()
+    {
+        int retainCount = Math.Max(1, _snapshotOptions.RetainCount);
+        try
+        {
+            var snapshots = Directory
+                .EnumerateFiles(_snapshotPath, "*-*", SearchOption.TopDirectoryOnly)
+                .Select(path => new { Path = path, Parts = Path.GetFileName(path).Split('-', 2) })
+                .Where(item => item.Parts.Length == 2 &&
+                               long.TryParse(item.Parts[0], out _) &&
+                               long.TryParse(item.Parts[1], out _))
+                .Select(item => new
+                {
+                    item.Path,
+                    Index = long.Parse(item.Parts[0], System.Globalization.CultureInfo.InvariantCulture),
+                    Term = long.Parse(item.Parts[1], System.Globalization.CultureInfo.InvariantCulture)
+                })
+                .OrderByDescending(item => item.Index)
+                .ThenByDescending(item => item.Term)
+                .Skip(retainCount)
+                .ToArray();
+
+            foreach (var snapshot in snapshots)
+            {
+                TryDelete(snapshot.Path);
+            }
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+    }
+
     private static void TryDelete(string path)
     {
         try
@@ -285,12 +366,15 @@ public sealed record RaftSnapshotContributionProof(
 public sealed record RaftSnapshotDiagnostics(
     string SnapshotPath,
     long? CurrentSnapshotIndex,
+    long? PublishedSnapshotIndex,
     long? CurrentSnapshotTerm,
     long LastAppliedIndex,
     long LastAppliedTerm,
     long? SnapshotSizeBytes,
     string SnapshotChecksum,
     DateTimeOffset? LastSnapshotCreatedAtUtc,
+    bool StateMachineHealthy,
+    string StateMachineFailure,
     string Status);
 
 [JsonSourceGenerationOptions(WriteIndented = false)]

@@ -58,7 +58,9 @@ public sealed class GrpcBlockProcessor
         return new GrpcBlockProcessResult(result.Success, result.Message, result.ChannelId);
     }
 
-    public async Task<GrpcBlockProcessResult> ProcessReceivedAsync(BlockModel request)
+    public async Task<GrpcBlockProcessResult> ProcessReceivedAsync(
+        BlockModel request,
+        CancellationToken cancellationToken = default)
     {
         try
         {
@@ -89,7 +91,7 @@ public sealed class GrpcBlockProcessor
                     return new GrpcBlockProcessResult(false, $"Block preflight rejected: {blockValidation.Reason}", block.ChannelId);
                 }
 
-                var committed = await _blockFinalitySubmitter.SubmitAsync(proposal.Proposal, request);
+                var committed = await _blockFinalitySubmitter.SubmitAsync(proposal.Proposal, request, cancellationToken);
                 return new GrpcBlockProcessResult(committed.Success, committed.Message, committed.ChannelId);
             }
 
@@ -100,6 +102,10 @@ public sealed class GrpcBlockProcessor
             }
 
             return new GrpcBlockProcessResult(true, result.Message, result.ChannelId);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

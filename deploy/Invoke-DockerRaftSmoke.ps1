@@ -59,7 +59,12 @@ if ($LASTEXITCODE -ne 0) {
 try {
     Write-Host ""
     Write-Host "Starting Docker PoC/Raft stack..."
-    docker compose -f $composeFile up -d --build | Out-Host
+    if ($SkipBuild) {
+        docker compose -f $composeFile up -d --no-build | Out-Host
+    }
+    else {
+        docker compose -f $composeFile up -d --build | Out-Host
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "docker compose up failed with exit code $LASTEXITCODE."
     }
@@ -69,7 +74,7 @@ try {
         try {
             $nodeA = Invoke-RestMethod -Uri "http://localhost:7442/api/consensus/raft/status" -TimeoutSec 5
             $nodeB = Invoke-RestMethod -Uri "http://localhost:7443/api/consensus/raft/status" -TimeoutSec 5
-            if ($nodeA.configuration.ready -and $nodeB.configuration.ready -and
+            if ($nodeA.operational -and $nodeB.operational -and
                 -not [string]::IsNullOrWhiteSpace([string]$nodeA.leader) -and
                 [string]$nodeA.leader -eq [string]$nodeB.leader) {
                 break
@@ -81,6 +86,13 @@ try {
 
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
+
+    if ($null -eq $nodeA -or $null -eq $nodeB -or
+        -not $nodeA.operational -or -not $nodeB.operational -or
+        [string]::IsNullOrWhiteSpace([string]$nodeA.leader) -or
+        [string]$nodeA.leader -ne [string]$nodeB.leader) {
+        throw "Raft cluster did not become operational before timeout."
+    }
 
     Start-Sleep -Seconds $WarmupSeconds
 

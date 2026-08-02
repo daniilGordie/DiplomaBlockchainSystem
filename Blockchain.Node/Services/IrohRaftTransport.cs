@@ -200,6 +200,8 @@ public sealed class NetworkStreamConnectionContext : ConnectionContext
     private readonly TcpClient _client;
     private readonly Stream _stream;
     private readonly CancellationTokenSource _closed = new();
+    private int _aborted;
+    private int _disposed;
 
     public NetworkStreamConnectionContext(TcpClient client, Stream stream, EndPoint? localEndPoint, EndPoint? remoteEndPoint)
     {
@@ -211,6 +213,7 @@ public sealed class NetworkStreamConnectionContext : ConnectionContext
         Features = new FeatureCollection();
         Items = new ConnectionItems();
         Transport = new StreamDuplexPipe(stream);
+        ConnectionClosed = _closed.Token;
     }
 
     public override string ConnectionId { get; set; }
@@ -223,16 +226,37 @@ public sealed class NetworkStreamConnectionContext : ConnectionContext
 
     public override void Abort(ConnectionAbortedException abortReason)
     {
-        _closed.Cancel();
+        if (Interlocked.Exchange(ref _aborted, 1) != 0)
+        {
+            return;
+        }
+
+        _closed.Cancel(false);
+        Transport.Input.CancelPendingRead();
+        Transport.Output.CancelPendingFlush();
         _client.Dispose();
     }
 
     public override async ValueTask DisposeAsync()
     {
-        _closed.Cancel();
-        await _stream.DisposeAsync();
-        _client.Dispose();
-        await base.DisposeAsync();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _closed.Cancel(false);
+        try
+        {
+            await Transport.Output.CompleteAsync();
+            await Transport.Input.CompleteAsync();
+            await _stream.DisposeAsync();
+        }
+        finally
+        {
+            _client.Dispose();
+            _closed.Dispose();
+            await base.DisposeAsync();
+        }
     }
 }
 

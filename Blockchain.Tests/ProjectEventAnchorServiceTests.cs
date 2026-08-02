@@ -101,7 +101,10 @@ public sealed class ProjectEventAnchorServiceTests
 
     private sealed class NoopFinalitySubmitter : IBlockFinalitySubmitter
     {
-        public Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel)
+        public Task<BlockWriteResult> SubmitAsync(
+            BlockProposal proposal,
+            BlockModel sourceModel,
+            CancellationToken cancellationToken = default)
         {
             return Task.FromResult(new BlockWriteResult(true, "noop", proposal.Block.ChannelId));
         }

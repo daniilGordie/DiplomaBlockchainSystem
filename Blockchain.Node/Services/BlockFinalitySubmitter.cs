@@ -5,7 +5,10 @@ namespace Blockchain.Node.Services;
 
 public interface IBlockFinalitySubmitter
 {
-    Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel);
+    Task<BlockWriteResult> SubmitAsync(
+        BlockProposal proposal,
+        BlockModel sourceModel,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class ImmediateBlockFinalitySubmitter : IBlockFinalitySubmitter
@@ -17,8 +20,12 @@ public sealed class ImmediateBlockFinalitySubmitter : IBlockFinalitySubmitter
         _committedBlockApplier = committedBlockApplier;
     }
 
-    public Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel)
+    public Task<BlockWriteResult> SubmitAsync(
+        BlockProposal proposal,
+        BlockModel sourceModel,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         return _committedBlockApplier.ApplyAsync(
             proposal.Block,
             sourceModel,
@@ -39,20 +46,23 @@ public sealed class EdgeBlockFinalitySubmitter : IBlockFinalitySubmitter
         _edgeSync = edgeSync;
     }
 
-    public async Task<BlockWriteResult> SubmitAsync(BlockProposal proposal, BlockModel sourceModel)
+    public async Task<BlockWriteResult> SubmitAsync(
+        BlockProposal proposal,
+        BlockModel sourceModel,
+        CancellationToken cancellationToken = default)
     {
-        var result = await _forwarder.ForwardAsync(proposal, sourceModel);
+        var result = await _forwarder.ForwardAsync(proposal, sourceModel, cancellationToken);
         if (result.Success)
         {
             for (int attempt = 1; attempt <= 5; attempt++)
             {
-                var syncStatus = await _edgeSync.SyncOnceAsync();
+                var syncStatus = await _edgeSync.SyncOnceAsync(cancellationToken);
                 if (syncStatus.LastAppliedBlocks > 0)
                 {
                     break;
                 }
 
-                await Task.Delay(TimeSpan.FromMilliseconds(500));
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
             }
         }
 

@@ -91,6 +91,8 @@ public class NodeServiceCollectionTests
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"nexus-di-raft-{Guid.NewGuid():N}.db");
         var raftLogPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-{Guid.NewGuid():N}");
+        var membershipPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-membership-{Guid.NewGuid():N}");
+        var snapshotPath = Path.Combine(Path.GetTempPath(), $"nexus-raft-snapshots-{Guid.NewGuid():N}");
 
         try
         {
@@ -103,6 +105,9 @@ public class NodeServiceCollectionTests
                     ["Raft:NodeId"] = "node-a",
                     ["Raft:PublicEndPoint"] = "http://localhost:6041",
                     ["Raft:LogPath"] = raftLogPath,
+                    ["Raft:UsePersistentMembership"] = "true",
+                    ["Raft:MembershipPath"] = membershipPath,
+                    ["Raft:SnapshotPath"] = snapshotPath,
                     ["Raft:Peers:0:Id"] = "node-b",
                     ["Raft:Peers:0:EndPoint"] = "http://localhost:6042"
                 })
@@ -116,15 +121,32 @@ public class NodeServiceCollectionTests
             services.AddSignalR();
             services.AddNexusNodeServices(database);
 
-            await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            await using (var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateOnBuild = true,
+                ValidateScopes = true
+            }))
+            {
+                var cluster = provider.GetRequiredService<DotNext.Net.Cluster.Consensus.Raft.IRaftCluster>();
+                Assert.NotNull(cluster);
+                Assert.IsAssignableFrom<SimpleStateMachine>(provider.GetRequiredService<IStateMachine>());
+                Assert.IsType<RaftBlockFinalitySubmitter>(provider.GetRequiredService<IBlockFinalitySubmitter>());
+                Assert.True(new FileInfo(Path.Combine(membershipPath, "active.list")).Length > 0);
+                Assert.True(new FileInfo(Path.Combine(membershipPath, "membership.json")).Length > 0);
+                await ((WriteAheadLog)cluster.AuditTrail).DisposeAsync();
+            }
+
+            await using var reopenedProvider = services.BuildServiceProvider(new ServiceProviderOptions
             {
                 ValidateOnBuild = true,
                 ValidateScopes = true
             });
-
-            Assert.NotNull(provider.GetRequiredService<DotNext.Net.Cluster.Consensus.Raft.IRaftCluster>());
-            Assert.IsAssignableFrom<SimpleStateMachine>(provider.GetRequiredService<IStateMachine>());
-            Assert.IsType<RaftBlockFinalitySubmitter>(provider.GetRequiredService<IBlockFinalitySubmitter>());
+            var reopenedCluster = reopenedProvider.GetRequiredService<DotNext.Net.Cluster.Consensus.Raft.RaftCluster>();
+            await reopenedCluster.StartAsync();
+            Assert.True(reopenedCluster.Readiness.IsCompletedSuccessfully);
+            Assert.Equal(2, reopenedCluster.Members.Count);
+            await reopenedCluster.StopAsync();
+            await ((WriteAheadLog)reopenedCluster.AuditTrail).DisposeAsync();
         }
         finally
         {
@@ -138,6 +160,16 @@ public class NodeServiceCollectionTests
                 if (Directory.Exists(raftLogPath))
                 {
                     Directory.Delete(raftLogPath, recursive: true);
+                }
+
+                if (Directory.Exists(membershipPath))
+                {
+                    Directory.Delete(membershipPath, recursive: true);
+                }
+
+                if (Directory.Exists(snapshotPath))
+                {
+                    Directory.Delete(snapshotPath, recursive: true);
                 }
             }
             catch (IOException)

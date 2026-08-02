@@ -1,12 +1,12 @@
 using DotNext.Buffers;
 using DotNext.IO;
+using DotNext.Net;
 using DotNext.Net.Cluster.Consensus.Raft;
 using DotNext.Net.Cluster.Consensus.Raft.Membership;
 using DotNext.Net.Cluster.Consensus.Raft.StateMachine;
 using Microsoft.Extensions.Options;
 using System.Buffers;
 using System.Net;
-using System.Text;
 using System.Text.Json;
 
 namespace Blockchain.Node.Services;
@@ -17,7 +17,7 @@ public sealed class DotNextRaftClusterFactory
 {
     private readonly RaftOptions _options;
     private readonly P2POptions _p2pOptions;
-    private readonly IStateMachine _stateMachine;
+    private readonly RaftBlockStateMachine _stateMachine;
     private readonly IServiceProvider _services;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DotNextRaftClusterFactory> _logger;
@@ -25,7 +25,7 @@ public sealed class DotNextRaftClusterFactory
     public DotNextRaftClusterFactory(
         IOptions<RaftOptions> options,
         IOptions<P2POptions> p2pOptions,
-        IStateMachine stateMachine,
+        RaftBlockStateMachine stateMachine,
         IServiceProvider services,
         ILoggerFactory loggerFactory,
         ILogger<DotNextRaftClusterFactory> logger)
@@ -53,6 +53,9 @@ public sealed class DotNextRaftClusterFactory
                 : "Raft cluster requires Raft:NodeId and Raft:PublicEndPoint.");
         }
 
+        _logger.LogInformation("[Raft] Restoring the latest state machine snapshot before opening the Raft WAL.");
+        _stateMachine.RestoreAsync().AsTask().GetAwaiter().GetResult();
+
         return _options.UsesIrohTransport ? CreateIrohCluster() : CreateTcpCluster();
     }
 
@@ -79,7 +82,10 @@ public sealed class DotNextRaftClusterFactory
         var configuredMembers = BuildConfiguredMembers(publicEndPoint);
         if (_options.UsePersistentMembership)
         {
-            ConfigurePersistentMembership(configuration, configuredMembers);
+            ConfigurePersistentMembership(
+                configuration,
+                configuredMembers,
+                new EndPointEqualityComparer());
         }
         else
         {
@@ -150,7 +156,10 @@ public sealed class DotNextRaftClusterFactory
         var configuredMembers = BuildConfiguredIrohMembers(publicEndPoint);
         if (_options.UsePersistentMembership)
         {
-            ConfigurePersistentMembership(configuration, configuredMembers);
+            ConfigurePersistentMembership(
+                configuration,
+                configuredMembers,
+                new IrohRaftEndPointComparer());
         }
         else
         {
@@ -245,18 +254,104 @@ public sealed class DotNextRaftClusterFactory
         activeConfiguration.Build();
     }
 
-    private void ConfigurePersistentMembership(RaftCluster.NodeConfiguration configuration, IReadOnlyCollection<EndPoint> members)
+    private void ConfigurePersistentMembership(
+        RaftCluster.NodeConfiguration configuration,
+        IReadOnlyCollection<EndPoint> members,
+        IEqualityComparer<EndPoint> comparer)
     {
         var membershipPath = Path.GetFullPath(_options.MembershipPath);
         Directory.CreateDirectory(membershipPath);
 
-        ConfigureInMemoryMembership(configuration, members);
-        SaveMembershipManifest(membershipPath, members);
+        PersistentEndPointClusterConfigurationStorage? runtimeStorage = null;
+        try
+        {
+            InitializePersistentMembershipAsync(
+                membershipPath,
+                members,
+                comparer,
+                configuration.MemoryAllocator).GetAwaiter().GetResult();
+            runtimeStorage = new PersistentEndPointClusterConfigurationStorage(
+                membershipPath,
+                Environment.SystemPageSize,
+                comparer,
+                configuration.MemoryAllocator);
+            configuration.ConfigurationStorage = runtimeStorage;
+            SaveMembershipManifest(membershipPath, members);
+        }
+        catch
+        {
+            runtimeStorage?.Dispose();
+            throw;
+        }
 
         _logger.LogInformation(
             "[Raft] Persisted configured cluster membership manifest at {MembershipPath} with {MemberCount} members.",
             membershipPath,
             members.Count);
+    }
+
+    private static async Task InitializePersistentMembershipAsync(
+        string membershipPath,
+        IReadOnlyCollection<EndPoint> configuredMembers,
+        IEqualityComparer<EndPoint> comparer,
+        MemoryAllocator<byte> allocator)
+    {
+        const int persistentHeaderSize = sizeof(long);
+        string activePath = Path.Combine(membershipPath, "active.list");
+        string proposedPath = Path.Combine(membershipPath, "proposed.list");
+        long activeLength = File.Exists(activePath) ? new FileInfo(activePath).Length : 0L;
+        long proposedLength = File.Exists(proposedPath) ? new FileInfo(proposedPath).Length : 0L;
+        if (activeLength is > 0 and <= persistentHeaderSize ||
+            proposedLength is > 0 and <= persistentHeaderSize)
+        {
+            throw new InvalidDataException(
+                $"Raft membership storage at '{membershipPath}' contains a truncated configuration file.");
+        }
+
+        using var storage = new PersistentEndPointClusterConfigurationStorage(
+            membershipPath,
+            Environment.SystemPageSize,
+            comparer,
+            allocator);
+        var typedStorage = (IClusterConfigurationStorage<EndPoint>)storage;
+        var storageControl = (IClusterConfigurationStorage)storage;
+
+        if (activeLength <= persistentHeaderSize)
+        {
+            if (proposedLength > persistentHeaderSize)
+            {
+                throw new InvalidOperationException(
+                    "Raft membership storage contains a proposed configuration without an active configuration. Recover or clear the membership directory before startup.");
+            }
+
+            foreach (var member in configuredMembers)
+            {
+                if (await typedStorage.AddMemberAsync(member))
+                {
+                    await storageControl.ApplyAsync();
+                }
+            }
+
+            return;
+        }
+
+        await storageControl.LoadConfigurationAsync();
+        if (storage.HasProposal)
+        {
+            throw new InvalidOperationException(
+                "Raft membership storage contains an interrupted proposed configuration. Recover or clear the membership directory before startup.");
+        }
+
+        bool configurationMatches = typedStorage.ActiveConfiguration.Count == configuredMembers.Count &&
+                                    configuredMembers.All(member => typedStorage.ActiveConfiguration.Contains(member, comparer));
+        if (!configurationMatches)
+        {
+            string persisted = string.Join(", ", typedStorage.ActiveConfiguration.Select(FormatEndpoint).Order());
+            string configured = string.Join(", ", configuredMembers.Select(FormatEndpoint).Order());
+            throw new InvalidOperationException(
+                $"Configured Raft members do not match persisted membership. Persisted: [{persisted}]. Configured: [{configured}]. " +
+                "Use a controlled membership change instead of editing peer configuration in place.");
+        }
     }
 
     private void SaveMembershipManifest(string membershipPath, IReadOnlyCollection<EndPoint> members)
@@ -395,13 +490,12 @@ public sealed class DotNextRaftClusterFactory
 
         protected override void Encode(EndPoint address, ref BufferWriterSlim<byte> output)
         {
-            output.Write(Encoding.UTF8.GetBytes(FormatEndpoint(address)));
+            output.WriteEndPoint(address);
         }
 
         protected override EndPoint Decode(ref SequenceReader input)
         {
-            ReadOnlySequence<byte> bytes = input.ReadToEnd();
-            return ParsePublicEndPoint(Encoding.UTF8.GetString(bytes.ToArray()));
+            return input.ReadEndPoint();
         }
     }
 }
